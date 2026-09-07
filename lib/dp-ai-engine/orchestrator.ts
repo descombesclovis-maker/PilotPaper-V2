@@ -33,7 +33,8 @@ export class DPAIEngine {
     fixedAssets.push(sourceAsset(7,near),sourceAsset(8,far));
     quality[7]=this.envPhotoJudge?await this.envPhotoJudge.judge(7,form,near,photos):fallbackPhotoQuality();
     quality[8]=this.envPhotoJudge?await this.envPhotoJudge.judge(8,form,far,photos):fallbackPhotoQuality();
-    if(!quality[7].passed||!quality[8].passed) throw new Error("DP7/DP8 source photograph evidence was rejected; the engine will not fabricate replacement environment photographs.");
+    // Failed DP7/DP8 quality is retained in the quality report. The API route
+    // decides whether it is blocking (production) or exportable (test mode).
 
     // Cross-piece visual consistency applies to project representations DP4 and DP6.
     // DP5 is deterministic from the same allocations, while DP7/DP8 remain immutable source photos.
@@ -42,7 +43,19 @@ export class DPAIEngine {
         const current=[visualAssets.get(4)!,visualAssets.get(6)!];
         const report=await this.crossJudge.judge({form,context,generated:current});
         if(report.passed) break;
-        if(round===this.maxCrossRetries) throw new Error(`Cross-DP consistency failed: ${report.issues.map(i=>i.code).join(", ")||"unknown"}`);
+        if(round===this.maxCrossRetries){
+          const existing=quality[6];
+          if(existing){
+            quality[6]={
+              ...existing,
+              passed:false,
+              score:Math.min(existing.score,report.score),
+              issues:[...existing.issues,...report.issues],
+              correctionPrompt:[existing.correctionPrompt,...report.corrections.map(item=>item.correction)].filter(Boolean).join("\n"),
+            };
+          }
+          break;
+        }
         for(const dp of report.invalidDPs){
           const correction=report.corrections.find(c=>c.dp===dp)?.correction??report.issues.map(i=>`${i.code}: ${i.correction}`).join("\n");
           const regenerated=await this.visual.generate(dp,form,context,photos,`CROSS-DP CONSISTENCY CORRECTION:\n${correction}`);
