@@ -2,16 +2,27 @@ import type { ImageEditor } from "./interfaces";
 import type { GeneratedAsset, InputPhoto } from "../types";
 import { buildPanelIslandsMaskForPng } from "../utils/maskPng";
 import { strictCompositePng } from "../utils/pngPixels";
-import { allPanelPolygonsForRole } from "../geometry/panelProjection";
+import {
+  allPanelPolygonsForRole,
+  allPanelPolygonsForRoleProjective,
+} from "../geometry/panelProjection";
+
+export type ImageProjectionMode = "legacy-bilinear" | "projective";
 
 function base64ToBlob(base64: string, mime: string): Blob {
   return new Blob([Buffer.from(base64, "base64")], { type: mime });
 }
 
-function editableCandidate(photos: InputPhoto[], context: Parameters<ImageEditor["edit"]>[0]["context"]) {
+function projectedPolygons(
+  photos: InputPhoto[],
+  context: Parameters<ImageEditor["edit"]>[0]["context"],
+  mode: ImageProjectionMode,
+) {
   for (const photo of photos) {
     if (photo.mimeType !== "image/png") continue;
-    const polygons = allPanelPolygonsForRole(context, photo.role);
+    const polygons = mode === "projective"
+      ? allPanelPolygonsForRoleProjective(context, photo.role)
+      : allPanelPolygonsForRole(context, photo.role);
     if (polygons && polygons.length === context.exactPanelCount) {
       return { photo, polygons };
     }
@@ -20,7 +31,11 @@ function editableCandidate(photos: InputPhoto[], context: Parameters<ImageEditor
 }
 
 export class OpenAIImageEditor implements ImageEditor {
-  constructor(private apiKey: string, private model = "gpt-image-2") {}
+  constructor(
+    private apiKey: string,
+    private model = "gpt-image-2",
+    private projectionMode: ImageProjectionMode = "legacy-bilinear",
+  ) {}
 
   async edit({ dp, context, photos, prompt, previous }: Parameters<ImageEditor["edit"]>[0]): Promise<GeneratedAsset> {
     if (!photos.length) throw new Error("Image edit requires at least one photo");
@@ -28,7 +43,7 @@ export class OpenAIImageEditor implements ImageEditor {
     // Never fail just because the first ranked photograph has no complete
     // projection. Try every supplied project photograph and use the first one
     // that can actually host all requested module islands.
-    const candidate = editableCandidate(photos, context);
+    const candidate = projectedPolygons(photos, context, this.projectionMode);
     if (!candidate) {
       throw new Error(`No supplied PNG photograph has a complete ${context.exactPanelCount}-module projection.`);
     }
@@ -55,7 +70,9 @@ export class OpenAIImageEditor implements ImageEditor {
       data.append("image[]", base64ToBlob(previous.base64, previous.mimeType), "previous-attempt.png");
     }
 
-    console.log(`[PilotPaper][OpenAI] DP${dp} image edit start; base=${base.role}; panels=${panelPolygons.length}`);
+    console.log(
+      `[PilotPaper][OpenAI] DP${dp} image edit start; base=${base.role}; panels=${panelPolygons.length}; projection=${this.projectionMode}`,
+    );
     const startedAt = Date.now();
     const res = await fetch("https://api.openai.com/v1/images/edits", {
       method: "POST",

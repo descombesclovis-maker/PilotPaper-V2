@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
- type ProjectOption = {
+type ProjectOption = {
   id: string;
   siteAddress: string;
   moduleCount: number | null;
@@ -31,7 +31,6 @@ import {
 };
 
 type ProjectListResponse = { projects?: ProjectOption[]; error?: string };
-
 type StoredDetails = Record<string, unknown>;
 
 function parsedDetails(project?: ProjectOption): StoredDetails {
@@ -55,6 +54,7 @@ export function AdminDpImageLab() {
   const [generating, setGenerating] = useState(false);
   const [resultUrl, setResultUrl] = useState("");
   const [resultMeta, setResultMeta] = useState("");
+  const [resultAudit, setResultAudit] = useState<"" | "passed" | "warning">("");
 
   const [dp, setDp] = useState<"4" | "6">("6");
   const [moduleReference, setModuleReference] = useState("");
@@ -119,6 +119,7 @@ export function AdminDpImageLab() {
       return "";
     });
     setResultMeta("");
+    setResultAudit("");
   }, [selectedProject]);
 
   useEffect(() => () => {
@@ -145,30 +146,18 @@ export function AdminDpImageLab() {
       return;
     }
     setGenerating(true);
-    setResultMeta("Analyse des 2 photos + géométrie IGN + projection déterministe…");
+    setResultAudit("");
+    setResultMeta("Analyse des 2 photos + géométrie IGN + homographie perspective + projection déterministe…");
     try {
       const response = await fetch(`/api/projects/${projectId}/admin-image-test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          dp: Number(dp),
-          moduleReference,
-          moduleWidthMm: Number(moduleWidthMm),
-          moduleHeightMm: Number(moduleHeightMm),
-          moduleCount: Number(moduleCount),
-          rows: Number(rows),
-          columns: Number(columns),
-          orientation,
-          layoutMode,
-          panelGapMm: Number(panelGapMm),
-          gutterClearanceMm: Number(gutterClearanceMm),
-          ridgeClearanceMm: Number(ridgeClearanceMm),
-          roofFace: roofFace.trim() || undefined,
-          roofPitchDeg: Number(roofPitchDeg),
-          placement,
-          roofTopology,
-          covering,
-          frameColor,
+          dp: Number(dp), moduleReference,
+          moduleWidthMm: Number(moduleWidthMm), moduleHeightMm: Number(moduleHeightMm), moduleCount: Number(moduleCount),
+          rows: Number(rows), columns: Number(columns), orientation, layoutMode,
+          panelGapMm: Number(panelGapMm), gutterClearanceMm: Number(gutterClearanceMm), ridgeClearanceMm: Number(ridgeClearanceMm),
+          roofFace: roofFace.trim() || undefined, roofPitchDeg: Number(roofPitchDeg), placement, roofTopology, covering, frameColor,
         }),
       });
       if (!response.ok) {
@@ -184,10 +173,19 @@ export function AdminDpImageLab() {
       const sourceRole = response.headers.get("X-PilotPaper-Source-Role") ?? "inconnue";
       const confidence = response.headers.get("X-PilotPaper-Roof-Confidence") ?? "?";
       const count = response.headers.get("X-PilotPaper-Panel-Count") ?? moduleCount;
-      setResultMeta(`DP${dp} · ${count} panneaux · base ${sourceRole} · confiance toiture ${confidence}`);
-      toast.success(`Image test DP${dp} générée.`);
+      const projection = response.headers.get("X-PilotPaper-Projection") ?? "inconnue";
+      const audit = response.headers.get("X-PilotPaper-Deterministic-Audit") === "passed" ? "passed" : "warning";
+      const outsideMask = response.headers.get("X-PilotPaper-Outside-Mask") ?? "?";
+      const overlapPairs = response.headers.get("X-PilotPaper-Overlap-Pairs") ?? "?";
+      setResultAudit(audit);
+      setResultMeta(
+        `DP${dp} · ${count} panneaux · base ${sourceRole} · toiture ${confidence} · ${projection} · hors masque ${outsideMask} · chevauchements ${overlapPairs}`,
+      );
+      if (audit === "passed") toast.success(`Image test DP${dp} générée · audit géométrique OK.`);
+      else toast.warning(`Image test DP${dp} générée · audit à examiner.`);
     } catch (error) {
       setResultMeta("");
+      setResultAudit("");
       toast.error(error instanceof Error ? error.message : "Le laboratoire n'a pas pu produire l'image.");
     } finally {
       setGenerating(false);
@@ -197,11 +195,7 @@ export function AdminDpImageLab() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
-          type="button"
-          className="fixed bottom-5 right-5 z-50 rounded-2xl shadow-xl"
-          size="lg"
-        >
+        <Button type="button" className="fixed bottom-5 right-5 z-50 rounded-2xl shadow-xl" size="lg">
           <FlaskConical />
           Laboratoire DP
         </Button>
@@ -250,7 +244,6 @@ export function AdminDpImageLab() {
               <div className="space-y-2"><Label>Hauteur module (mm)</Label><Input type="number" min="1" value={moduleHeightMm} onChange={(event) => setModuleHeightMm(event.target.value)} /></div>
               <div className="space-y-2"><Label>Quantité</Label><Input type="number" min="1" value={moduleCount} onChange={(event) => setModuleCount(event.target.value)} /></div>
               <div className="space-y-2"><Label>Orientation</Label><Select value={orientation} onValueChange={(value) => setOrientation(value as "portrait" | "landscape")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="portrait">Portrait</SelectItem><SelectItem value="landscape">Paysage</SelectItem></SelectContent></Select></div>
-
               <div className="space-y-2"><Label>Mode calepinage</Label><Select value={layoutMode} onValueChange={(value) => setLayoutMode(value as "fixed" | "automatic")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Matrice imposée</SelectItem><SelectItem value="automatic">Placement automatique</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Placement</Label><Select value={placement} onValueChange={(value) => setPlacement(value as "centered" | "left" | "right")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="centered">Centré</SelectItem><SelectItem value="left">Aligné gauche</SelectItem><SelectItem value="right">Aligné droite</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Rangées</Label><Input type="number" min="1" value={rows} onChange={(event) => setRows(event.target.value)} /></div>
@@ -269,7 +262,6 @@ export function AdminDpImageLab() {
               <div className="space-y-2"><Label>Pente toiture (°)</Label><Input type="number" min="0" max="75" value={roofPitchDeg} onChange={(event) => setRoofPitchDeg(event.target.value)} /></div>
               <div className="space-y-2"><Label>Pan prioritaire (facultatif)</Label><Input value={roofFace} onChange={(event) => setRoofFace(event.target.value)} placeholder="Ex. A" /></div>
               <div className="space-y-2"><Label>Couleur cadre/panneau</Label><Input value={frameColor} onChange={(event) => setFrameColor(event.target.value)} placeholder="noir" /></div>
-
               <div className="space-y-2"><Label>Topologie</Label><Select value={roofTopology} onValueChange={setRoofTopology}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">Détection automatique</SelectItem><SelectItem value="gable">Deux pans</SelectItem><SelectItem value="mono_pitch">Mono-pente</SelectItem><SelectItem value="hipped">Croupe / quatre pans</SelectItem><SelectItem value="flat">Toit plat</SelectItem><SelectItem value="carport">Carport</SelectItem><SelectItem value="canopy">Ombrière</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Couverture</Label><Select value={covering} onValueChange={setCovering}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">Détection automatique</SelectItem><SelectItem value="tile">Tuile</SelectItem><SelectItem value="slate">Ardoise</SelectItem><SelectItem value="steel_sheet">Bac acier</SelectItem><SelectItem value="zinc">Zinc</SelectItem><SelectItem value="membrane">Membrane</SelectItem><SelectItem value="other">Autre</SelectItem></SelectContent></Select></div>
             </div>
@@ -287,7 +279,10 @@ export function AdminDpImageLab() {
             {resultUrl ? (
               <div className="space-y-3">
                 <img src={resultUrl} alt={`Résultat test DP${dp}`} className="max-h-[68vh] w-full rounded-xl object-contain shadow-sm" />
-                <p className="text-xs text-zinc-500">{resultMeta}</p>
+                <div className={`rounded-xl border p-3 text-xs leading-5 ${resultAudit === "passed" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+                  <strong>{resultAudit === "passed" ? "Audit déterministe réussi" : "Audit à examiner"}</strong>
+                  <p className="mt-1">{resultMeta}</p>
+                </div>
               </div>
             ) : (
               <div className="flex min-h-[390px] flex-col items-center justify-center gap-3 text-center text-zinc-400">
