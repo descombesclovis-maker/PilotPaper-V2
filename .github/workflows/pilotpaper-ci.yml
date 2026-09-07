@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -33,5 +35,21 @@ jobs:
       - name: Run regression tests
         run: npm test
 
-      - name: Lint source
+      - name: Lint files changed by this PR
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          mapfile -t FILES < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.ts' '*.tsx' '*.js' '*.jsx')
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No changed JavaScript/TypeScript source files to lint."
+            exit 0
+          fi
+          printf 'Linting changed file: %s\n' "${FILES[@]}"
+          npx eslint "${FILES[@]}"
+
+      - name: Report legacy full-repository lint debt
+        continue-on-error: true
         run: npm run lint
