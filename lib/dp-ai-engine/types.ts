@@ -120,6 +120,12 @@ export interface FacePlacement {
   columns: number;
   lastRowCount: number;
   resolvedGutterMm: number;
+  /** Resolved physical distance from the top of the PV field to the ridge/high edge. */
+  resolvedRidgeMm?: number;
+  /** Resolved lateral origin of the full PV field on the roof plane. */
+  resolvedLeftMm?: number;
+  /** Remaining clearance from the full PV field to the opposite lateral edge. */
+  resolvedRightMm?: number;
   widthMm: number;
   slopeLengthMm: number;
 }
