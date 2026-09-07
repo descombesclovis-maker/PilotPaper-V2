@@ -17,6 +17,7 @@ export interface FaceAllocation {
   lastRowCount: number;
   preferredGutterMm: number;
   resolvedGutterMm: number;
+  resolvedRidgeMm: number;
   capacity: number;
 }
 
@@ -35,26 +36,55 @@ function oriented(panel:PanelSpec, orientation:"portrait"|"landscape") {
     : {w:panel.heightMm,h:panel.widthMm};
 }
 
-export function faceCapacity(panel:PanelSpec, orientation:"portrait"|"landscape", face:RoofFaceCandidate, gapMm=20, preferredGutterMm=300) {
+export function faceCapacity(
+  panel:PanelSpec,
+  orientation:"portrait"|"landscape",
+  face:RoofFaceCandidate,
+  gapMm=20,
+  preferredGutterMm=300,
+  minimumRidgeMm=0,
+) {
   const {w,h}=oriented(panel,orientation);
   const columns=Math.max(0,Math.floor((face.widthMm+gapMm)/(w+gapMm)));
-  // 300 mm is preferred. Capacity is allowed to use a lower gutter clearance down to zero.
-  const rowsAtZero=Math.max(0,Math.floor((face.slopeLengthMm+gapMm)/(h+gapMm)));
-  const rowsAtPreferred=Math.max(0,Math.floor((Math.max(0,face.slopeLengthMm-preferredGutterMm)+gapMm)/(h+gapMm)));
+  const usableSlope=Math.max(0,face.slopeLengthMm-Math.max(0,minimumRidgeMm));
+  // The gutter value is a preference. Capacity may reduce it to zero, but the
+  // requested ridge/high-edge clearance remains a hard geometric minimum.
+  const rowsAtZero=Math.max(0,Math.floor((usableSlope+gapMm)/(h+gapMm)));
+  const rowsAtPreferred=Math.max(0,Math.floor((Math.max(0,usableSlope-preferredGutterMm)+gapMm)/(h+gapMm)));
   const gross=columns*rowsAtZero;
   const capacity=Math.max(0,gross-Math.max(0,face.blockedCells??0));
   return {columns,rowsAtZero,rowsAtPreferred,capacity};
 }
 
-function allocationFor(face:RoofFaceCandidate, count:number, panel:PanelSpec, orientation:"portrait"|"landscape", gapMm:number, preferredGutterMm:number):FaceAllocation {
-  const cap=faceCapacity(panel,orientation,face,gapMm,preferredGutterMm);
+function allocationFor(
+  face:RoofFaceCandidate,
+  count:number,
+  panel:PanelSpec,
+  orientation:"portrait"|"landscape",
+  gapMm:number,
+  preferredGutterMm:number,
+  minimumRidgeMm:number,
+):FaceAllocation {
+  const cap=faceCapacity(panel,orientation,face,gapMm,preferredGutterMm,minimumRidgeMm);
   const columns=Math.max(1,Math.min(cap.columns,count));
   const rows=Math.ceil(count/columns);
   const lastRowCount=count-(rows-1)*columns;
   const {h}=oriented(panel,orientation);
   const fieldHeight=rows*h+Math.max(0,rows-1)*gapMm;
-  const maxGutter=Math.max(0,face.slopeLengthMm-fieldHeight);
-  return {faceId:face.id,panelCount:count,rows,columns,lastRowCount,preferredGutterMm,resolvedGutterMm:Math.min(preferredGutterMm,maxGutter),capacity:cap.capacity};
+  const maxGutter=face.slopeLengthMm-Math.max(0,minimumRidgeMm)-fieldHeight;
+  const resolvedGutterMm=Math.min(preferredGutterMm,Math.max(0,maxGutter));
+  const resolvedRidgeMm=face.slopeLengthMm-resolvedGutterMm-fieldHeight;
+  return {
+    faceId:face.id,
+    panelCount:count,
+    rows,
+    columns,
+    lastRowCount,
+    preferredGutterMm,
+    resolvedGutterMm,
+    resolvedRidgeMm,
+    capacity:cap.capacity,
+  };
 }
 
 /**
@@ -72,11 +102,14 @@ export function allocateAcrossRoofFaces(args:{
   priorityFaceId?:string;
   gapMm?:number;
   preferredGutterMm?:number;
+  minimumRidgeMm?:number;
 }):MultiRoofAllocationResult {
   const {panel,totalPanels,orientation}=args;
-  const gapMm=args.gapMm??20, preferred=args.preferredGutterMm??300;
+  const gapMm=args.gapMm??20;
+  const preferred=Math.max(0,args.preferredGutterMm??300);
+  const minimumRidge=Math.max(0,args.minimumRidgeMm??0);
   if(totalPanels<=0) return {fits:false,requested:totalPanels,allocated:0,allocations:[],remaining:totalPanels,reasons:["Requested panel quantity must be positive."]};
-  const capacities=new Map(args.faces.map(f=>[f.id,faceCapacity(panel,orientation,f,gapMm,preferred).capacity]));
+  const capacities=new Map(args.faces.map(f=>[f.id,faceCapacity(panel,orientation,f,gapMm,preferred,minimumRidge).capacity]));
   let ordered=[...args.faces];
   if(args.mode==="priority") {
     const idx=ordered.findIndex(f=>f.id===args.priorityFaceId);
@@ -96,9 +129,16 @@ export function allocateAcrossRoofFaces(args:{
     const capacity=capacities.get(face.id)??0;
     if(capacity<=0) continue;
     const count=Math.min(remaining,capacity);
-    allocations.push(allocationFor(face,count,panel,orientation,gapMm,preferred));
+    allocations.push(allocationFor(face,count,panel,orientation,gapMm,preferred,minimumRidge));
     remaining-=count;
   }
   const allocated=totalPanels-remaining;
-  return {fits:remaining===0,requested:totalPanels,allocated,allocations,remaining,reasons:remaining===0?[]:[`Only ${allocated} of ${totalPanels} requested modules fit across the available roof faces.`]};
+  return {
+    fits:remaining===0,
+    requested:totalPanels,
+    allocated,
+    allocations,
+    remaining,
+    reasons:remaining===0?[]:[`Only ${allocated} of ${totalPanels} requested modules fit across the available roof faces while preserving the requested ridge clearance.`],
+  };
 }
