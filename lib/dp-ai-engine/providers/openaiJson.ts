@@ -6,6 +6,9 @@ export async function openaiJson<T>(params: {
   schemaName: string;
   schema: Record<string, unknown>;
 }): Promise<T> {
+  const startedAt = Date.now();
+  console.log(`[PilotPaper][OpenAI] ${params.schemaName} start; model=${params.model}; images=${params.imageDataUrls.length}`);
+
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Authorization": `Bearer ${params.apiKey}`, "Content-Type": "application/json" },
@@ -17,9 +20,13 @@ export async function openaiJson<T>(params: {
         ...params.imageDataUrls.map(image_url => ({ type: "input_image", image_url, detail: "high" }))
       ] }],
       text: { format: { type: "json_schema", name: params.schemaName, strict: true, schema: params.schema } }
-    })
+    }),
+    signal: AbortSignal.timeout(180_000),
   });
+
+  console.log(`[PilotPaper][OpenAI] ${params.schemaName} HTTP ${res.status} after ${Date.now() - startedAt}ms`);
   if (!res.ok) throw new Error(`OpenAI Responses error ${res.status}: ${await res.text()}`);
+
   const json = await res.json() as { output_text?: string; output?: Array<any> };
   let text = json.output_text;
   if (!text) {
