@@ -31,6 +31,20 @@ test("admin image lab obtains both official IGN views automatically", () => {
   assert.match(route, /Promise\.all\(\[fetchIgnPng\(situationUrl\), fetchIgnPng\(massUrl\)\]\)/);
 });
 
+test("admin image lab uses projective panel geometry without changing production defaults", () => {
+  assert.match(route, /new OpenAIImageEditor\([^\n]+"projective"\)/);
+  assert.match(route, /allPanelPolygonsForRoleProjective/);
+  assert.match(route, /planar-homography-v1/);
+});
+
+test("admin image lab persists deterministic geometry and outside-mask audit", () => {
+  assert.match(route, /auditDeterministicImage/);
+  assert.match(route, /deterministicAuditPassed/);
+  assert.match(route, /auditObjectKey/);
+  assert.match(route, /X-PilotPaper-Outside-Mask/);
+  assert.match(route, /X-PilotPaper-Overlap-Pairs/);
+});
+
 test("admin image lab persists output as test_unverified", () => {
   assert.match(route, /status:\s*"test_unverified"/);
   assert.match(route, /'test_unverified'/);
