@@ -1,4 +1,4 @@
-import type { Point2D, ProjectContext, RoofViewObservation } from "../types";
+import type { FacePlacement, Point2D, ProjectContext, RoofViewObservation } from "../types";
 
 type QuadMapper = (q: Point2D[], u: number, v: number) => Point2D;
 
@@ -61,6 +61,39 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   return { x, y };
 }
 
+function orientedPanel(context: ProjectContext) {
+  return context.array.orientation === "portrait"
+    ? { widthMm: context.panel.widthMm, heightMm: context.panel.heightMm }
+    : { widthMm: context.panel.heightMm, heightMm: context.panel.widthMm };
+}
+
+function rowWidthMm(panelWidthMm: number, gapMm: number, count: number) {
+  return count * panelWidthMm + Math.max(0, count - 1) * gapMm;
+}
+
+/**
+ * Resolve the left origin of one row inside the already-resolved full field.
+ * This prevents image projection from independently recentering rows and
+ * drifting away from the deterministic layout solver.
+ */
+export function resolvedRowLeftMm(
+  context: ProjectContext,
+  placement: FacePlacement,
+  rowCount: number,
+): number {
+  const { widthMm: panelWidth } = orientedPanel(context);
+  const gap = Math.max(0, context.array.interPanelGapMm ?? 20);
+  const fullFieldWidth = rowWidthMm(panelWidth, gap, placement.columns);
+  const rowWidth = rowWidthMm(panelWidth, gap, rowCount);
+  const fallbackFieldLeft = Math.max(0, (placement.widthMm - fullFieldWidth) / 2);
+  const fieldLeft = placement.resolvedLeftMm ?? fallbackFieldLeft;
+  const spareInsideField = Math.max(0, fullFieldWidth - rowWidth);
+
+  if (context.array.placement === "left") return fieldLeft;
+  if (context.array.placement === "right") return fieldLeft + spareInsideField;
+  return fieldLeft + spareInsideField / 2;
+}
+
 function panelPolygonsForViewWithMapper(
   context: ProjectContext,
   view: RoofViewObservation,
@@ -76,9 +109,8 @@ function panelPolygonsForViewWithMapper(
     const roof = context.roofGeometry;
     const resolved = context.resolvedPlacement;
     if (!roof?.widthMm || !roof.slopeLengthMm || !resolved) return undefined;
-    const panelW = context.array.orientation === "portrait" ? context.panel.widthMm : context.panel.heightMm;
-    const panelH = context.array.orientation === "portrait" ? context.panel.heightMm : context.panel.widthMm;
-    const gap = context.array.interPanelGapMm ?? 20;
+    const { widthMm: panelW, heightMm: panelH } = orientedPanel(context);
+    const gap = Math.max(0, context.array.interPanelGapMm ?? 20);
     const polygons: Point2D[][] = [];
     for (let row = 0; row < context.array.rows; row++) {
       for (let col = 0; col < context.array.columns; col++) {
@@ -99,9 +131,8 @@ function panelPolygonsForViewWithMapper(
     return polygons;
   }
 
-  const panelW = context.array.orientation === "portrait" ? context.panel.widthMm : context.panel.heightMm;
-  const panelH = context.array.orientation === "portrait" ? context.panel.heightMm : context.panel.widthMm;
-  const gap = context.array.interPanelGapMm ?? 20;
+  const { widthMm: panelW, heightMm: panelH } = orientedPanel(context);
+  const gap = Math.max(0, context.array.interPanelGapMm ?? 20);
   const roofW = placement.widthMm;
   const roofH = placement.slopeLengthMm;
   const polygons: Point2D[][] = [];
@@ -112,8 +143,9 @@ function panelPolygonsForViewWithMapper(
       row === placement.rows - 1
         ? placement.lastRowCount
         : Math.min(placement.columns, placement.panelCount - emitted);
-    const rowWidth = rowCount * panelW + Math.max(0, rowCount - 1) * gap;
-    const left = Math.max(0, (roofW - rowWidth) / 2);
+    const rowWidth = rowWidthMm(panelW, gap, rowCount);
+    const left = resolvedRowLeftMm(context, placement, rowCount);
+    if (left < -1e-6 || left + rowWidth > roofW + 1e-6) return undefined;
 
     for (let col = 0; col < rowCount && emitted < placement.panelCount; col++) {
       const x0 = left + col * (panelW + gap);
@@ -124,7 +156,7 @@ function panelPolygonsForViewWithMapper(
       const u1 = x1 / roofW;
       const v0 = y0 / roofH;
       const v1 = y1 / roofH;
-      if ([u0, u1, v0, v1].some((value) => value < 0 || value > 1)) return undefined;
+      if ([u0, u1, v0, v1].some((value) => value < -1e-9 || value > 1 + 1e-9)) return undefined;
       polygons.push([
         map(q, u0, v0),
         map(q, u1, v0),
