@@ -27,11 +27,11 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Run regression tests
-        run: npm test
-
       - name: Build production bundle
         run: npm run build
+
+      - name: Run regression tests
+        run: npm test
 
       - name: Lint source
         run: npm run lint
