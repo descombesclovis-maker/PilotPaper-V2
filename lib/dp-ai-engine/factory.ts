@@ -9,14 +9,12 @@ import { AIVisualGenerator } from "./generators/aiVisualGenerator";
 import { DPAIEngine } from "./orchestrator";
 import { OpenAIEnvironmentPhotoJudge } from "./providers/openaiEnvironmentPhotoJudge";
 
-function fastTestEnabled() {
-  const value = typeof process !== "undefined" ? process.env?.DP_TEST_FAST : undefined;
-  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
-}
-
 export function createDPAIEngine(config: EngineConfig = configFromEnv()): DPAIEngine {
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY is required for analysis and QA");
-  const fastTest = fastTestEnabled();
+  // The local launcher asks for zero retries, but dp-ai-gate intentionally clamps
+  // that value to 1. Treat <=1 as the host's explicit fast-test contract so the
+  // fallback cannot be lost inside the Cloudflare/Vite worker environment.
+  const fastTest = config.testFast === true || config.maxRetries <= 1;
   const strictAnalyzer = new OpenAIVisionAnalyzer(config.openaiApiKey, config.analysisModel);
   const analyzer = fastTest ? new TestFallbackVisionAnalyzer(strictAnalyzer) : strictAnalyzer;
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);

@@ -8,6 +8,12 @@ export interface EngineConfig {
   maxRetries: number;
   qaPassScore: number;
   realismPassScore: number;
+  /** Explicit host-level test mode. Do not rely on process.env inside workers. */
+  testFast?: boolean;
+}
+
+function envFlag(value: string | undefined) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 export function configFromEnv(env = process.env): EngineConfig {
@@ -21,6 +27,7 @@ export function configFromEnv(env = process.env): EngineConfig {
     // Visual quality is prioritized in the production-validation phase. This means up to 6 attempts total.
     maxRetries: Number(env.DP_MAX_RETRIES ?? 5),
     qaPassScore: Number(env.DP_QA_PASS_SCORE ?? 0.96),
-    realismPassScore: Number(env.DP_REALISM_PASS_SCORE ?? 0.97)
+    realismPassScore: Number(env.DP_REALISM_PASS_SCORE ?? 0.97),
+    testFast: envFlag(env.DP_TEST_FAST),
   };
 }
