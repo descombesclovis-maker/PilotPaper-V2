@@ -5,6 +5,8 @@ import { OpenAIVisionAnalyzer } from "@/lib/dp-ai-engine/providers/openaiVision"
 import { TestFallbackVisionAnalyzer } from "@/lib/dp-ai-engine/providers/testFallbackVision";
 import { OpenAIImageEditor } from "@/lib/dp-ai-engine/providers/openaiImage";
 import { dpImagePrompt } from "@/lib/dp-ai-engine/prompts/dpImage";
+import { allPanelPolygonsForRole } from "@/lib/dp-ai-engine/geometry/panelProjection";
+import { auditDeterministicImage } from "@/lib/dp-ai-engine/quality/deterministicImageAudit";
 import type { InputPhoto, ProjectForm, RoofCovering, RoofTopology } from "@/lib/dp-ai-engine/types";
 
 const IGN_WMS_ENDPOINT = "https://data.geopf.fr/wms-r/wms";
@@ -274,31 +276,120 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       prompt: dpImagePrompt(input.dp, contextResult),
     });
     if (!asset.base64) throw new Error("GPT Image n'a renvoyé aucune image exploitable.");
+    if (!asset.sourceRole) throw new Error("Le moteur n'a pas indiqué la photographie réellement éditée.");
+
+    const sourcePhoto = renderPhotos.find((photo) => photo.role === asset.sourceRole);
+    if (!sourcePhoto) throw new Error(`La photographie source ${asset.sourceRole} n'est pas disponible dans le laboratoire.`);
+    const panelPolygons = allPanelPolygonsForRole(contextResult, asset.sourceRole);
+    if (!panelPolygons || panelPolygons.length !== contextResult.exactPanelCount) {
+      throw new Error("La projection déterministe panneau par panneau est incomplète sur l'image source choisie.");
+    }
+
+    const deterministicAudit = auditDeterministicImage({
+      sourceBase64: sourcePhoto.base64,
+      outputBase64: asset.base64,
+      panelPolygons,
+      expectedPanelCount: contextResult.exactPanelCount,
+    });
 
     const bytes = new Uint8Array(Buffer.from(asset.base64, "base64"));
     const sha256 = hex(await crypto.subtle.digest("SHA-256", bytes));
     const fileId = crypto.randomUUID();
     const fileName = `PilotPaper-ADMIN-TEST-DP${input.dp}-${projectId.slice(0, 8)}-${Date.now()}.png`;
     const objectKey = `projects/${projectId}/admin-tests/${fileId}-${fileName}`;
+    const auditObjectKey = `projects/${projectId}/admin-tests/${fileId}-audit.json`;
     const createdAt = new Date().toISOString();
-    await env.BUCKET.put(objectKey, bytes, {
-      httpMetadata: { contentType: "image/png" },
-      customMetadata: {
-        projectId,
-        ownerEmail: user.email,
-        kind: `admin_dp${input.dp}_test`,
-        sha256,
-        status: "test_unverified",
-        sourceRole: asset.sourceRole ?? "unknown",
-        createdAt,
+    const audit = {
+      schemaVersion: 1,
+      createdAt,
+      projectId,
+      dp: input.dp,
+      status: "test_unverified",
+      sourceRole: asset.sourceRole,
+      sourceFileName: sourcePhoto.filename,
+      sourceDimensions: { widthPx: sourcePhoto.widthPx, heightPx: sourcePhoto.heightPx },
+      model: {
+        analysis: configured("DP_ANALYSIS_MODEL") || "gpt-5.6-sol",
+        image: configured("DP_IMAGE_MODEL") || "gpt-image-2",
       },
-    });
+      requestedConfiguration: {
+        moduleReference: form.panel.model,
+        moduleWidthMm: form.panel.widthMm,
+        moduleHeightMm: form.panel.heightMm,
+        frameColor: form.panel.frameColor,
+        moduleCount: form.requestedPanelCount,
+        rows: form.array.rows,
+        columns: form.array.columns,
+        orientation: form.array.orientation,
+        layoutMode: form.array.layoutMode,
+        panelGapMm: form.array.interPanelGapMm,
+        gutterClearanceMm: form.array.gutterClearanceMm,
+        ridgeClearanceMm: form.array.ridgeClearanceMm,
+        placement: form.array.placement,
+        requestedRoofFace: form.array.roofFace,
+        roofPitchDeg: form.roofGeometry?.slopeDeg,
+        roofTopology: form.support?.topology,
+        covering: form.support?.covering,
+      },
+      resolvedGeometry: {
+        roofConfidence: contextResult.roof.confidence,
+        exactPanelCount: contextResult.exactPanelCount,
+        facePlacements: contextResult.facePlacements,
+        immutableFacts: contextResult.immutableFacts,
+        projectedPanelCount: panelPolygons.length,
+      },
+      officialEvidence: {
+        longitude,
+        latitude,
+        situationUrl: situationUrl.toString(),
+        massUrl: massUrl.toString(),
+        situationMetersPerPixel: SITUATION_GROUND_WIDTH_METERS / IMAGE_WIDTH,
+        massMetersPerPixel: MASS_GROUND_WIDTH_METERS / IMAGE_WIDTH,
+      },
+      deterministicAudit,
+      output: { fileName, sha256, bytes: bytes.byteLength },
+    };
+    const auditBytes = new TextEncoder().encode(JSON.stringify(audit, null, 2));
+
+    await Promise.all([
+      env.BUCKET.put(objectKey, bytes, {
+        httpMetadata: { contentType: "image/png" },
+        customMetadata: {
+          projectId,
+          ownerEmail: user.email,
+          kind: `admin_dp${input.dp}_test`,
+          sha256,
+          status: "test_unverified",
+          sourceRole: asset.sourceRole,
+          deterministicAuditPassed: String(deterministicAudit.passed),
+          auditObjectKey,
+          createdAt,
+        },
+      }),
+      env.BUCKET.put(auditObjectKey, auditBytes, {
+        httpMetadata: { contentType: "application/json" },
+        customMetadata: {
+          projectId,
+          ownerEmail: user.email,
+          kind: `admin_dp${input.dp}_test_audit`,
+          imageSha256: sha256,
+          createdAt,
+        },
+      }),
+    ]);
+
     await env.DB.prepare(
       `INSERT INTO project_files (
         id, project_id, owner_email, kind, file_name, mime_type,
         size_bytes, sha256, object_key, status
       ) VALUES (?, ?, ?, ?, ?, 'image/png', ?, ?, ?, 'test_unverified')`,
     ).bind(fileId, projectId, user.email, `admin_dp${input.dp}_test`, fileName, bytes.byteLength, sha256, objectKey).run();
+
+    console.log(
+      `[PilotPaper][ADMIN-LAB] DP${input.dp} audit=${deterministicAudit.passed ? "PASS" : "WARN"}; ` +
+      `panels=${deterministicAudit.panelCountProjected}/${deterministicAudit.panelCountExpected}; ` +
+      `outsideChanged=${deterministicAudit.changedOutsidePixels}; overlaps=${deterministicAudit.overlapPairs}`,
+    );
 
     return new Response(bytes, {
       status: 200,
@@ -307,10 +398,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         "Cache-Control": "private, no-store",
         "X-PilotPaper-Admin-Lab": "true",
         "X-PilotPaper-DP": String(input.dp),
-        "X-PilotPaper-Source-Role": asset.sourceRole ?? "unknown",
+        "X-PilotPaper-Source-Role": asset.sourceRole,
         "X-PilotPaper-SHA256": sha256,
         "X-PilotPaper-Roof-Confidence": String(contextResult.roof.confidence),
         "X-PilotPaper-Panel-Count": String(contextResult.exactPanelCount),
+        "X-PilotPaper-Deterministic-Audit": deterministicAudit.passed ? "passed" : "warning",
+        "X-PilotPaper-Outside-Mask": deterministicAudit.exactOutsideMaskPreservation ? "preserved" : "changed",
+        "X-PilotPaper-Overlap-Pairs": String(deterministicAudit.overlapPairs),
+        "X-PilotPaper-Editable-Ratio": deterministicAudit.editableRatio.toFixed(6),
       },
     });
   } catch (error) {
