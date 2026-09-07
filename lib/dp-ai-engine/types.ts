@@ -120,6 +120,9 @@ export interface FacePlacement {
   columns: number;
   lastRowCount: number;
   resolvedGutterMm: number;
+  resolvedRidgeMm?: number;
+  resolvedLeftMm?: number;
+  resolvedRightMm?: number;
   widthMm: number;
   slopeLengthMm: number;
 }
