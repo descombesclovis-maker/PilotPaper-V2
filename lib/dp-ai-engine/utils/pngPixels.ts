@@ -42,11 +42,40 @@ export function encodePng(width:number,height:number,rgba:Uint8Array):string{
 function inside(x:number,y:number,p:Point2D[]){let yes=false;for(let i=0,j=p.length-1;i<p.length;j=i++){const a=p[i]!,b=p[j]!;if(((a.y>y)!=(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/((b.y-a.y)||1e-12)+a.x))yes=!yes;}return yes;}
 function expand(polys:Point2D[][],pad=.002){return polys.map(poly=>{const cx=poly.reduce((s,p)=>s+p.x,0)/poly.length,cy=poly.reduce((s,p)=>s+p.y,0)/poly.length;return poly.map(p=>({x:Math.max(0,Math.min(1,p.x+Math.sign(p.x-cx)*pad)),y:Math.max(0,Math.min(1,p.y+Math.sign(p.y-cy)*pad))}));});}
 
+function resizeRgba(src:DecodedPng,targetWidth:number,targetHeight:number):Uint8Array{
+  if(src.width===targetWidth&&src.height===targetHeight)return src.rgba;
+  const out=new Uint8Array(targetWidth*targetHeight*4);
+  for(let y=0;y<targetHeight;y++){
+    const fy=Math.max(0,Math.min(src.height-1,(y+.5)*src.height/targetHeight-.5));
+    const y0=Math.floor(fy),y1=Math.min(src.height-1,y0+1),wy=fy-y0;
+    for(let x=0;x<targetWidth;x++){
+      const fx=Math.max(0,Math.min(src.width-1,(x+.5)*src.width/targetWidth-.5));
+      const x0=Math.floor(fx),x1=Math.min(src.width-1,x0+1),wx=fx-x0;
+      const di=(y*targetWidth+x)*4;
+      const i00=(y0*src.width+x0)*4,i10=(y0*src.width+x1)*4,i01=(y1*src.width+x0)*4,i11=(y1*src.width+x1)*4;
+      for(let c=0;c<4;c++){
+        const top=src.rgba[i00+c]!*(1-wx)+src.rgba[i10+c]!*wx;
+        const bottom=src.rgba[i01+c]!*(1-wx)+src.rgba[i11+c]!*wx;
+        out[di+c]=Math.max(0,Math.min(255,Math.round(top*(1-wy)+bottom*wy)));
+      }
+    }
+  }
+  return out;
+}
+
+function candidatePixelsAtSourceSize(original:DecodedPng,candidate:DecodedPng):Uint8Array{
+  if(original.width===candidate.width&&original.height===candidate.height)return candidate.rgba;
+  const originalRatio=original.width/original.height,candidateRatio=candidate.width/candidate.height;
+  const ratioError=Math.abs(candidateRatio-originalRatio)/originalRatio;
+  if(ratioError>.02)throw new Error(`AI edit changed image aspect ratio too much (${original.width}x${original.height} -> ${candidate.width}x${candidate.height}).`);
+  return resizeRgba(candidate,original.width,original.height);
+}
+
 /** Pixel-level safety net: every pixel outside the exact panel islands is copied from the immutable source PNG. */
 export function strictCompositePng(originalBase64:string,candidateBase64:string,polygons:Point2D[][],paddingNormalized=.002):string{
-  const a=decodePng(originalBase64),b=decodePng(candidateBase64);if(a.width!==b.width||a.height!==b.height)throw new Error(`AI edit changed image dimensions (${a.width}x${a.height} -> ${b.width}x${b.height}).`);
+  const a=decodePng(originalBase64),b=decodePng(candidateBase64),candidateRgba=candidatePixelsAtSourceSize(a,b);
   const allowed=expand(polygons,paddingNormalized),out=new Uint8Array(a.rgba);
-  for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++){const nx=(x+.5)/a.width,ny=(y+.5)/a.height;if(!allowed.some(p=>inside(nx,ny,p)))continue;const i=(y*a.width+x)*4;out[i]=b.rgba[i]!;out[i+1]=b.rgba[i+1]!;out[i+2]=b.rgba[i+2]!;out[i+3]=b.rgba[i+3]!;}
+  for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++){const nx=(x+.5)/a.width,ny=(y+.5)/a.height;if(!allowed.some(p=>inside(nx,ny,p)))continue;const i=(y*a.width+x)*4;out[i]=candidateRgba[i]!;out[i+1]=candidateRgba[i+1]!;out[i+2]=candidateRgba[i+2]!;out[i+3]=candidateRgba[i+3]!;}
   return encodePng(a.width,a.height,out);
 }
 

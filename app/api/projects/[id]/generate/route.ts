@@ -46,11 +46,48 @@ function hex(bytes: ArrayBuffer) {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function testExportEnabled(request: Request) {
+  const workerEnv = env as unknown as Record<string, unknown>;
+  const configured = String(
+    workerEnv.DP_TEST_EXPORT ?? (typeof process !== "undefined" ? process.env?.DP_TEST_EXPORT ?? "" : ""),
+  ).trim().toLowerCase();
+  if (configured) return ["1", "true", "yes", "on"].includes(configured);
+  const hostname = new URL(request.url).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function aiQualityIssues(aiRun: Awaited<ReturnType<typeof runDPAI>>) {
+  type AuditQuality = Record<string, {
+    passed?: boolean;
+    score?: number;
+    issues?: Array<{ code?: string; message?: string }>;
+  }>;
+  const quality = (aiRun.audit as { quality?: AuditQuality }).quality ?? {};
+  return Object.entries(quality).flatMap(([dp, report]) => {
+    if (report?.passed === true) return [];
+    const details = Array.isArray(report?.issues) ? report.issues : [];
+    if (details.length) {
+      return details.map((issue) => ({
+        code: `DP_AI_${issue.code || `DP${dp}_QA_FAILED`}`,
+        field: `DP${dp}`,
+        message: issue.message || `DP${dp} n'a pas atteint le seuil de qualité requis.`,
+      }));
+    }
+    const score = Number.isFinite(report?.score) ? ` Score obtenu : ${Number(report.score).toFixed(3)}.` : "";
+    return [{
+      code: `DP_AI_DP${dp}_QA_FAILED`,
+      field: `DP${dp}`,
+      message: `DP${dp} n'a pas atteint le seuil de qualité requis.${score}`,
+    }];
+  });
+}
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const user = getRequestUser(request.headers);
   if (!user) return Response.json({ error: "Authentification requise." }, { status: 401 });
   await ensureProjectSchema();
 
+  const testExport = testExportEnabled(request);
   const { id } = await context.params;
   const project = await env.DB.prepare(
     `SELECT id,
@@ -119,6 +156,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }, { status: 422 });
   }
 
+  const qualityIssues = aiQualityIssues(aiRun);
+  if (qualityIssues.length && !testExport) {
+    return Response.json({
+      error: "Le moteur DP a produit un résultat, mais le contrôle qualité de production l'a rejeté.",
+      issues: qualityIssues,
+    }, { status: 422 });
+  }
+
   const cerfaResponse = await fetch(new URL(OFFICIAL_CERFA_FILE, request.url), { cache: "no-store" });
   if (!cerfaResponse.ok) return Response.json({ error: "Le Cerfa officiel embarqué est indisponible. Aucun fichier n’a été créé." }, { status: 503 });
   const officialCerfaBytes = new Uint8Array(await cerfaResponse.arrayBuffer());
@@ -138,15 +183,22 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   const postflightIssues = await validateGeneratedPdf(pdfBytes);
-  if (postflightIssues.length) {
+  if (postflightIssues.length && !testExport) {
     return Response.json({ error: "Le contrôle structurel du PDF final a échoué. Aucun dossier n’a été enregistré.", issues: postflightIssues }, { status: 422 });
   }
 
+  const unverifiedIssues = [...qualityIssues, ...postflightIssues];
+  const testUnverified = testExport && unverifiedIssues.length > 0;
+  const validationStatus = testUnverified ? "test_unverified" : "verified";
   const generatedAt = new Date().toISOString();
   const fileId = crypto.randomUUID();
   const auditFileId = crypto.randomUUID();
-  const fileName = `PilotPaper-DP-${id.slice(0, 8)}.pdf`;
-  const auditFileName = `PilotPaper-audit-${id.slice(0, 8)}.json`;
+  const fileName = testUnverified
+    ? `PilotPaper-TEST-NON-VALIDE-DP-${id.slice(0, 8)}.pdf`
+    : `PilotPaper-DP-${id.slice(0, 8)}.pdf`;
+  const auditFileName = testUnverified
+    ? `PilotPaper-TEST-audit-${id.slice(0, 8)}.json`
+    : `PilotPaper-audit-${id.slice(0, 8)}.json`;
   const objectKey = `projects/${id}/generated/${generatedAt.slice(0, 10)}/${fileId}.pdf`;
   const auditObjectKey = `projects/${id}/audits/${generatedAt.slice(0, 10)}/${auditFileId}.json`;
   const sha256 = hex(await crypto.subtle.digest("SHA-256", pdfBytes));
@@ -154,12 +206,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     generatedAt,
     projectId: id,
     engine: "DP-AI-FIRST-v0.4.3",
+    testExportMode: testExport,
+    validationStatus,
+    unverifiedIssues,
     correctionPolicy: "UNIVERSAL_RULES_ONLY",
     correctionPolicyExplanation: "A failed test may only produce a general rule based on an error class; no address-, building-, photo- or dossier-specific exception is allowed.",
     evidence: aiRun.evidence,
     engineAudit: aiRun.audit,
     renderedViews: aiRun.renderedViews.map((item) => ({ kind: item.kind, sourceKind: item.sourceKind, sha256: item.sha256, metrics: item.metrics })),
-    structuralPdfValidation: "passed",
+    structuralPdfValidation: postflightIssues.length ? "test_unverified" : "passed",
+    structuralPdfIssues: postflightIssues,
   };
   const auditBytes = new TextEncoder().encode(JSON.stringify(audit, null, 2));
   const auditSha256 = hex(await crypto.subtle.digest("SHA-256", auditBytes));
@@ -167,11 +223,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   await Promise.all([
     env.BUCKET.put(objectKey, pdfBytes, {
       httpMetadata: { contentType: "application/pdf" },
-      customMetadata: { projectId: id, ownerEmail: user.email, sha256, status: "verified", engine: "DP-AI-FIRST-v0.4.3" },
+      customMetadata: { projectId: id, ownerEmail: user.email, sha256, status: validationStatus, engine: "DP-AI-FIRST-v0.4.3" },
     }),
     env.BUCKET.put(auditObjectKey, auditBytes, {
       httpMetadata: { contentType: "application/json" },
-      customMetadata: { projectId: id, ownerEmail: user.email, sha256: auditSha256, status: "verified", engine: "DP-AI-FIRST-v0.4.3" },
+      customMetadata: { projectId: id, ownerEmail: user.email, sha256: auditSha256, status: validationStatus, engine: "DP-AI-FIRST-v0.4.3" },
     }),
   ]);
 
@@ -181,14 +237,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         `INSERT INTO project_files (
           id, project_id, owner_email, kind, file_name, mime_type,
           size_bytes, sha256, object_key, status
-        ) VALUES (?, ?, ?, 'generated_dossier', ?, 'application/pdf', ?, ?, ?, 'verified')`,
-      ).bind(fileId, id, user.email, fileName, pdfBytes.byteLength, sha256, objectKey),
+        ) VALUES (?, ?, ?, 'generated_dossier', ?, 'application/pdf', ?, ?, ?, ?)`,
+      ).bind(fileId, id, user.email, fileName, pdfBytes.byteLength, sha256, objectKey, validationStatus),
       env.DB.prepare(
         `INSERT INTO project_files (
           id, project_id, owner_email, kind, file_name, mime_type,
           size_bytes, sha256, object_key, status
-        ) VALUES (?, ?, ?, 'ai_audit', ?, 'application/json', ?, ?, ?, 'verified')`,
-      ).bind(auditFileId, id, user.email, auditFileName, auditBytes.byteLength, auditSha256, auditObjectKey),
+        ) VALUES (?, ?, ?, 'ai_audit', ?, 'application/json', ?, ?, ?, ?)`,
+      ).bind(auditFileId, id, user.email, auditFileName, auditBytes.byteLength, auditSha256, auditObjectKey, validationStatus),
       env.DB.prepare(`UPDATE projects SET status = 'generated', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_email = ?`).bind(id, user.email),
     ]);
   } catch (error) {
@@ -202,7 +258,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${fileName}"`,
       "Cache-Control": "private, no-store",
-      "X-PilotPaper-Validation": "passed",
+      "X-PilotPaper-Validation": testUnverified ? "test_unverified" : "passed",
+      "X-PilotPaper-Test-Export": testExport ? "true" : "false",
       "X-PilotPaper-Engine": "DP-AI-FIRST-v0.4.3",
       "X-PilotPaper-SHA256": sha256,
     },
