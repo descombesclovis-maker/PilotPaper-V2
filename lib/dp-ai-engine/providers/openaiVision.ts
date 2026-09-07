@@ -58,10 +58,14 @@ export function deriveMetricRoofFaces(form:ProjectForm,photos:InputPhoto[],faces
 }
 
 export class OpenAIVisionAnalyzer implements VisionAnalyzer {
-  constructor(private apiKey:string,private model="gpt-5.6-sol"){}
+  constructor(
+    private apiKey:string,
+    private model="gpt-5.6-sol",
+    private minUserPhotos=3,
+  ){}
   async analyze(form:ProjectForm,photos:InputPhoto[]):Promise<ProjectContext>{
     const userPhotos=photos.filter(p=>!["satellite","satellite_mass"].includes(p.role));
-    if(userPhotos.length<3) throw new Error("At least 3 independent user photographs are required (close/roof-oblique/distant or equivalent).");
+    if(userPhotos.length<this.minUserPhotos) throw new Error(`At least ${this.minUserPhotos} independent user photograph(s) are required.`);
     const raw=await openaiJson<Raw>({apiKey:this.apiKey,model:this.model,prompt:projectAnalysisPrompt(form),imageDataUrls:photos.map(toDataUrl),schemaName:"dp_roof_faces_analysis",schema:schema as unknown as Record<string,unknown>});
     const faces:RoofFaceObservation[]=(raw.faces??[]).map(f=>({id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,views:(f.views??[]).map((v:any)=>cleanView(v,String(f.id))),obstacles:(f.obstacles??[]).map((o:any)=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined}))}));
     if(!faces.length) throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
