@@ -1,4 +1,5 @@
 import type { RoofCovering, RoofTopology } from "./geometry/supportRules";
+export type { RoofCovering, RoofTopology } from "./geometry/supportRules";
 
 export type PhotoRole = "satellite" | "satellite_mass" | "front" | "left_oblique" | "right_oblique" | "near" | "roof" | "far";
 

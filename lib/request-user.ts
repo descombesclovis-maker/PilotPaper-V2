@@ -23,3 +23,26 @@ export function getRequestUser(headers: Headers): RequestUser | null {
 
   return { email, displayName };
 }
+
+export function isPilotPaperAdmin(
+  email: string | null | undefined,
+  configuredAdminEmails?: string | null,
+) {
+  const normalized = email?.trim().toLowerCase();
+  if (!normalized) return false;
+
+  if (process.env.NODE_ENV !== "production") {
+    const localEmail = (process.env.PILOTPAPER_DEV_EMAIL ?? "local@pilotpaper.test")
+      .trim()
+      .toLowerCase();
+    if (normalized === localEmail) return true;
+  }
+
+  const configured =
+    configuredAdminEmails ?? process.env.PILOTPAPER_ADMIN_EMAILS ?? "";
+  return configured
+    .split(/[;,\n]/)
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(normalized);
+}
