@@ -8,6 +8,18 @@ function bilinear(q:Point2D[],u:number,v:number):Point2D {
   return {x:bottom.x+(top.x-bottom.x)*v,y:bottom.y+(top.y-bottom.y)*v};
 }
 
+function rowLeftMm(context:ProjectContext,roofWidthMm:number,rowWidthMm:number,placementLeftMm?:number,placementRightMm?:number) {
+  if(context.array.placement==="left") return Math.max(0,placementLeftMm??context.array.leftEdgeClearanceMm??0);
+  if(context.array.placement==="right") return Math.max(0,roofWidthMm-rowWidthMm-Math.max(0,placementRightMm??context.array.rightEdgeClearanceMm??0));
+  if(context.array.placement==="custom") {
+    if(placementLeftMm!=null) return placementLeftMm;
+    if(context.array.leftEdgeClearanceMm!=null) return context.array.leftEdgeClearanceMm;
+    if(placementRightMm!=null) return roofWidthMm-rowWidthMm-placementRightMm;
+    if(context.array.rightEdgeClearanceMm!=null) return roofWidthMm-rowWidthMm-context.array.rightEdgeClearanceMm;
+  }
+  return Math.max(0,(roofWidthMm-rowWidthMm)/2);
+}
+
 export function panelPolygonsForView(context:ProjectContext,view:RoofViewObservation):Point2D[][]|undefined {
   const q=view.roofPolygonNormalized;
   if(q.length!==4) return undefined;
@@ -38,7 +50,13 @@ export function panelPolygonsForView(context:ProjectContext,view:RoofViewObserva
   for(let row=0;row<placement.rows&&emitted<placement.panelCount;row++){
     const rowCount=row===placement.rows-1?placement.lastRowCount:Math.min(placement.columns,placement.panelCount-emitted);
     const rowWidth=rowCount*panelW+Math.max(0,rowCount-1)*gap;
-    const left=Math.max(0,(roofW-rowWidth)/2);
+    // Partial rows are centered within the resolved full-field corridor unless the
+    // user explicitly requested left/right/custom alignment. This keeps symmetry
+    // stable while preserving deterministic edge clearances.
+    const fullRowWidth=placement.columns*panelW+Math.max(0,placement.columns-1)*gap;
+    const corridorLeft=rowLeftMm(context,roofW,fullRowWidth,placement.resolvedLeftMm,placement.resolvedRightMm);
+    const partialOffset=context.array.placement==="centered"?Math.max(0,(fullRowWidth-rowWidth)/2):0;
+    const left=corridorLeft+partialOffset;
     for(let col=0;col<rowCount&&emitted<placement.panelCount;col++){
       const x0=left+col*(panelW+gap),x1=x0+panelW;
       const y0=placement.resolvedGutterMm+row*(panelH+gap),y1=y0+panelH;
