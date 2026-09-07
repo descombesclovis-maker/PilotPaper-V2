@@ -1,0 +1,23 @@
+PILOTPAPER DP-AI-FIRST v0.4.3
+
+PREREQUIS
+- Windows 10/11
+- Node.js 22.13 ou plus recent
+- Connexion Internet
+- Cle API OpenAI avec credit
+
+INSTALLATION
+1. Decompressez le ZIP dans un dossier simple (ex. C:\PilotPaper).
+2. Double-cliquez sur INSTALLER-PILOTPAPER.cmd.
+3. Collez la cle OpenAI dans la fenetre PowerShell masquee.
+4. L'installateur execute npm install et cree le raccourci Bureau.
+
+DEMARRAGE
+- Double-cliquez sur DEMARRER-PILOTPAPER.cmd ou sur le raccourci Bureau.
+- L'application utilise http://localhost:5173.
+- Il n'y a plus de service Python/Ollama a lancer.
+
+CLE OPENAI
+- Stockee localement dans .dev.vars.
+- .dev.vars est ignore par Git.
+- Pour remplacer la cle : npm.cmd run ai:configure:windows

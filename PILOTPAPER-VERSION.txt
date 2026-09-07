@@ -1,0 +1,2 @@
+PilotPaper DP-AI-FIRST v0.4.3
+Local Windows / Vite + Cloudflare local D1/R2

@@ -1,0 +1,160 @@
+TAP version 13
+# Subtest: cross-piece judge regenerates only the inconsistent DP
+ok 1 - cross-piece judge regenerates only the inconsistent DP
+  ---
+  duration_ms: 1.950562
+  type: 'test'
+  ...
+# Subtest: reduces preferred 300mm gutter before rejecting
+ok 2 - reduces preferred 300mm gutter before rejecting
+  ---
+  duration_ms: 0.821289
+  type: 'test'
+  ...
+# Subtest: rejects quantity that still cannot fit at zero gutter
+ok 3 - rejects quantity that still cannot fit at zero gutter
+  ---
+  duration_ms: 0.120902
+  type: 'test'
+  ...
+# Subtest: derives conservative metric roof face from IGN orthographic view
+ok 4 - derives conservative metric roof face from IGN orthographic view
+  ---
+  duration_ms: 1.236464
+  type: 'test'
+  ...
+# Subtest: multi-face projection produces exact independent polygons without joining faces
+ok 5 - multi-face projection produces exact independent polygons without joining faces
+  ---
+  duration_ms: 1.976821
+  type: 'test'
+  ...
+# Subtest: automatic keeps all modules on one face when possible
+ok 6 - automatic keeps all modules on one face when possible
+  ---
+  duration_ms: 1.104295
+  type: 'test'
+  ...
+# Subtest: priority fills selected face first then sends only surplus to other face
+ok 7 - priority fills selected face first then sends only surplus to other face
+  ---
+  duration_ms: 0.425692
+  type: 'test'
+  ...
+# Subtest: rejects when total quantity cannot fit across all faces
+ok 8 - rejects when total quantity cannot fit across all faces
+  ---
+  duration_ms: 0.15299
+  type: 'test'
+  ...
+# Subtest: each allocation is an independent face field and never spans a ridge
+ok 9 - each allocation is an independent face field and never spans a ridge
+  ---
+  duration_ms: 0.150287
+  type: 'test'
+  ...
+# Subtest: fixed 2x6 matrix is preserved on one face when it physically fits
+ok 10 - fixed 2x6 matrix is preserved on one face when it physically fits
+  ---
+  duration_ms: 0.46444
+  type: 'test'
+  ...
+# Subtest: exact panel-island mask keeps roof gaps opaque and only modules editable
+ok 11 - exact panel-island mask keeps roof gaps opaque and only modules editable
+  ---
+  duration_ms: 7.081429
+  type: 'test'
+  ...
+# Subtest: projects exactly 12 separate module polygons inside one roof quad
+ok 12 - projects exactly 12 separate module polygons inside one roof quad
+  ---
+  duration_ms: 0.987439
+  type: 'test'
+  ...
+# Subtest: randomized allocation invariants across 5000 roof sets
+ok 13 - randomized allocation invariants across 5000 roof sets
+  ---
+  duration_ms: 45.746427
+  type: 'test'
+  ...
+# Subtest: regenerates after QA failure then accepts
+ok 14 - regenerates after QA failure then accepts
+  ---
+  duration_ms: 5.372872
+  type: 'test'
+  ...
+# Subtest: 2x6 field fits one roof face without crossing ridge
+ok 15 - 2x6 field fits one roof face without crossing ridge
+  ---
+  duration_ms: 1.293521
+  type: 'test'
+  ...
+# Subtest: rejects a field that would cross the ridge
+ok 16 - rejects a field that would cross the ridge
+  ---
+  duration_ms: 0.217698
+  type: 'test'
+  ...
+# Subtest: DP5 contains exact matrix on only one selected roof plane
+ok 17 - DP5 contains exact matrix on only one selected roof plane
+  ---
+  duration_ms: 0.524581
+  type: 'test'
+  ...
+# Subtest: strict compositor preserves every pixel outside module islands
+ok 18 - strict compositor preserves every pixel outside module islands
+  ---
+  duration_ms: 9.954572
+  type: 'test'
+  ...
+# Subtest: steel sheet ribs are not treated as ridges
+ok 19 - steel sheet ribs are not treated as ridges
+  ---
+  duration_ms: 0.76243
+  type: 'test'
+  ...
+# Subtest: gable can allocate across independent faces but ridge remains boundary
+ok 20 - gable can allocate across independent faces but ridge remains boundary
+  ---
+  duration_ms: 0.107442
+  type: 'test'
+  ...
+# Subtest: flat roof has no invented ridge
+ok 21 - flat roof has no invented ridge
+  ---
+  duration_ms: 0.090656
+  type: 'test'
+  ...
+# Subtest: carport preserves supporting structure
+ok 22 - carport preserves supporting structure
+  ---
+  duration_ms: 0.839015
+  type: 'test'
+  ...
+# Subtest: DP6 prompt explicitly requires camera-response and non-CGI material realism
+ok 23 - DP6 prompt explicitly requires camera-response and non-CGI material realism
+  ---
+  duration_ms: 0.720126
+  type: 'test'
+  ...
+# Subtest: zoom crop contains array plus local roof context
+ok 24 - zoom crop contains array plus local roof context
+  ---
+  duration_ms: 5.461506
+  type: 'test'
+  ...
+# Subtest: strict compositor never imports candidate pixels far from realism halo
+ok 25 - strict compositor never imports candidate pixels far from realism halo
+  ---
+  duration_ms: 10.951665
+  type: 'test'
+  ...
+1..25
+# tests 25
+# suites 0
+# pass 25
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 266.117307

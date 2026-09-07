@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build
+build/
+dist/
+
+# Environment / API keys
+.env
+.env.*
+!.env.example
+
+# Cloudflare / runtime
+.wrangler/
+.sites-runtime/
+
+# Python
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# NPM credentials / local config
+.npmrc
+
+# OpenAI / local agent config
+.openai/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+# PilotPaper DP-AI-FIRST local secrets/runtime
+.dev.vars
+.pilotpaper-runtime/
