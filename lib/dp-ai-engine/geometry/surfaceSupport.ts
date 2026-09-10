@@ -34,12 +34,7 @@ export interface SurfaceSupportObstacle {
   viewRole?: PhotoRole;
 }
 
-/**
- * Generic geometric support understood by PilotPaper.
- *
- * V1 uses it for pitched residential roof faces. V2/V3 can add richer adapters
- * without changing the downstream layout/projection contract.
- */
+/** Generic geometric support understood by PilotPaper. */
 export interface SurfaceSupport {
   id: string;
   label: string;
@@ -101,6 +96,21 @@ export function normalizedPolygonArea(poly: Point2D[]) {
   return Math.abs(value) / 2;
 }
 
+function turn(a: Point2D, b: Point2D, c: Point2D) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+/** V1 projective views require four perimeter-ordered corners of one convex plane. */
+export function isStrictlyConvexQuad(poly: Point2D[]) {
+  if (poly.length !== 4 || !poly.every(finitePoint)) return false;
+  const turns = poly.map((point, index) =>
+    turn(point, poly[(index + 1) % 4]!, poly[(index + 2) % 4]!),
+  );
+  if (turns.some((value) => !Number.isFinite(value) || Math.abs(value) < 1e-12)) return false;
+  const sign = Math.sign(turns[0]!);
+  return turns.every((value) => Math.sign(value) === sign);
+}
+
 function lowBoundaryKind(topology: RoofTopology): SurfaceBoundaryKind {
   if (topology === "flat") return "parapet";
   if (topology === "mono_pitch" || topology === "carport" || topology === "canopy") return "low_edge";
@@ -126,10 +136,6 @@ function isMetricRole(role: PhotoRole | undefined) {
   return role == null || role === "satellite_mass";
 }
 
-/**
- * Lossless adapter from the current vision contract into the future generic
- * SurfaceSupport model. No metric dimension is invented here.
- */
 export function surfaceSupportFromRoofFace(
   face: RoofFaceObservation,
   topology: RoofTopology,
@@ -200,10 +206,6 @@ function confidenceBreakdown(surface: SurfaceSupport): SurfaceConfidenceBreakdow
   };
 }
 
-/**
- * Deterministic V1 gate for vision geometry. It deliberately checks geometry
- * instead of trusting an AI confidence score alone.
- */
 export function auditSurfaceUnderstanding(
   surface: SurfaceSupport,
   minimumConfidence = 0.72,
@@ -230,6 +232,8 @@ export function auditSurfaceUnderstanding(
     }
     if (normalizedPolygonArea(view.polygonNormalized) < 0.0025) {
       errors.push(`Surface ${surface.id} view ${view.role} polygon is degenerate or too small.`);
+    } else if (!isStrictlyConvexQuad(view.polygonNormalized)) {
+      errors.push(`Surface ${surface.id} view ${view.role} corners are non-convex, self-crossed or incorrectly ordered for projective geometry.`);
     }
     if (!Number.isFinite(view.confidence) || view.confidence < minimumConfidence) {
       warnings.push(`Surface ${surface.id} view ${view.role} has low confidence.`);
@@ -274,12 +278,14 @@ function surfaceBlockingErrors(
     (view) => view.role === "satellite_mass" &&
       view.polygonNormalized.length === 4 &&
       hasValidPolygon(view.polygonNormalized) &&
+      isStrictlyConvexQuad(view.polygonNormalized) &&
       normalizedConfidence(view.confidence) >= minimumConfidence,
   );
   const hasRealPhoto = visible.some(
     (view) => !["satellite", "satellite_mass"].includes(view.role) &&
       view.polygonNormalized.length === 4 &&
       hasValidPolygon(view.polygonNormalized) &&
+      isStrictlyConvexQuad(view.polygonNormalized) &&
       normalizedConfidence(view.confidence) >= minimumConfidence,
   );
 
@@ -290,14 +296,12 @@ function surfaceBlockingErrors(
     errors.push(`Surface ${surface.id} is not demonstrated in a usable real project photograph.`);
   }
 
-  // V1 dossiers already require an independent close and roof/oblique project
-  // photograph. Requiring the selected face in both observations prevents one
-  // perspective from silently carrying the entire geometric interpretation.
   for (const role of ["near", "roof"] as const) {
     const demonstrated = visible.some(
       (view) => view.role === role &&
         view.polygonNormalized.length === 4 &&
         hasValidPolygon(view.polygonNormalized) &&
+        isStrictlyConvexQuad(view.polygonNormalized) &&
         normalizedConfidence(view.confidence) >= minimumConfidence,
     );
     if (!demonstrated) {
@@ -324,11 +328,6 @@ function surfaceBlockingErrors(
   return [...new Set(errors)];
 }
 
-/**
- * Determine which detected surfaces are safe enough to be offered to the
- * deterministic Layout Engine. Invalid or insufficiently demonstrated faces are
- * excluded instead of being allowed to influence allocation.
- */
 export function selectLayoutEligibleSurfaces(
   faces: RoofFaceObservation[],
   topology: RoofTopology,
@@ -360,12 +359,6 @@ export function selectLayoutEligibleSurfaces(
   };
 }
 
-/**
- * Gate only the surfaces that the deterministic Layout Engine actually selected.
- * A weak unrelated face must not block an otherwise well-demonstrated project,
- * while every allocated face must be demonstrated by metric IGN evidence and the
- * independent near + roof project photographs before image generation can start.
- */
 export function gateAllocatedSurfaces(
   faces: RoofFaceObservation[],
   topology: RoofTopology,
