@@ -3,6 +3,7 @@ import { buildDpPdf, type DpProjectRecord, type DpSourceFile } from "@/lib/dp-pd
 import { requiredSourceKinds, validateGeneratedPdf, validateGenerationInputs } from "@/lib/generation-gate";
 import { getRequestUser } from "@/lib/request-user";
 import { runDPAI } from "@/lib/dp-ai-gate";
+import { inspectRenderedSourceBindings } from "@/lib/dp-ai-engine/quality/sourceBindingInspector";
 import { ensureProjectSchema } from "@/lib/ensure-project-schema";
 import { OFFICIAL_CERFA_FILE, OFFICIAL_CERFA_SHA256 } from "@/lib/official-cerfa";
 
@@ -156,6 +157,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }, { status: 422 });
   }
 
+  const sourceBindingIssues = inspectRenderedSourceBindings(aiRun.evidence, sources, aiRun.renderedViews);
+  if (sourceBindingIssues.length && !testExport) {
+    return Response.json({
+      error: "Les rendus projetés ne correspondent pas exactement aux preuves source ayant servi au calcul géométrique.",
+      issues: sourceBindingIssues,
+    }, { status: 422 });
+  }
+
   const qualityIssues = aiQualityIssues(aiRun);
   if (qualityIssues.length && !testExport) {
     return Response.json({
@@ -187,7 +196,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Le contrôle structurel du PDF final a échoué. Aucun dossier n’a été enregistré.", issues: postflightIssues }, { status: 422 });
   }
 
-  const unverifiedIssues = [...qualityIssues, ...postflightIssues];
+  const unverifiedIssues = [...sourceBindingIssues, ...qualityIssues, ...postflightIssues];
   const testUnverified = testExport && unverifiedIssues.length > 0;
   const validationStatus = testUnverified ? "test_unverified" : "verified";
   const generatedAt = new Date().toISOString();
