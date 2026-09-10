@@ -51,9 +51,18 @@ export interface SurfaceSupport {
   obstacles: SurfaceSupportObstacle[];
 }
 
+export interface SurfaceConfidenceBreakdown {
+  surface: number;
+  boundaries: number;
+  metric: number;
+  obstacles: number;
+  multiView: number;
+}
+
 export interface SurfaceUnderstandingAudit {
   passed: boolean;
   confidence: number;
+  components: SurfaceConfidenceBreakdown;
   errors: string[];
   warnings: string[];
 }
@@ -79,6 +88,10 @@ function normalizedPoint(point: Point2D) {
   return finitePoint(point) && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
 }
 
+function normalizedConfidence(value: number | undefined) {
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, Number(value))) : 0;
+}
+
 export function normalizedPolygonArea(poly: Point2D[]) {
   if (poly.length < 3) return 0;
   let value = 0;
@@ -98,6 +111,19 @@ function highBoundaryKind(topology: RoofTopology): SurfaceBoundaryKind {
   if (topology === "flat") return "parapet";
   if (topology === "mono_pitch" || topology === "carport" || topology === "canopy") return "high_edge";
   return "ridge";
+}
+
+function hasValidPolygon(polygon: Point2D[] | undefined) {
+  return Boolean(
+    polygon &&
+    polygon.length >= 3 &&
+    polygon.every(normalizedPoint) &&
+    normalizedPolygonArea(polygon) >= 0.00001,
+  );
+}
+
+function isMetricRole(role: PhotoRole | undefined) {
+  return role == null || role === "satellite_mass";
 }
 
 /**
@@ -143,6 +169,37 @@ export function surfaceSupportFromRoofFace(
   };
 }
 
+function confidenceBreakdown(surface: SurfaceSupport): SurfaceConfidenceBreakdown {
+  const visible = surface.views.filter((view) => view.selectedFaceVisible);
+  const metricViews = visible.filter(
+    (view) => view.role === "satellite_mass" && view.polygonNormalized.length === 4,
+  );
+  const realViews = visible.filter(
+    (view) => !["satellite", "satellite_mass"].includes(view.role) && view.polygonNormalized.length === 4,
+  );
+  const boundaryPairs = visible.flatMap((view) => {
+    const low = view.boundaries.find((boundary) => ["gutter", "low_edge", "parapet"].includes(boundary.kind));
+    const high = view.boundaries.find((boundary) => ["ridge", "high_edge", "parapet"].includes(boundary.kind));
+    return low && high ? [Math.min(normalizedConfidence(low.confidence), normalizedConfidence(high.confidence))] : [];
+  });
+
+  const obstacleScores = surface.obstacles.map((obstacle) => {
+    if (!hasValidPolygon(obstacle.polygonNormalized)) return 0;
+    if (!isMetricRole(obstacle.viewRole)) return 0;
+    const metricView = metricViews[0];
+    return metricView ? normalizedConfidence(metricView.confidence) : 0;
+  });
+
+  const realScores = realViews.map((view) => normalizedConfidence(view.confidence));
+  return {
+    surface: normalizedConfidence(surface.confidence),
+    boundaries: boundaryPairs.length ? Math.max(...boundaryPairs) : 0,
+    metric: metricViews.length ? Math.max(...metricViews.map((view) => normalizedConfidence(view.confidence))) : 0,
+    obstacles: obstacleScores.length ? Math.min(...obstacleScores) : 1,
+    multiView: realScores.length ? Math.min(...realScores) : 0,
+  };
+}
+
 /**
  * Deterministic V1 gate for vision geometry. It deliberately checks geometry
  * instead of trusting an AI confidence score alone.
@@ -154,6 +211,7 @@ export function auditSurfaceUnderstanding(
   const errors: string[] = [];
   const warnings: string[] = [];
   const visible = surface.views.filter((view) => view.selectedFaceVisible);
+  const components = confidenceBreakdown(surface);
 
   if (!surface.id.trim()) errors.push("Surface support has no stable id.");
   if (!Number.isFinite(surface.confidence) || surface.confidence < minimumConfidence) {
@@ -179,19 +237,27 @@ export function auditSurfaceUnderstanding(
   }
 
   const hasOrthographic = visible.some((view) => view.role === "satellite_mass");
-  const hasRealPhoto = visible.some((view) => !["satellite", "satellite_mass"].includes(view.role));
+  const realViews = visible.filter((view) => !["satellite", "satellite_mass"].includes(view.role));
   if (!hasOrthographic) warnings.push(`Surface ${surface.id} has no visible IGN close-view evidence.`);
-  if (!hasRealPhoto) warnings.push(`Surface ${surface.id} has no visible real-photo evidence.`);
+  if (!realViews.length) warnings.push(`Surface ${surface.id} has no visible real-photo evidence.`);
+  if (realViews.length < 2) {
+    warnings.push(`Surface ${surface.id} has fewer than two independent real-photo roof observations; multi-view confidence is limited.`);
+  }
+  if (components.boundaries < minimumConfidence) {
+    warnings.push(`Surface ${surface.id} does not have a strong low/high boundary pair in the supplied evidence.`);
+  }
 
   const confidenceCandidates = [
-    surface.confidence,
-    ...visible.map((view) => view.confidence),
+    components.surface,
+    components.metric || 1,
+    components.multiView || 1,
   ].filter(Number.isFinite);
   const confidence = confidenceCandidates.length ? Math.min(...confidenceCandidates) : 0;
 
   return {
     passed: errors.length === 0,
     confidence,
+    components,
     errors,
     warnings,
   };
@@ -216,6 +282,21 @@ function surfaceBlockingErrors(
   if (!hasRealPhoto) {
     errors.push(`Surface ${surface.id} is not demonstrated in a usable real project photograph.`);
   }
+
+  for (const obstacle of surface.obstacles) {
+    if (!hasValidPolygon(obstacle.polygonNormalized)) {
+      errors.push(
+        `Obstacle ${obstacle.type} on surface ${surface.id} has no usable polygon and cannot be safely excluded from PV layout.`,
+      );
+      continue;
+    }
+    if (!isMetricRole(obstacle.viewRole)) {
+      errors.push(
+        `Obstacle ${obstacle.type} on surface ${surface.id} is only localized in ${obstacle.viewRole} evidence and has no metric IGN footprint.`,
+      );
+    }
+  }
+
   return [...new Set(errors)];
 }
 
