@@ -92,10 +92,10 @@ test("fixed mode translates the whole requested matrix away from a chimney when 
 
 test("fixed mode never silently reflows a requested matrix", async () => {
   const { solvePolygonalPlacement } = await modulePromise;
-  const face = rectangularFace({ widthMm: 3400, surfacePolygonMm: [
+  const face = rectangularFace({ widthMm: 3200, surfacePolygonMm: [
     { xMm: 0, yMm: 0 },
-    { xMm: 3400, yMm: 0 },
-    { xMm: 3400, yMm: 6000 },
+    { xMm: 3200, yMm: 0 },
+    { xMm: 3200, yMm: 6000 },
     { xMm: 0, yMm: 6000 },
   ] });
   const solution = solvePolygonalPlacement({ face, panel: panel(), array: array(), panelCount: 6 });
@@ -106,21 +106,22 @@ test("automatic mode can choose a different matrix when it is the only polygon-s
   const { solvePolygonalPlacement } = await modulePromise;
   const face = rectangularFace({
     widthMm: 4700,
+    slopeLengthMm: 7000,
     surfacePolygonMm: [
       { xMm: 0, yMm: 0 },
       { xMm: 4700, yMm: 0 },
-      { xMm: 4700, yMm: 6000 },
-      { xMm: 0, yMm: 6000 },
+      { xMm: 4700, yMm: 7000 },
+      { xMm: 0, yMm: 7000 },
     ],
     obstaclePolygonsMm: [
       {
         type: "roof_window",
         description: "Velux",
         polygonMm: [
-          { xMm: 3150, yMm: 0 },
+          { xMm: 3000, yMm: 0 },
           { xMm: 4700, yMm: 0 },
-          { xMm: 4700, yMm: 2400 },
-          { xMm: 3150, yMm: 2400 },
+          { xMm: 4700, yMm: 2500 },
+          { xMm: 3000, yMm: 2500 },
         ],
       },
     ],
