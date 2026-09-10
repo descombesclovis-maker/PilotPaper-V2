@@ -1796,7 +1796,7 @@ export function WorkspaceClient({ currentUser }: WorkspaceClientProps) {
                           setPowerKwp(resolvedModule && Number(value) > 0
                             ? String((resolvedModule.powerWp * Number(value)) / 1000)
                             : "");
-                        }
+                        }}
                         placeholder="12"
                         className="h-12 rounded-xl border-zinc-200 bg-white px-4 shadow-none"
                       />
