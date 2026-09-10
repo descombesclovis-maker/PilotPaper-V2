@@ -103,3 +103,38 @@ test("rejects degenerate or insufficient-confidence roof understanding", async (
   assert.ok(audit.errors.some((message) => message.includes("confidence")));
   assert.ok(audit.errors.some((message) => message.includes("degenerate")));
 });
+
+test("gates every allocated surface and returns the weakest accepted confidence", async () => {
+  const { gateAllocatedSurfaces } = await modulePromise;
+  const faceA = face();
+  const faceB = face({ id: "B", label: "Pan secondaire", confidence: 0.88 });
+  faceB.views = faceB.views.map((view) => ({ ...view, faceId: "B", confidence: 0.86 }));
+  const result = gateAllocatedSurfaces([faceA, faceB], "gable", ["A", "B"]);
+  assert.equal(result.confidence, 0.86);
+  assert.deepEqual(Object.keys(result.audits).sort(), ["A", "B"]);
+});
+
+test("does not let an unrelated weak face block a valid allocated surface", async () => {
+  const { gateAllocatedSurfaces } = await modulePromise;
+  const weakUnused = face({ id: "B", confidence: 0.3 });
+  const result = gateAllocatedSurfaces([face(), weakUnused], "gable", ["A"]);
+  assert.ok(result.confidence >= 0.9);
+});
+
+test("rejects an allocated surface without metric IGN evidence", async () => {
+  const { gateAllocatedSurfaces } = await modulePromise;
+  const noIgn = face({ views: face().views.filter((view) => view.role !== "satellite_mass") });
+  assert.throws(
+    () => gateAllocatedSurfaces([noIgn], "gable", ["A"]),
+    /not demonstrated on the metric IGN close view/,
+  );
+});
+
+test("rejects an allocated surface without a usable real project photograph", async () => {
+  const { gateAllocatedSurfaces } = await modulePromise;
+  const onlyIgn = face({ views: face().views.filter((view) => view.role === "satellite_mass") });
+  assert.throws(
+    () => gateAllocatedSurfaces([onlyIgn], "gable", ["A"]),
+    /not demonstrated in a usable real project photograph/,
+  );
+});
