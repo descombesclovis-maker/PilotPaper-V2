@@ -33,17 +33,17 @@ export function inspectCrossPieceGeometry(
 ): CrossPieceGeometryInspection {
   const issues: QualityIssue[] = [];
   const placements = context.facePlacements ?? [];
-  const modules = placements.flatMap((placement) => placement.modulePlacementsMm ?? []);
+  const physicalModules = placements.flatMap((placement) => placement.modulePlacementsMm ?? []);
 
-  if (!placements.length || modules.length !== context.exactPanelCount) {
+  if (!placements.length || physicalModules.length !== context.exactPanelCount) {
     issues.push(fatal(
       "PHYSICAL_LAYOUT_NOT_AUTHORITATIVE",
-      `Cross-piece inspection found ${modules.length} persisted physical modules for ${context.exactPanelCount} expected.`,
+      `Cross-piece inspection found ${physicalModules.length} persisted physical modules for ${context.exactPanelCount} expected.`,
       "Recompute and persist the complete physical layout before generating DP4/DP5/DP6.",
     ));
   }
 
-  const indices = modules.map((placedModule) => placedModule.index);
+  const indices = physicalModules.map((placedPanel) => placedPanel.index);
   const uniqueIndices = new Set(indices);
   if (uniqueIndices.size !== indices.length || indices.some((index) => !Number.isInteger(index) || index < 0)) {
     issues.push(fatal(
@@ -52,7 +52,7 @@ export function inspectCrossPieceGeometry(
       "Rebuild the layout with one stable unique index per physical module.",
     ));
   }
-  if (modules.length === context.exactPanelCount) {
+  if (physicalModules.length === context.exactPanelCount) {
     const expected = Array.from({ length: context.exactPanelCount }, (_, index) => index);
     const actual = [...uniqueIndices].sort((a, b) => a - b);
     if (expected.some((value, index) => actual[index] !== value)) {
@@ -72,12 +72,12 @@ export function inspectCrossPieceGeometry(
       "Regenerate DP5 from the authoritative physical module set.",
     ));
   } else {
-    for (const placedModule of modules) {
-      const marker = `data-module-index="${placedModule.index}"`;
+    for (const placedPanel of physicalModules) {
+      const marker = `data-module-index="${placedPanel.index}"`;
       if (countOccurrences(dp5.text, marker) !== 1) {
         issues.push(fatal(
           "DP5_MODULE_IDENTITY_MISMATCH",
-          `DP5 does not contain exactly one representation of physical module ${placedModule.index}.`,
+          `DP5 does not contain exactly one representation of physical module ${placedPanel.index}.`,
           "Reject DP5 and render it directly from the persisted physical module polygons.",
         ));
       }
@@ -107,6 +107,6 @@ export function inspectCrossPieceGeometry(
   return {
     passed: issues.length === 0,
     issues: [...new Map(issues.map((issue) => [`${issue.code}:${issue.message}`, issue])).values()],
-    physicalModuleCount: modules.length,
+    physicalModuleCount: physicalModules.length,
   };
 }
