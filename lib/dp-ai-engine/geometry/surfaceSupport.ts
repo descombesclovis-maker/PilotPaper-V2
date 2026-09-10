@@ -266,14 +266,21 @@ export function auditSurfaceUnderstanding(
 function surfaceBlockingErrors(
   surface: SurfaceSupport,
   audit: SurfaceUnderstandingAudit,
+  minimumConfidence: number,
 ): string[] {
   const visible = surface.views.filter((view) => view.selectedFaceVisible);
   const errors = [...audit.errors];
   const hasOrthographic = visible.some(
-    (view) => view.role === "satellite_mass" && view.polygonNormalized.length === 4,
+    (view) => view.role === "satellite_mass" &&
+      view.polygonNormalized.length === 4 &&
+      hasValidPolygon(view.polygonNormalized) &&
+      normalizedConfidence(view.confidence) >= minimumConfidence,
   );
   const hasRealPhoto = visible.some(
-    (view) => !["satellite", "satellite_mass"].includes(view.role) && view.polygonNormalized.length === 4,
+    (view) => !["satellite", "satellite_mass"].includes(view.role) &&
+      view.polygonNormalized.length === 4 &&
+      hasValidPolygon(view.polygonNormalized) &&
+      normalizedConfidence(view.confidence) >= minimumConfidence,
   );
 
   if (!hasOrthographic) {
@@ -281,6 +288,23 @@ function surfaceBlockingErrors(
   }
   if (!hasRealPhoto) {
     errors.push(`Surface ${surface.id} is not demonstrated in a usable real project photograph.`);
+  }
+
+  // V1 dossiers already require an independent close and roof/oblique project
+  // photograph. Requiring the selected face in both observations prevents one
+  // perspective from silently carrying the entire geometric interpretation.
+  for (const role of ["near", "roof"] as const) {
+    const demonstrated = visible.some(
+      (view) => view.role === role &&
+        view.polygonNormalized.length === 4 &&
+        hasValidPolygon(view.polygonNormalized) &&
+        normalizedConfidence(view.confidence) >= minimumConfidence,
+    );
+    if (!demonstrated) {
+      errors.push(
+        `Surface ${surface.id} has no reliable ${role} observation of the same selected roof face.`,
+      );
+    }
   }
 
   for (const obstacle of surface.obstacles) {
@@ -319,7 +343,7 @@ export function selectLayoutEligibleSurfaces(
     const surface = surfaceSupportFromRoofFace(face, topology);
     const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
     audits[face.id] = audit;
-    const errors = surfaceBlockingErrors(surface, audit);
+    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence);
     if (errors.length) {
       rejected[face.id] = errors;
       continue;
@@ -339,8 +363,8 @@ export function selectLayoutEligibleSurfaces(
 /**
  * Gate only the surfaces that the deterministic Layout Engine actually selected.
  * A weak unrelated face must not block an otherwise well-demonstrated project,
- * while every allocated face must be demonstrated both orthographically and in
- * at least one real project photograph before image generation can start.
+ * while every allocated face must be demonstrated by metric IGN evidence and the
+ * independent near + roof project photographs before image generation can start.
  */
 export function gateAllocatedSurfaces(
   faces: RoofFaceObservation[],
@@ -362,7 +386,7 @@ export function gateAllocatedSurfaces(
     const surface = surfaceSupportFromRoofFace(face, topology);
     const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
     audits[faceId] = audit;
-    const errors = surfaceBlockingErrors(surface, audit);
+    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence);
 
     if (errors.length) {
       throw new Error(`Surface understanding rejected ${faceId}: ${errors.join(" ")}`);
