@@ -133,8 +133,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const body = await request.json().catch(() => null) as Payload | null;
   if (!body) return Response.json({ error: "Configuration photovoltaïque absente." }, { status: 400 });
 
-  const module = resolveVerifiedPvModule(body.moduleReference ?? "");
-  if (!module) {
+  const moduleSpec = resolveVerifiedPvModule(body.moduleReference ?? "");
+  if (!moduleSpec) {
     return Response.json({
       code: "MODULE_REFERENCE_UNKNOWN",
       error: "La référence du module n'est pas présente dans le catalogue fabricant vérifié. Ajoutez sa fiche technique fabricant avant l'analyse du calepinage.",
@@ -165,10 +165,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     projectId: id,
     address: project.siteAddress,
     panel: {
-      model: module.canonicalReference,
-      widthMm: module.widthMm,
-      heightMm: module.heightMm,
-      powerWp: module.powerWp,
+      model: moduleSpec.canonicalReference,
+      widthMm: moduleSpec.widthMm,
+      heightMm: moduleSpec.heightMm,
+      powerWp: moduleSpec.powerWp,
     },
     requestedPanelCount: count,
     array: {
@@ -277,14 +277,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   return Response.json({
     fits: true,
     module: {
-      manufacturer: module.manufacturer,
-      model: module.model,
-      canonicalReference: module.canonicalReference,
-      widthMm: module.widthMm,
-      heightMm: module.heightMm,
-      powerWp: module.powerWp,
-      sourceUrl: module.sourceUrl,
-      verifiedAt: module.verifiedAt,
+      manufacturer: moduleSpec.manufacturer,
+      model: moduleSpec.model,
+      canonicalReference: moduleSpec.canonicalReference,
+      widthMm: moduleSpec.widthMm,
+      heightMm: moduleSpec.heightMm,
+      powerWp: moduleSpec.powerWp,
+      sourceUrl: moduleSpec.sourceUrl,
+      verifiedAt: moduleSpec.verifiedAt,
     },
     faces: roofFaces,
     placements: layout.placements,
