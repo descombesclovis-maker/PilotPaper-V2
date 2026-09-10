@@ -1,0 +1,133 @@
+name: Build PilotPaper macOS Intel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v1-desktop
+
+permissions:
+  contents: write
+
+jobs:
+  macos-intel-app:
+    runs-on: macos-13
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout desktop branch
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate PilotPaper build
+        run: npm run build
+
+      - name: Run PilotPaper regression tests
+        run: npm test
+
+      - name: Assemble permanent macOS Intel app
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$PWD/macos-stage"
+          APP="$STAGE/PilotPaper.app"
+          CONTENTS="$APP/Contents"
+          RES="$CONTENTS/Resources"
+          BASE="$RES/baseline"
+          RUNTIME="$RES/runtime"
+          mkdir -p "$CONTENTS/MacOS" "$BASE" "$RUNTIME" "$PWD/macos-output"
+
+          cp desktop/macos/Info.plist "$CONTENTS/Info.plist"
+          cp desktop/macos/PilotPaperLauncher.sh "$CONTENTS/MacOS/PilotPaper"
+          chmod +x "$CONTENTS/MacOS/PilotPaper"
+
+          NODE_VERSION="22.23.2"
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-x64.tar.gz" -o node-macos.tar.gz
+          tar -xzf node-macos.tar.gz
+          cp "node-v${NODE_VERSION}-darwin-x64/bin/node" "$RUNTIME/node"
+          chmod +x "$RUNTIME/node"
+
+          rsync -a ./ "$BASE/" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'desktop/' \
+            --exclude 'tests/' \
+            --exclude 'macos-stage/' \
+            --exclude 'macos-output/' \
+            --exclude 'desktop-stage/' \
+            --exclude 'desktop-output/' \
+            --exclude '.dev.vars' \
+            --exclude '.env*'
+
+          test -f "$BASE/node_modules/vite/bin/vite.js"
+          test -f "$BASE/vite.config.ts"
+          test -x "$RUNTIME/node"
+          test -x "$CONTENTS/MacOS/PilotPaper"
+
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$PWD/macos-output/PilotPaper-macOS-Intel.zip"
+
+      - name: Assemble rolling macOS application payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          PAYLOAD="$PWD/macos-payload"
+          mkdir -p "$PAYLOAD"
+          rsync -a ./ "$PAYLOAD/" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'desktop/' \
+            --exclude 'tests/' \
+            --exclude 'macos-stage/' \
+            --exclude 'macos-output/' \
+            --exclude 'macos-payload/' \
+            --exclude 'desktop-stage/' \
+            --exclude 'desktop-output/' \
+            --exclude '.dev.vars' \
+            --exclude '.env*'
+          cd "$PAYLOAD"
+          /usr/bin/ditto -c -k --sequesterRsrc . "$GITHUB_WORKSPACE/macos-output/PilotPaper-Mac-App.zip"
+          cd "$GITHUB_WORKSPACE"
+          SHA=$(shasum -a 256 macos-output/PilotPaper-Mac-App.zip | awk '{print $1}')
+          VERSION="${GITHUB_SHA}"
+          printf '{"version":"%s","sha256":"%s","asset":"PilotPaper-Mac-App.zip"}\n' "$VERSION" "$SHA" > macos-output/pilotpaper-macos-manifest.json
+
+      - name: Ad-hoc sign app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - macos-stage/PilotPaper.app
+          codesign --verify --deep --strict macos-stage/PilotPaper.app
+          rm -f macos-output/PilotPaper-macOS-Intel.zip
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent macos-stage/PilotPaper.app macos-output/PilotPaper-macOS-Intel.zip
+
+      - name: Publish rolling macOS release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="pilotpaper-desktop-latest"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "PilotPaper Desktop Latest" --notes "Rolling PilotPaper desktop update channel."
+          fi
+          gh release upload "$TAG" \
+            macos-output/PilotPaper-macOS-Intel.zip \
+            macos-output/PilotPaper-Mac-App.zip \
+            macos-output/pilotpaper-macos-manifest.json \
+            --clobber
+
+      - name: Upload macOS Intel build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotPaper-macOS-Intel
+          path: macos-output/PilotPaper-macOS-Intel.zip
+          if-no-files-found: error
+          retention-days: 14
