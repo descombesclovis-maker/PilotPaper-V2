@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_NAME="PilotPaper"
 APP_URL="http://127.0.0.1:5173/"
 APP_SUPPORT="$HOME/Library/Application Support/PilotPaper"
 CURRENT_DIR="$APP_SUPPORT/app/current"
@@ -55,6 +54,29 @@ install_baseline_if_needed() {
   fi
 }
 
+json_asset_url() {
+  local json_file="$1"
+  local asset_name="$2"
+  "$RUNTIME_DIR/node" -e '
+const fs=require("fs");
+const [file,name]=process.argv.slice(1);
+const data=JSON.parse(fs.readFileSync(file,"utf8"));
+const asset=(data.assets||[]).find(a=>a.name===name);
+process.stdout.write(asset?.browser_download_url||"");
+' "$json_file" "$asset_name"
+}
+
+json_field() {
+  local json_file="$1"
+  local field="$2"
+  "$RUNTIME_DIR/node" -e '
+const fs=require("fs");
+const [file,field]=process.argv.slice(1);
+const data=JSON.parse(fs.readFileSync(file,"utf8"));
+process.stdout.write(String(data[field]??""));
+' "$json_file" "$field"
+}
+
 try_update() {
   local tmp="$APP_SUPPORT/.update"
   rm -rf "$tmp"
@@ -63,46 +85,27 @@ try_update() {
     echo "Update check skipped: release unavailable"
     return 0
   fi
+
   local manifest_url payload_url
-  manifest_url=$(/usr/bin/python3 - "$tmp/release.json" <<'PY'
-import json,sys
-x=json.load(open(sys.argv[1]))
-for a in x.get('assets',[]):
-    if a.get('name')=='pilotpaper-macos-manifest.json':
-        print(a.get('browser_download_url',''))
-        break
-PY
-)
-  payload_url=$(/usr/bin/python3 - "$tmp/release.json" <<'PY'
-import json,sys
-x=json.load(open(sys.argv[1]))
-for a in x.get('assets',[]):
-    if a.get('name')=='PilotPaper-Mac-App.zip':
-        print(a.get('browser_download_url',''))
-        break
-PY
-)
+  manifest_url=$(json_asset_url "$tmp/release.json" "pilotpaper-macos-manifest.json")
+  payload_url=$(json_asset_url "$tmp/release.json" "PilotPaper-Mac-App.zip")
   [[ -n "$manifest_url" && -n "$payload_url" ]] || { echo "No macOS update assets yet"; return 0; }
+
   /usr/bin/curl -fsSL --max-time 20 "$manifest_url" -o "$tmp/manifest.json" || return 0
+
   local remote_sha remote_version local_version
-  remote_sha=$(/usr/bin/python3 - "$tmp/manifest.json" <<'PY'
-import json,sys
-print(json.load(open(sys.argv[1])).get('sha256',''))
-PY
-)
-  remote_version=$(/usr/bin/python3 - "$tmp/manifest.json" <<'PY'
-import json,sys
-print(json.load(open(sys.argv[1])).get('version',''))
-PY
-)
+  remote_sha=$(json_field "$tmp/manifest.json" "sha256")
+  remote_version=$(json_field "$tmp/manifest.json" "version")
   local_version=""
   [[ -f "$APP_SUPPORT/version.txt" ]] && local_version=$(cat "$APP_SUPPORT/version.txt")
   [[ -n "$remote_sha" && -n "$remote_version" ]] || return 0
   [[ "$remote_version" != "$local_version" ]] || return 0
+
   /usr/bin/curl -fL --max-time 300 "$payload_url" -o "$tmp/app.zip" || return 0
   local actual_sha
   actual_sha=$(/usr/bin/shasum -a 256 "$tmp/app.zip" | /usr/bin/awk '{print $1}')
   [[ "$actual_sha" == "$remote_sha" ]] || { echo "Update SHA mismatch"; return 0; }
+
   mkdir -p "$tmp/unpacked"
   /usr/bin/ditto -x -k "$tmp/app.zip" "$tmp/unpacked"
   local newdir="$APP_SUPPORT/app/new"
@@ -133,18 +136,20 @@ start_server() {
   local vite="$CURRENT_DIR/node_modules/vite/bin/vite.js"
   [[ -x "$node" ]] || { notify_error "Runtime Node embarqué introuvable."; exit 1; }
   [[ -f "$vite" ]] || { notify_error "Runtime Vite embarqué introuvable."; exit 1; }
+
   cd "$CURRENT_DIR"
   export DP_TEST_EXPORT=false
   export DP_TEST_FAST=false
   export DP_MAX_RETRIES=5
   export NODE_ENV=development
   export OPENAI_API_KEY="$(sed -n 's/^OPENAI_API_KEY=//p' "$APP_SUPPORT/.dev.vars" | head -n 1)"
+
   "$node" "$vite" --host 127.0.0.1 --port 5173 --strictPort >>"$LOG_FILE" 2>&1 &
   echo $! > "$APP_SUPPORT/pilotpaper.pid"
 }
 
-ensure_openai_key
 install_baseline_if_needed
+ensure_openai_key
 try_update || true
 
 if ! /usr/bin/curl -fsS --max-time 2 "$APP_URL" >/dev/null 2>&1; then
