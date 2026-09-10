@@ -220,14 +220,14 @@ export function auditPhysicalModules(args: {
     );
   }
 
-  for (const module of modules) {
-    if (!module.polygonMm.every((point) => pointInMetricPolygon(point, support))) {
-      errors.push(`Module ${module.index} leaves the metric boundary of surface ${face.id}.`);
+  for (const placedModule of modules) {
+    if (!placedModule.polygonMm.every((point) => pointInMetricPolygon(point, support))) {
+      errors.push(`Module ${placedModule.index} leaves the metric boundary of surface ${face.id}.`);
     }
     for (const obstacle of face.obstaclePolygonsMm ?? []) {
-      if (metricPolygonsOverlapOrTouch(module.polygonMm, obstacle.polygonMm)) {
+      if (metricPolygonsOverlapOrTouch(placedModule.polygonMm, obstacle.polygonMm)) {
         errors.push(
-          `Module ${module.index} collides with obstacle ${obstacle.type} on surface ${face.id}: ${obstacle.description}.`,
+          `Module ${placedModule.index} collides with obstacle ${obstacle.type} on surface ${face.id}: ${obstacle.description}.`,
         );
       }
     }
