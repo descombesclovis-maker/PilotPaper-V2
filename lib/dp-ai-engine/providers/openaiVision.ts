@@ -1,6 +1,6 @@
 import type { VisionAnalyzer } from "./interfaces";
 import type { InputPhoto, MetricPoint2D, Point2D, ProjectContext, ProjectForm, RoofFaceMetricGeometry, RoofFaceObservation, RoofViewObservation } from "../types";
-import { computePVField, multiFaceConstraintFacts } from "../geometry/pvConstraints";
+import { multiFaceConstraintFacts } from "../geometry/pvConstraints";
 import { resolveProjectLayout } from "../geometry/projectLayout";
 import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
 import { toDataUrl } from "../utils/dataUrl";
@@ -56,6 +56,35 @@ function distancePx(a:{x:number;y:number},b:{x:number;y:number},width:number,hei
 function polygonArea(poly:Array<{x:number;y:number}>){let a=0;for(let i=0,j=poly.length-1;i<poly.length;j=i++)a+=poly[j]!.x*poly[i]!.y-poly[i]!.x*poly[j]!.y;return Math.abs(a)/2;}
 
 function normalizedToPixels(point:Point2D,width:number,height:number){return {x:point.x*width,y:point.y*height};}
+
+function resolvedPhysicalPlacement(
+  placement: NonNullable<ProjectContext["facePlacements"]>[number],
+  metric: RoofFaceMetricGeometry | undefined,
+): ProjectContext["resolvedPlacement"] {
+  if (!metric?.widthMm || !metric.slopeLengthMm) return undefined;
+  const modules = placement.modulePlacementsMm;
+  if (modules?.length === placement.panelCount) {
+    const points = modules.flatMap((module) => module.polygonMm);
+    if (points.length && points.every((point) => Number.isFinite(point.xMm) && Number.isFinite(point.yMm))) {
+      const minX = Math.min(...points.map((point) => point.xMm));
+      const maxX = Math.max(...points.map((point) => point.xMm));
+      const minY = Math.min(...points.map((point) => point.yMm));
+      const maxY = Math.max(...points.map((point) => point.yMm));
+      return {
+        leftMm: Math.max(0, minX),
+        rightMm: Math.max(0, metric.widthMm - maxX),
+        gutterMm: Math.max(0, minY),
+        ridgeMm: Math.max(0, metric.slopeLengthMm - maxY),
+      };
+    }
+  }
+  return {
+    leftMm: Math.max(0, placement.resolvedLeftMm ?? 0),
+    rightMm: Math.max(0, placement.resolvedRightMm ?? 0),
+    gutterMm: Math.max(0, placement.resolvedGutterMm),
+    ridgeMm: Math.max(0, placement.resolvedRidgeMm ?? 0),
+  };
+}
 
 /**
  * Build a deterministic local roof-plane basis from the calibrated orthographic
@@ -178,12 +207,8 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
       layout.placements.map((placement)=>placement.faceId),
     );
 
-    const field=computePVField(form.panel,{...form.array,rows:primaryPlacement.rows,columns:primaryPlacement.columns});
     const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId) ?? form.roofGeometry;
-    const resolvedPlacement=primaryMetric?.widthMm&&primaryMetric.slopeLengthMm?{
-      leftMm:Math.max(0,(primaryMetric.widthMm-field.fieldWidthMm)/2),rightMm:Math.max(0,(primaryMetric.widthMm-field.fieldWidthMm)/2),
-      gutterMm:primaryPlacement.resolvedGutterMm,ridgeMm:Math.max(0,primaryMetric.slopeLengthMm-primaryPlacement.resolvedGutterMm-field.fieldHeightMm)
-    }:undefined;
+    const resolvedPlacement=resolvedPhysicalPlacement(primaryPlacement,primaryMetric);
     const flattened=faces.flatMap(f=>f.views);
     const allObstacles=primaryFace.obstacles.map(o=>({type:o.type,description:o.description,polygonNormalized:o.polygonNormalized}));
     const rules=supportRules(topology,form.support?.covering??"unknown");
