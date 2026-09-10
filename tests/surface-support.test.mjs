@@ -130,6 +130,23 @@ test("rejects degenerate or insufficient-confidence roof understanding", async (
   assert.ok(audit.errors.some((message) => message.includes("degenerate")));
 });
 
+test("rejects a self-crossed or incorrectly ordered perspective quad before layout", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const invalid = face();
+  invalid.views = invalid.views.map((view) => view.role === "near" ? {
+    ...view,
+    roofPolygonNormalized: [
+      { x: 0.18, y: 0.80 },
+      { x: 0.88, y: 0.72 },
+      { x: 0.30, y: 0.25 },
+      { x: 0.67, y: 0.21 },
+    ],
+  } : view);
+  const result = selectLayoutEligibleSurfaces([invalid], "gable");
+  assert.deepEqual(result.eligibleFaceIds, []);
+  assert.ok(result.rejected.A?.some((message) => /non-convex|self-crossed|incorrectly ordered/i.test(message)));
+});
+
 test("gates every allocated surface and returns the weakest accepted confidence", async () => {
   const { gateAllocatedSurfaces } = await modulePromise;
   const faceA = face();
