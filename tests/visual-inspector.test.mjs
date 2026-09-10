@@ -91,7 +91,27 @@ function context() {
   };
 }
 
-test("independent visual inspector passes a traceable unchanged PNG outside the PV island", async () => {
+test("independent visual inspector passes when every PV island changed and all outside pixels stay identical", async () => {
+  const { encodePng } = await pixelsPromise;
+  const { inspectGeneratedVisualDeterministically } = await inspectorPromise;
+  const sourceRgba = solidRgba(40, 30, 100);
+  const outputRgba = new Uint8Array(sourceRgba);
+  const inside = (15 * 40 + 20) * 4;
+  outputRgba[inside] = 180;
+  const source = encodePng(40, 30, sourceRgba);
+  const output = encodePng(40, 30, outputRgba);
+  const inspection = inspectGeneratedVisualDeterministically({
+    context: context(),
+    originalPhotos: [{ role: "near", mimeType: "image/png", base64: source }],
+    generated: { dp: 6, kind: "image", mimeType: "image/png", base64: output, attempt: 1, sourceRole: "near" },
+  });
+  assert.equal(inspection.passed, true);
+  assert.equal(inspection.audit?.exactPanelCount, true);
+  assert.equal(inspection.audit?.exactOutsideMaskPreservation, true);
+  assert.equal(inspection.audit?.allPanelIslandsRendered, true);
+});
+
+test("independent visual inspector rejects an authoritative PV island with no generated pixel change", async () => {
   const { encodePng } = await pixelsPromise;
   const { inspectGeneratedVisualDeterministically } = await inspectorPromise;
   const source = encodePng(40, 30, solidRgba(40, 30, 100));
@@ -100,9 +120,8 @@ test("independent visual inspector passes a traceable unchanged PNG outside the 
     originalPhotos: [{ role: "near", mimeType: "image/png", base64: source }],
     generated: { dp: 6, kind: "image", mimeType: "image/png", base64: source, attempt: 1, sourceRole: "near" },
   });
-  assert.equal(inspection.passed, true);
-  assert.equal(inspection.audit?.exactPanelCount, true);
-  assert.equal(inspection.audit?.exactOutsideMaskPreservation, true);
+  assert.equal(inspection.passed, false);
+  assert.ok(inspection.issues.some((issue) => issue.code === "PANEL_ISLAND_NOT_RENDERED"));
 });
 
 test("independent visual inspector fatally rejects changed building pixels outside the mask", async () => {
