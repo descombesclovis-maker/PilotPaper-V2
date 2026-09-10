@@ -43,7 +43,7 @@ export function inspectCrossPieceGeometry(
     ));
   }
 
-  const indices = modules.map((module) => module.index);
+  const indices = modules.map((placedModule) => placedModule.index);
   const uniqueIndices = new Set(indices);
   if (uniqueIndices.size !== indices.length || indices.some((index) => !Number.isInteger(index) || index < 0)) {
     issues.push(fatal(
@@ -72,12 +72,12 @@ export function inspectCrossPieceGeometry(
       "Regenerate DP5 from the authoritative physical module set.",
     ));
   } else {
-    for (const module of modules) {
-      const marker = `data-module-index="${module.index}"`;
+    for (const placedModule of modules) {
+      const marker = `data-module-index="${placedModule.index}"`;
       if (countOccurrences(dp5.text, marker) !== 1) {
         issues.push(fatal(
           "DP5_MODULE_IDENTITY_MISMATCH",
-          `DP5 does not contain exactly one representation of physical module ${module.index}.`,
+          `DP5 does not contain exactly one representation of physical module ${placedModule.index}.`,
           "Reject DP5 and render it directly from the persisted physical module polygons.",
         ));
       }
