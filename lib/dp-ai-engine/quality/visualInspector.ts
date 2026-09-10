@@ -126,6 +126,13 @@ export function inspectGeneratedVisualDeterministically(args: {
       "Reject the output. Restore source pixels everywhere outside the authorized panel mask.",
     ));
   }
+  if (!audit.allPanelIslandsRendered) {
+    issues.push(fatal(
+      "PANEL_ISLAND_NOT_RENDERED",
+      `${audit.panelIslandsWithChanges} of ${audit.panelCountProjected} photovoltaic islands contain actual generated pixel changes.`,
+      "Reject the output and regenerate every authoritative panel island; no physical module may be silently omitted.",
+    ));
+  }
 
   return { passed: issues.length === 0, issues, audit };
 }
