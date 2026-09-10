@@ -61,3 +61,10 @@ test("requires both V1 project visuals before export", async () => {
   const issues = inspectRenderedSourceBindings(evidence(), sources, rendered.filter((view) => view.kind !== "dp4_project"));
   assert.ok(issues.some((issue) => issue.code === "RENDERED_VIEW_MISSING" && issue.field === "dp4_project"));
 });
+
+test("rejects a rendered view that omits its source identity", async () => {
+  const { inspectRenderedSourceBindings } = await modulePromise;
+  const noSourceKind = rendered.map((view) => view.kind === "dp4_project" ? { ...view, sourceKind: undefined } : view);
+  const issues = inspectRenderedSourceBindings(evidence(), sources, noSourceKind);
+  assert.ok(issues.some((issue) => issue.code === "SOURCE_KIND_MISSING" && issue.field === "dp4_project"));
+});
