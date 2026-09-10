@@ -2,6 +2,7 @@ import type { ImageEditor, QualityJudge } from "../providers/interfaces";
 import type { DPNumber, GeneratedAsset, InputPhoto, ProjectContext, ProjectForm, QualityReport } from "../types";
 import { dpImagePrompt } from "../prompts/dpImage";
 import { prioritizePhotos } from "../geometry/photoSelection";
+import { inspectGeneratedVisualDeterministically } from "../quality/visualInspector";
 
 function unverifiedTestQuality(dp: DPNumber): QualityReport {
   return {
@@ -26,6 +27,30 @@ function unverifiedTestQuality(dp: DPNumber): QualityReport {
       correction: "Contrôle qualité à réactiver avant passage en production.",
     }],
     correctionPrompt: "",
+  };
+}
+
+function deterministicFailureQuality(
+  dp: DPNumber,
+  inspection: ReturnType<typeof inspectGeneratedVisualDeterministically>,
+): QualityReport {
+  return {
+    passed: false,
+    score: 0,
+    panelCountObserved: inspection.audit?.panelCountProjected,
+    rowsObserved: undefined,
+    columnsObserved: undefined,
+    buildingPreserved: inspection.audit?.exactOutsideMaskPreservation ?? false,
+    perspectiveCoherent: false,
+    scaleCoherent: false,
+    placementCoherent: false,
+    roofFaceCorrect: false,
+    insideSelectedRoofFace: inspection.audit?.allPanelsInsideImage ?? false,
+    singleRoofPlane: false,
+    crossesRidge: false,
+    arrayGeometryConsistent: false,
+    issues: inspection.issues,
+    correctionPrompt: inspection.issues.map((issue) => `${issue.code}: ${issue.correction}`).join("\n"),
   };
 }
 
@@ -54,6 +79,18 @@ export class AIVisualGenerator {
       // remains explicitly unverified and production keeps the strict path.
       if (this.acceptFirstResult) {
         return { asset, quality: unverifiedTestQuality(dp) };
+      }
+
+      // Independent deterministic inspector runs before any model judgement.
+      // A structural/pixel-preservation failure is not something another AI
+      // rendering attempt can safely repair, so fail closed without wasting calls.
+      const deterministic = inspectGeneratedVisualDeterministically({
+        context,
+        originalPhotos: orderedPhotos,
+        generated: asset,
+      });
+      if (!deterministic.passed) {
+        return { asset, quality: deterministicFailureQuality(dp, deterministic) };
       }
 
       let report: QualityReport;
