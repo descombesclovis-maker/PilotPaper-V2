@@ -16,6 +16,10 @@ export type DeterministicImageAudit = {
   editablePixels: number;
   editableRatio: number;
   maxOutsideChannelDelta: number;
+  panelIslandPixels: number[];
+  panelIslandChangedPixels: number[];
+  panelIslandsWithChanges: number;
+  allPanelIslandsRendered: boolean;
   sourceWidthPx: number;
   sourceHeightPx: number;
   outputWidthPx: number;
@@ -83,6 +87,50 @@ function expand(polygons: Point2D[][], paddingNormalized: number) {
   });
 }
 
+function pixelChanged(source: Uint8Array, output: Uint8Array, index: number) {
+  for (let channel = 0; channel < 4; channel++) {
+    if (source[index + channel] !== output[index + channel]) return true;
+  }
+  return false;
+}
+
+function auditPanelIslandPixels(args: {
+  source: ReturnType<typeof decodePng>;
+  output: ReturnType<typeof decodePng>;
+  polygons: Point2D[][];
+}) {
+  const { source, output, polygons } = args;
+  const panelIslandPixels = Array.from({ length: polygons.length }, () => 0);
+  const panelIslandChangedPixels = Array.from({ length: polygons.length }, () => 0);
+  if (source.width !== output.width || source.height !== output.height) {
+    return { panelIslandPixels, panelIslandChangedPixels };
+  }
+
+  polygons.forEach((polygon, polygonIndex) => {
+    if (!polygon.length) return;
+    const minX = Math.max(0, Math.min(...polygon.map((point) => point.x)));
+    const maxX = Math.min(1, Math.max(...polygon.map((point) => point.x)));
+    const minY = Math.max(0, Math.min(...polygon.map((point) => point.y)));
+    const maxY = Math.min(1, Math.max(...polygon.map((point) => point.y)));
+    const x0 = Math.max(0, Math.floor(minX * source.width) - 1);
+    const x1 = Math.min(source.width - 1, Math.ceil(maxX * source.width) + 1);
+    const y0 = Math.max(0, Math.floor(minY * source.height) - 1);
+    const y1 = Math.min(source.height - 1, Math.ceil(maxY * source.height) + 1);
+
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const point = { x: (x + 0.5) / source.width, y: (y + 0.5) / source.height };
+        if (!pointInside(point, polygon)) continue;
+        panelIslandPixels[polygonIndex]!++;
+        const index = (y * source.width + x) * 4;
+        if (pixelChanged(source.rgba, output.rgba, index)) panelIslandChangedPixels[polygonIndex]!++;
+      }
+    }
+  });
+
+  return { panelIslandPixels, panelIslandChangedPixels };
+}
+
 export function auditDeterministicImage(params: {
   sourceBase64: string;
   outputBase64: string;
@@ -129,19 +177,28 @@ export function auditDeterministicImage(params: {
         }
         outsidePixelsChecked++;
         const index = (y * source.width + x) * 4;
-        let pixelChanged = false;
+        let changed = false;
         for (let channel = 0; channel < 4; channel++) {
           const delta = Math.abs(source.rgba[index + channel]! - output.rgba[index + channel]!);
-          if (delta > 0) pixelChanged = true;
+          if (delta > 0) changed = true;
           maxOutsideChannelDelta = Math.max(maxOutsideChannelDelta, delta);
         }
-        if (pixelChanged) changedOutsidePixels++;
+        if (changed) changedOutsidePixels++;
       }
     }
   } else {
     changedOutsidePixels = -1;
     maxOutsideChannelDelta = 255;
   }
+
+  const { panelIslandPixels, panelIslandChangedPixels } = auditPanelIslandPixels({ source, output, polygons });
+  const panelIslandsWithChanges = panelIslandChangedPixels.filter((count, index) =>
+    panelIslandPixels[index]! > 0 && count > 0,
+  ).length;
+  const allPanelIslandsRendered =
+    sameSize &&
+    polygons.length > 0 &&
+    panelIslandsWithChanges === polygons.length;
 
   const exactPanelCount = polygons.length === params.expectedPanelCount;
   const exactOutsideMaskPreservation = sameSize && changedOutsidePixels === 0;
@@ -171,6 +228,10 @@ export function auditDeterministicImage(params: {
     editablePixels,
     editableRatio,
     maxOutsideChannelDelta,
+    panelIslandPixels,
+    panelIslandChangedPixels,
+    panelIslandsWithChanges,
+    allPanelIslandsRendered,
     sourceWidthPx: source.width,
     sourceHeightPx: source.height,
     outputWidthPx: output.width,
