@@ -138,3 +138,21 @@ test("rejects an allocated surface without a usable real project photograph", as
     /not demonstrated in a usable real project photograph/,
   );
 });
+
+test("excludes an unsafe face before layout while keeping independent safe candidates", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const safe = face();
+  const weak = face({ id: "B", label: "Pan faible", confidence: 0.4 });
+  weak.views = weak.views.map((view) => ({ ...view, faceId: "B" }));
+  const result = selectLayoutEligibleSurfaces([safe, weak], "gable");
+  assert.deepEqual(result.eligibleFaceIds, ["A"]);
+  assert.ok(result.rejected.B?.some((message) => message.includes("confidence")));
+});
+
+test("never offers a face without real-photo evidence to the Layout Engine", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const onlyIgn = face({ views: face().views.filter((view) => view.role === "satellite_mass") });
+  const result = selectLayoutEligibleSurfaces([onlyIgn], "gable");
+  assert.deepEqual(result.eligibleFaceIds, []);
+  assert.ok(result.rejected.A?.some((message) => message.includes("usable real project photograph")));
+});
