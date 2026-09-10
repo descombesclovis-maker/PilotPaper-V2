@@ -58,6 +58,12 @@ export interface SurfaceUnderstandingAudit {
   warnings: string[];
 }
 
+export interface AllocatedSurfaceGateResult {
+  confidence: number;
+  warnings: string[];
+  audits: Record<string, SurfaceUnderstandingAudit>;
+}
+
 function finitePoint(point: Point2D) {
   return Number.isFinite(point.x) && Number.isFinite(point.y);
 }
@@ -181,5 +187,59 @@ export function auditSurfaceUnderstanding(
     confidence,
     errors,
     warnings,
+  };
+}
+
+/**
+ * Gate only the surfaces that the deterministic Layout Engine actually selected.
+ * A weak unrelated face must not block an otherwise well-demonstrated project,
+ * while every allocated face must be demonstrated both orthographically and in
+ * at least one real project photograph before image generation can start.
+ */
+export function gateAllocatedSurfaces(
+  faces: RoofFaceObservation[],
+  topology: RoofTopology,
+  allocatedFaceIds: string[],
+  minimumConfidence = 0.72,
+): AllocatedSurfaceGateResult {
+  const uniqueIds = [...new Set(allocatedFaceIds)];
+  if (!uniqueIds.length) throw new Error("No allocated surface was supplied to the V1 understanding gate.");
+
+  const audits: Record<string, SurfaceUnderstandingAudit> = {};
+  const warnings: string[] = [];
+  const confidences: number[] = [];
+
+  for (const faceId of uniqueIds) {
+    const face = faces.find((candidate) => candidate.id === faceId);
+    if (!face) throw new Error(`Allocated surface ${faceId} was not detected by vision analysis.`);
+
+    const surface = surfaceSupportFromRoofFace(face, topology);
+    const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
+    audits[faceId] = audit;
+
+    const visible = surface.views.filter((view) => view.selectedFaceVisible);
+    const hasOrthographic = visible.some(
+      (view) => view.role === "satellite_mass" && view.polygonNormalized.length === 4,
+    );
+    const hasRealPhoto = visible.some(
+      (view) => !["satellite", "satellite_mass"].includes(view.role) && view.polygonNormalized.length === 4,
+    );
+
+    const errors = [...audit.errors];
+    if (!hasOrthographic) errors.push(`Allocated surface ${faceId} is not demonstrated on the metric IGN close view.`);
+    if (!hasRealPhoto) errors.push(`Allocated surface ${faceId} is not demonstrated in a usable real project photograph.`);
+
+    if (errors.length) {
+      throw new Error(`Surface understanding rejected ${faceId}: ${errors.join(" ")}`);
+    }
+
+    warnings.push(...audit.warnings);
+    confidences.push(audit.confidence);
+  }
+
+  return {
+    confidence: confidences.length ? Math.min(...confidences) : 0,
+    warnings: [...new Set(warnings)],
+    audits,
   };
 }
