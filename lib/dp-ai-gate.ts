@@ -55,7 +55,7 @@ function covering(project: DpProjectRecord): RoofCovering {
   return "unknown";
 }
 
-function makeForm(project: DpProjectRecord, module: VerifiedPvModule): ProjectForm {
+function makeForm(project: DpProjectRecord, moduleSpec: VerifiedPvModule): ProjectForm {
   const details = project.details;
   let roofFaces: ProjectForm["roofFaces"];
   try {
@@ -73,11 +73,11 @@ function makeForm(project: DpProjectRecord, module: VerifiedPvModule): ProjectFo
     applicantName: project.requesterName,
     parcelReference: details.cadastralReference,
     panel: {
-      model: module.canonicalReference,
-      widthMm: module.widthMm,
-      heightMm: module.heightMm,
+      model: moduleSpec.canonicalReference,
+      widthMm: moduleSpec.widthMm,
+      heightMm: moduleSpec.heightMm,
       frameColor: details.panelColor,
-      powerWp: module.powerWp,
+      powerWp: moduleSpec.powerWp,
     },
     requestedPanelCount: project.moduleCount,
     array: {
@@ -298,31 +298,31 @@ function evidenceFrom(
 }
 
 function hydrateVerifiedModule(project: DpProjectRecord): VerifiedPvModule {
-  const module = requireVerifiedPvModule(project.moduleReference);
+  const moduleSpec = requireVerifiedPvModule(project.moduleReference);
   if (!Number.isInteger(project.moduleCount) || project.moduleCount < 1) {
     throw new Error("Le nombre de modules doit être un entier strictement positif.");
   }
-  project.moduleReference = module.canonicalReference;
-  project.powerKwp = String(totalPowerKwp(module, project.moduleCount));
-  project.details.moduleWidthMm = String(module.widthMm);
-  project.details.moduleHeightMm = String(module.heightMm);
-  project.details.modulePowerWp = String(module.powerWp);
-  project.details.moduleManufacturer = module.manufacturer;
-  project.details.moduleModel = module.model;
-  project.details.moduleDatasheetUrl = module.sourceUrl;
-  project.details.moduleSourceDocument = module.sourceDocument;
+  project.moduleReference = moduleSpec.canonicalReference;
+  project.powerKwp = String(totalPowerKwp(moduleSpec, project.moduleCount));
+  project.details.moduleWidthMm = String(moduleSpec.widthMm);
+  project.details.moduleHeightMm = String(moduleSpec.heightMm);
+  project.details.modulePowerWp = String(moduleSpec.powerWp);
+  project.details.moduleManufacturer = moduleSpec.manufacturer;
+  project.details.moduleModel = moduleSpec.model;
+  project.details.moduleDatasheetUrl = moduleSpec.sourceUrl;
+  project.details.moduleSourceDocument = moduleSpec.sourceDocument;
   project.details.moduleCatalogVersion = PV_MODULE_CATALOG_VERSION;
-  project.details.moduleCatalogVerifiedAt = module.verifiedAt;
-  return module;
+  project.details.moduleCatalogVerifiedAt = moduleSpec.verifiedAt;
+  return moduleSpec;
 }
 
 export async function runDPAI(project: DpProjectRecord, sources: DpSourceFile[]): Promise<DpAiRun> {
-  const module = hydrateVerifiedModule(project);
+  const moduleSpec = hydrateVerifiedModule(project);
   const key = apiKey();
   if (!key) {
     throw new Error("OPENAI_API_KEY manque. Ajoutez la clé du projet PilotPaper dans .env.local ou dans les variables d'environnement du déploiement.");
   }
-  const form = makeForm(project, module);
+  const form = makeForm(project, moduleSpec);
   if (form.array.layoutMode !== "automatic" && form.array.rows * form.array.columns !== project.moduleCount) {
     throw new Error(`Le calepinage demandé ${form.array.rows}×${form.array.columns} ne correspond pas aux ${project.moduleCount} panneaux demandés.`);
   }
@@ -403,14 +403,14 @@ export async function runDPAI(project: DpProjectRecord, sources: DpSourceFile[])
       },
       moduleCatalog: {
         version: PV_MODULE_CATALOG_VERSION,
-        manufacturer: module.manufacturer,
-        model: module.model,
-        reference: module.canonicalReference,
-        widthMm: module.widthMm,
-        heightMm: module.heightMm,
-        powerWp: module.powerWp,
-        sourceUrl: module.sourceUrl,
-        verifiedAt: module.verifiedAt,
+        manufacturer: moduleSpec.manufacturer,
+        model: moduleSpec.model,
+        reference: moduleSpec.canonicalReference,
+        widthMm: moduleSpec.widthMm,
+        heightMm: moduleSpec.heightMm,
+        powerWp: moduleSpec.powerWp,
+        sourceUrl: moduleSpec.sourceUrl,
+        verifiedAt: moduleSpec.verifiedAt,
       },
       quality: result.quality,
       facePlacements: result.context.facePlacements,
