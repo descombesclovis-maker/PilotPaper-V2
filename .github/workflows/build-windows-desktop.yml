@@ -7,10 +7,17 @@ on:
       - release/v1-desktop
     paths:
       - "desktop/**"
+      - "app/**"
+      - "lib/**"
+      - "worker/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
       - ".github/workflows/build-windows-desktop.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows-installer:
@@ -44,7 +51,7 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Compile zero-terminal launcher
+      - name: Compile permanent zero-terminal launcher
         shell: pwsh
         run: >-
           dotnet publish desktop/PilotPaperLauncher/PilotPaperLauncher.csproj
@@ -55,42 +62,74 @@ jobs:
           -p:DebugType=None
           -p:DebugSymbols=false
 
-      - name: Assemble self-contained desktop runtime
+      - name: Assemble versioned application payload
+        id: payload
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $stage = Join-Path $PWD "desktop-stage"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $stage "runtime") | Out-Null
-
-          $launcher = "desktop/PilotPaperLauncher/bin/Release/net8.0-windows/win-x64/publish/PilotPaper.exe"
-          if (-not (Test-Path $launcher)) { throw "PilotPaper.exe launcher missing" }
-          Copy-Item $launcher (Join-Path $stage "PilotPaper.exe") -Force
+          $payload = Join-Path $PWD "desktop-payload"
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $payload "runtime") | Out-Null
 
           $nodeExe = (Get-Command node.exe).Source
-          Copy-Item $nodeExe (Join-Path $stage "runtime/node.exe") -Force
+          Copy-Item $nodeExe (Join-Path $payload "runtime/node.exe") -Force
 
           $tracked = git ls-files
           foreach ($file in $tracked) {
             if ($file -like ".github/*" -or $file -like "desktop/*" -or $file -like "tests/*") { continue }
-            $target = Join-Path $stage $file
+            if ($file -like "DEMARRER-PILOTPAPER.cmd" -or $file -like "INSTALLER-PILOTPAPER.cmd" -or $file -like "INSTALLATION-WINDOWS.txt") { continue }
+            $target = Join-Path $payload $file
             $parent = Split-Path -Parent $target
             if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
             Copy-Item $file $target -Force
           }
 
-          robocopy node_modules (Join-Path $stage "node_modules") /E /NFL /NDL /NJH /NJS /NP
+          robocopy node_modules (Join-Path $payload "node_modules") /E /NFL /NDL /NJH /NJS /NP
           $robocopyExit = $LASTEXITCODE
           if ($robocopyExit -ge 8) { throw "robocopy node_modules failed with code $robocopyExit" }
-          # Robocopy uses 0-7 for successful copy states; normalize them for GitHub Actions.
           $global:LASTEXITCODE = 0
 
-          if (-not (Test-Path (Join-Path $stage "node_modules/vite/bin/vite.js"))) {
-            throw "Vite runtime missing from desktop bundle"
-          }
-          if (-not (Test-Path (Join-Path $stage "vite.config.ts"))) {
-            throw "vite.config.ts missing from desktop bundle"
-          }
+          if (-not (Test-Path (Join-Path $payload "node_modules/vite/bin/vite.js"))) { throw "Vite runtime missing from payload" }
+          if (-not (Test-Path (Join-Path $payload "vite.config.ts"))) { throw "vite.config.ts missing from payload" }
+          if (-not (Test-Path (Join-Path $payload "runtime/node.exe"))) { throw "Embedded Node runtime missing from payload" }
+
+          $shortSha = "${{ github.sha }}".Substring(0, 12)
+          $version = "desktop-$shortSha"
+          $zipPath = Join-Path $PWD "PilotPaper-App.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $zipPath -CompressionLevel Optimal
+          $sha256 = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $manifest = [ordered]@{
+            version = $version
+            packageAsset = "PilotPaper-App.zip"
+            sha256 = $sha256
+            commit = "${{ github.sha }}"
+            publishedAt = (Get-Date).ToUniversalTime().ToString("o")
+          } | ConvertTo-Json
+          Set-Content -Path "pilotpaper-desktop-manifest.json" -Value $manifest -Encoding utf8NoBOM
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Assemble first-install layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $PWD "desktop-stage"
+          $current = Join-Path $stage "app/current"
+          New-Item -ItemType Directory -Force -Path $current | Out-Null
+
+          $launcher = "desktop/PilotPaperLauncher/bin/Release/net8.0-windows/win-x64/publish/PilotPaper.exe"
+          if (-not (Test-Path $launcher)) { throw "PilotPaper.exe launcher missing" }
+          Copy-Item $launcher (Join-Path $stage "PilotPaper.exe") -Force
+
+          robocopy desktop-payload $current /E /NFL /NDL /NJH /NJS /NP
+          $robocopyExit = $LASTEXITCODE
+          if ($robocopyExit -ge 8) { throw "robocopy payload failed with code $robocopyExit" }
+          $global:LASTEXITCODE = 0
+
+          Set-Content -Path (Join-Path $stage "app/current-version.txt") -Value "${{ steps.payload.outputs.version }}" -Encoding ascii -NoNewline
 
       - name: Install Inno Setup
         shell: pwsh
@@ -104,15 +143,38 @@ jobs:
           & $iscc "desktop\PilotPaperInstaller.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with code $LASTEXITCODE" }
 
-      - name: Verify installer exists
+      - name: Verify desktop artifacts
         shell: pwsh
         run: |
           $installer = "desktop-output/PilotPaper-Setup.exe"
-          if (-not (Test-Path $installer)) { throw "PilotPaper-Setup.exe was not produced" }
-          Get-Item $installer | Format-List Name,Length,LastWriteTime
+          foreach ($path in @($installer, "PilotPaper-App.zip", "pilotpaper-desktop-manifest.json")) {
+            if (-not (Test-Path $path)) { throw "Desktop artifact missing: $path" }
+          }
+          Get-Item $installer, "PilotPaper-App.zip", "pilotpaper-desktop-manifest.json" | Format-Table Name,Length,LastWriteTime
           Get-FileHash $installer -Algorithm SHA256 | Format-List
+          Write-Host "Payload SHA256: ${{ steps.payload.outputs.sha256 }}"
 
-      - name: Upload PilotPaper installer
+      - name: Publish rolling desktop release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "pilotpaper-desktop-latest"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper Desktop — canal stable" --notes "Canal de mise à jour automatique PilotPaper Desktop. Ne pas supprimer ce tag." --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "Unable to create rolling desktop release" }
+          }
+
+          foreach ($asset in @("PilotPaper-App.zip", "pilotpaper-desktop-manifest.json", "PilotPaper-Setup.exe")) {
+            gh release delete-asset $tag $asset --repo $env:GITHUB_REPOSITORY -y 2>$null
+          }
+          Copy-Item "desktop-output/PilotPaper-Setup.exe" "PilotPaper-Setup.exe" -Force
+          gh release upload $tag "PilotPaper-App.zip" "pilotpaper-desktop-manifest.json" "PilotPaper-Setup.exe" --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Unable to publish rolling desktop assets" }
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: PilotPaper-Windows-Setup
