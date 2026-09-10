@@ -1752,7 +1752,7 @@ export function WorkspaceClient({ currentUser }: WorkspaceClientProps) {
                     <p>
                       Saisissez la quantité et la référence exacte du module. PilotPaper
                       vérifie sa fiche fabricant puis utilise automatiquement ses dimensions
-                      et sa puissance réelles ; aucune cote panneau n'est inventée.
+                      et sa puissance réelles ; aucune cote panneau n&apos;est inventée.
                     </p>
                   </div>
                   <div className="form-card grid gap-5 sm:grid-cols-2">
