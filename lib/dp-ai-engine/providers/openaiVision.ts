@@ -1,5 +1,5 @@
 import type { VisionAnalyzer } from "./interfaces";
-import type { InputPhoto, ProjectContext, ProjectForm, RoofFaceMetricGeometry, RoofFaceObservation, RoofViewObservation } from "../types";
+import type { InputPhoto, Point2D, ProjectContext, ProjectForm, RoofFaceMetricGeometry, RoofFaceObservation, RoofViewObservation } from "../types";
 import { computePVField, multiFaceConstraintFacts } from "../geometry/pvConstraints";
 import { resolveProjectLayout } from "../geometry/projectLayout";
 import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
@@ -22,9 +22,33 @@ const faceSchema={type:"object",additionalProperties:false,properties:{
 },required:["id","label","orientation","confidence","slopeDeg","views","obstacles"]} as const;
 const schema={type:"object",additionalProperties:false,properties:{faces:{type:"array",minItems:1,items:faceSchema},perspectiveNotes:{type:"array",items:{type:"string"}},uncertainties:{type:"array",items:{type:"string"}}},required:["faces","perspectiveNotes","uncertainties"]} as const;
 
-type Raw={faces:Array<any>;perspectiveNotes:string[];uncertainties:string[]};
+type RawView={
+  role:RoofViewObservation["role"];
+  selectedFaceVisible:boolean;
+  confidence:number;
+  roofPolygonNormalized:Point2D[];
+  gutterLineNormalized:[Point2D,Point2D]|null;
+  ridgeLineNormalized:[Point2D,Point2D]|null;
+  perspectiveNotes:string[];
+};
+type RawObstacle={
+  type:string;
+  description:string;
+  polygonNormalized:Point2D[]|null;
+  viewRole:RoofViewObservation["role"]|null;
+};
+type RawFace={
+  id:string;
+  label:string;
+  orientation:string|null;
+  confidence:number;
+  slopeDeg:number|null;
+  views:RawView[];
+  obstacles:RawObstacle[];
+};
+type Raw={faces:RawFace[];perspectiveNotes:string[];uncertainties:string[]};
 
-function cleanView(v:any,faceId:string):RoofViewObservation {
+function cleanView(v:RawView,faceId:string):RoofViewObservation {
   return {...v,faceId,gutterLineNormalized:v.gutterLineNormalized??undefined,ridgeLineNormalized:v.ridgeLineNormalized??undefined};
 }
 
@@ -68,7 +92,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const userPhotos=photos.filter(p=>!["satellite","satellite_mass"].includes(p.role));
     if(userPhotos.length<this.minUserPhotos) throw new Error(`At least ${this.minUserPhotos} independent user photograph(s) are required.`);
     const raw=await openaiJson<Raw>({apiKey:this.apiKey,model:this.model,prompt:projectAnalysisPrompt(form),imageDataUrls:photos.map(toDataUrl),schemaName:"dp_roof_faces_analysis",schema:schema as unknown as Record<string,unknown>});
-    const faces:RoofFaceObservation[]=(raw.faces??[]).map(f=>({id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,views:(f.views??[]).map((v:any)=>cleanView(v,String(f.id))),obstacles:(f.obstacles??[]).map((o:any)=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined}))}));
+    const faces:RoofFaceObservation[]=(raw.faces??[]).map(f=>({id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,views:(f.views??[]).map(v=>cleanView(v,String(f.id))),obstacles:(f.obstacles??[]).map(o=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined}))}));
     if(!faces.length) throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
 
     const metricFaces=deriveMetricRoofFaces(form,photos,faces);
