@@ -23,8 +23,8 @@ function m(mm: number | undefined) {
   return mm == null ? "—" : `${(mm / 1000).toFixed(2)} m`;
 }
 
-function finiteModule(module: PhysicalModulePlacement) {
-  return module.polygonMm.length === 4 && module.polygonMm.every(
+function finiteModule(placedModule: PhysicalModulePlacement) {
+  return placedModule.polygonMm.length === 4 && placedModule.polygonMm.every(
     (point) => Number.isFinite(point.xMm) && Number.isFinite(point.yMm),
   );
 }
@@ -53,12 +53,12 @@ export function physicalModulesForDP5(
   if (modules.length !== placement.panelCount || !modules.every(finiteModule)) {
     throw new Error(`DP5 could not obtain a complete physical module set for face ${placement.faceId}.`);
   }
-  for (const module of modules) {
-    if (module.faceId !== placement.faceId) {
-      throw new Error(`DP5 module ${module.index} belongs to ${module.faceId}, expected face ${placement.faceId}.`);
+  for (const placedModule of modules) {
+    if (placedModule.faceId !== placement.faceId) {
+      throw new Error(`DP5 module ${placedModule.index} belongs to ${placedModule.faceId}, expected face ${placement.faceId}.`);
     }
     if (
-      module.polygonMm.some(
+      placedModule.polygonMm.some(
         (point) =>
           point.xMm < -1e-6 ||
           point.yMm < -1e-6 ||
@@ -66,14 +66,14 @@ export function physicalModulesForDP5(
           point.yMm > placement.slopeLengthMm + 1e-6,
       )
     ) {
-      throw new Error(`DP5 module ${module.index} leaves physical face ${placement.faceId}.`);
+      throw new Error(`DP5 module ${placedModule.index} leaves physical face ${placement.faceId}.`);
     }
   }
   return modules;
 }
 
 function moduleBounds(modules: PhysicalModulePlacement[]) {
-  const points = modules.flatMap((module) => module.polygonMm);
+  const points = modules.flatMap((placedModule) => placedModule.polygonMm);
   return {
     minX: Math.min(...points.map((point) => point.xMm)),
     maxX: Math.max(...points.map((point) => point.xMm)),
@@ -92,13 +92,13 @@ function modulesSvg(args: {
   strokeWidth?: number;
 }) {
   const { modules, roofX, roofY, roofHeight, sx, sy, strokeWidth = 1.5 } = args;
-  return modules.map((module) => {
-    const points = module.polygonMm.map((point) => {
+  return modules.map((placedModule) => {
+    const points = placedModule.polygonMm.map((point) => {
       const x = roofX + point.xMm * sx;
       const y = roofY + roofHeight - point.yMm * sy;
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     }).join(" ");
-    return `<polygon data-module-index="${module.index}" points="${points}" fill="#152d4d" stroke="#eef4fb" stroke-width="${strokeWidth}"/>`;
+    return `<polygon data-module-index="${placedModule.index}" points="${points}" fill="#152d4d" stroke="#eef4fb" stroke-width="${strokeWidth}"/>`;
   }).join("");
 }
 
