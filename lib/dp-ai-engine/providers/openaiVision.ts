@@ -1,5 +1,5 @@
 import type { VisionAnalyzer } from "./interfaces";
-import type { InputPhoto, Point2D, ProjectContext, ProjectForm, RoofFaceMetricGeometry, RoofFaceObservation, RoofViewObservation } from "../types";
+import type { InputPhoto, MetricPoint2D, Point2D, ProjectContext, ProjectForm, RoofFaceMetricGeometry, RoofFaceObservation, RoofViewObservation } from "../types";
 import { computePVField, multiFaceConstraintFacts } from "../geometry/pvConstraints";
 import { resolveProjectLayout } from "../geometry/projectLayout";
 import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
@@ -55,8 +55,45 @@ function cleanView(v:RawView,faceId:string):RoofViewObservation {
 function distancePx(a:{x:number;y:number},b:{x:number;y:number},width:number,height:number){return Math.hypot((b.x-a.x)*width,(b.y-a.y)*height);}
 function polygonArea(poly:Array<{x:number;y:number}>){let a=0;for(let i=0,j=poly.length-1;i<poly.length;j=i++)a+=poly[j]!.x*poly[i]!.y-poly[i]!.x*poly[j]!.y;return Math.abs(a)/2;}
 
-/** Derive conservative metric face rectangles from the official orthographic IGN close view.
- * For hipped/trapezoidal faces the shorter ridge/eave width is used, intentionally under-estimating capacity.
+function normalizedToPixels(point:Point2D,width:number,height:number){return {x:point.x*width,y:point.y*height};}
+
+/**
+ * Build a deterministic local roof-plane basis from the calibrated orthographic
+ * IGN view. X follows the low/eave edge; Y points inward/up the physical plane.
+ */
+function metricBasis(
+  quad:[Point2D,Point2D,Point2D,Point2D],
+  widthPx:number,
+  heightPx:number,
+  metersPerPixel:number,
+  slopeDeg:number,
+){
+  const [bl,br,tr,tl]=quad.map((point)=>normalizedToPixels(point,widthPx,heightPx)) as [{x:number;y:number},{x:number;y:number},{x:number;y:number},{x:number;y:number}];
+  const dx=br.x-bl.x,dy=br.y-bl.y;
+  const eaveLength=Math.hypot(dx,dy);
+  if(eaveLength<1e-6)throw new Error("IGN roof-face low edge is degenerate.");
+  const ex=dx/eaveLength,ey=dy/eaveLength;
+  let nx=-ey,ny=ex;
+  const lowerMid={x:(bl.x+br.x)/2,y:(bl.y+br.y)/2};
+  const upperMid={x:(tl.x+tr.x)/2,y:(tl.y+tr.y)/2};
+  if((upperMid.x-lowerMid.x)*nx+(upperMid.y-lowerMid.y)*ny<0){nx*=-1;ny*=-1;}
+  const mmPerPixel=metersPerPixel*1000;
+  const cosSlope=Math.max(.26,Math.cos(slopeDeg*Math.PI/180));
+  return {
+    toMetric(point:Point2D):MetricPoint2D{
+      const p=normalizedToPixels(point,widthPx,heightPx);
+      const vx=p.x-bl.x,vy=p.y-bl.y;
+      return {
+        xMm:(vx*ex+vy*ey)*mmPerPixel,
+        yMm:((vx*nx+vy*ny)*mmPerPixel)/cosSlope,
+      };
+    },
+  };
+}
+
+/** Derive conservative metric roof faces from the official orthographic IGN close view.
+ * V1 keeps the historical rectangle dimensions for allocator compatibility, but now
+ * also persists the real support polygon and obstacle polygons in roof-plane millimetres.
  */
 export function deriveMetricRoofFaces(form:ProjectForm,photos:InputPhoto[],faces:RoofFaceObservation[]):RoofFaceMetricGeometry[]{
   if((form.roofFaces?.length??0)>0)return form.roofFaces!;
@@ -67,17 +104,36 @@ export function deriveMetricRoofFaces(form:ProjectForm,photos:InputPhoto[],faces
     const view=face.views.find(v=>v.role==="satellite_mass"&&v.selectedFaceVisible&&v.roofPolygonNormalized.length===4);
     if(!view)continue;
     const q=view.roofPolygonNormalized;const [bl,br,tr,tl]=q;if(!bl||!br||!tr||!tl)continue;
+    const quad=[bl,br,tr,tl] as [Point2D,Point2D,Point2D,Point2D];
     const eave=distancePx(bl,br,sat.widthPx,sat.heightPx),ridge=distancePx(tl,tr,sat.widthPx,sat.heightPx);
     const left=distancePx(bl,tl,sat.widthPx,sat.heightPx),right=distancePx(br,tr,sat.widthPx,sat.heightPx);
     const widthGround=Math.min(eave,ridge)*mpp,runGround=((left+right)/2)*mpp;
     const slope=Math.max(0,Math.min(75,Number(form.roofGeometry?.slopeDeg??face.slopeDeg??0)));
     const slopeLength=runGround/Math.max(.26,Math.cos(slope*Math.PI/180));
     const faceArea=Math.max(1e-8,polygonArea(q));
-    const obsArea=face.obstacles.filter(o=>!o.viewRole||o.viewRole==="satellite_mass").reduce((sum,o)=>sum+(o.polygonNormalized?.length?polygonArea(o.polygonNormalized):0),0);
+    const relevantObstacles=face.obstacles.filter(o=>!o.viewRole||o.viewRole==="satellite_mass");
+    const obsArea=relevantObstacles.reduce((sum,o)=>sum+(o.polygonNormalized?.length?polygonArea(o.polygonNormalized):0),0);
     const panelW=form.array.orientation==="portrait"?form.panel.widthMm:form.panel.heightMm,panelH=form.array.orientation==="portrait"?form.panel.heightMm:form.panel.widthMm,gap=form.array.interPanelGapMm??20;
     const gross=Math.max(0,Math.floor((widthGround*1000+gap)/(panelW+gap)))*Math.max(0,Math.floor((slopeLength*1000+gap)/(panelH+gap)));
     const blockedCells=obsArea>0?Math.min(gross,Math.ceil(gross*Math.min(.9,(obsArea/faceArea)*1.5))):0;
-    out.push({id:face.id,label:face.label,widthMm:Math.floor(widthGround*1000),slopeLengthMm:Math.floor(slopeLength*1000),slopeDeg:slope,blockedCells,source:"ign-derived"});
+    const basis=metricBasis(quad,sat.widthPx,sat.heightPx,mpp,slope);
+    const surfacePolygonMm=quad.map(basis.toMetric);
+    const obstaclePolygonsMm=relevantObstacles.flatMap((obstacle)=>{
+      const polygon=obstacle.polygonNormalized;
+      if(!polygon||polygon.length<3||!polygon.every((point)=>Number.isFinite(point.x)&&Number.isFinite(point.y)))return [];
+      return [{type:obstacle.type,description:obstacle.description,polygonMm:polygon.map(basis.toMetric)}];
+    });
+    out.push({
+      id:face.id,
+      label:face.label,
+      widthMm:Math.floor(widthGround*1000),
+      slopeLengthMm:Math.floor(slopeLength*1000),
+      slopeDeg:slope,
+      surfacePolygonMm,
+      obstaclePolygonsMm,
+      blockedCells,
+      source:"ign-derived",
+    });
   }
   return out;
 }
