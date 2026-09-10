@@ -1,0 +1,118 @@
+name: Build PilotPaper Windows Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v1-desktop
+    paths:
+      - "desktop/**"
+      - ".github/workflows/build-windows-desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout desktop branch
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Validate PilotPaper build
+        shell: pwsh
+        run: npm run build
+
+      - name: Run PilotPaper regression tests
+        shell: pwsh
+        run: npm test
+
+      - name: Use .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Compile zero-terminal launcher
+        shell: pwsh
+        run: >-
+          dotnet publish desktop/PilotPaperLauncher/PilotPaperLauncher.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+
+      - name: Assemble self-contained desktop runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $PWD "desktop-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "runtime") | Out-Null
+
+          $launcher = "desktop/PilotPaperLauncher/bin/Release/net8.0-windows/win-x64/publish/PilotPaper.exe"
+          if (-not (Test-Path $launcher)) { throw "PilotPaper.exe launcher missing" }
+          Copy-Item $launcher (Join-Path $stage "PilotPaper.exe") -Force
+
+          $nodeExe = (Get-Command node.exe).Source
+          Copy-Item $nodeExe (Join-Path $stage "runtime/node.exe") -Force
+
+          $tracked = git ls-files
+          foreach ($file in $tracked) {
+            if ($file -like ".github/*" -or $file -like "desktop/*" -or $file -like "tests/*") { continue }
+            $target = Join-Path $stage $file
+            $parent = Split-Path -Parent $target
+            if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+            Copy-Item $file $target -Force
+          }
+
+          robocopy node_modules (Join-Path $stage "node_modules") /E /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy node_modules failed with code $LASTEXITCODE" }
+
+          if (-not (Test-Path (Join-Path $stage "node_modules/vite/bin/vite.js"))) {
+            throw "Vite runtime missing from desktop bundle"
+          }
+          if (-not (Test-Path (Join-Path $stage "vite.config.ts"))) {
+            throw "vite.config.ts missing from desktop bundle"
+          }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build PilotPaper Setup EXE
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found" }
+          & $iscc "desktop\PilotPaperInstaller.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with code $LASTEXITCODE" }
+
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          $installer = "desktop-output/PilotPaper-Setup.exe"
+          if (-not (Test-Path $installer)) { throw "PilotPaper-Setup.exe was not produced" }
+          Get-Item $installer | Format-List Name,Length,LastWriteTime
+          Get-FileHash $installer -Algorithm SHA256 | Format-List
+
+      - name: Upload PilotPaper installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotPaper-Windows-Setup
+          path: desktop-output/PilotPaper-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
