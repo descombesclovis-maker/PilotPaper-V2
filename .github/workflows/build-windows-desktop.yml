@@ -80,7 +80,10 @@ jobs:
           }
 
           robocopy node_modules (Join-Path $stage "node_modules") /E /NFL /NDL /NJH /NJS /NP
-          if ($LASTEXITCODE -ge 8) { throw "robocopy node_modules failed with code $LASTEXITCODE" }
+          $robocopyExit = $LASTEXITCODE
+          if ($robocopyExit -ge 8) { throw "robocopy node_modules failed with code $robocopyExit" }
+          # Robocopy uses 0-7 for successful copy states; normalize them for GitHub Actions.
+          $global:LASTEXITCODE = 0
 
           if (-not (Test-Path (Join-Path $stage "node_modules/vite/bin/vite.js"))) {
             throw "Vite runtime missing from desktop bundle"
