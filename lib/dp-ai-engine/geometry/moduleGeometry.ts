@@ -127,6 +127,43 @@ export function metricPolygonsOverlapOrTouch(a: MetricPoint2D[], b: MetricPoint2
   return pointInMetricPolygon(a[0]!, b) || pointInMetricPolygon(b[0]!, a);
 }
 
+function projectionInterval(polygon: MetricPoint2D[], axisX: number, axisY: number) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const point of polygon) {
+    const value = point.xMm * axisX + point.yMm * axisY;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  return { min, max };
+}
+
+/**
+ * Positive-area overlap test for convex polygons (physical modules are convex quads).
+ * Edge or corner contact is intentionally NOT considered overlap here. This differs
+ * from obstacle collision, where contact remains unsafe and therefore blocking.
+ */
+export function metricConvexPolygonsOverlapArea(a: MetricPoint2D[], b: MetricPoint2D[]) {
+  if (a.length < 3 || b.length < 3 || !a.every(finitePoint) || !b.every(finitePoint)) return false;
+  for (const polygon of [a, b]) {
+    for (let i = 0; i < polygon.length; i++) {
+      const p0 = polygon[i]!;
+      const p1 = polygon[(i + 1) % polygon.length]!;
+      const edgeX = p1.xMm - p0.xMm;
+      const edgeY = p1.yMm - p0.yMm;
+      const length = Math.hypot(edgeX, edgeY);
+      if (length <= EPS) continue;
+      const axisX = -edgeY / length;
+      const axisY = edgeX / length;
+      const pa = projectionInterval(a, axisX, axisY);
+      const pb = projectionInterval(b, axisX, axisY);
+      const overlap = Math.min(pa.max, pb.max) - Math.max(pa.min, pb.min);
+      if (overlap <= EPS) return false;
+    }
+  }
+  return true;
+}
+
 function resolvedRowLeftMm(
   placement: FacePlacement,
   array: ArraySpec,
@@ -237,8 +274,8 @@ export function auditPhysicalModules(args: {
     for (let j = i + 1; j < modules.length; j++) {
       const a = modules[i]!;
       const b = modules[j]!;
-      if (metricPolygonsOverlapOrTouch(a.polygonMm, b.polygonMm)) {
-        errors.push(`Modules ${a.index} and ${b.index} overlap or touch on surface ${face.id}.`);
+      if (metricConvexPolygonsOverlapArea(a.polygonMm, b.polygonMm)) {
+        errors.push(`Modules ${a.index} and ${b.index} overlap on surface ${face.id}.`);
       }
     }
   }
