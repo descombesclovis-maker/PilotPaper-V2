@@ -77,6 +77,16 @@ export interface RoofFaceMetricGeometry extends RoofMetricGeometry {
   blockedCells?: number;
 }
 
+export interface PhysicalModulePlacement {
+  /** Stable zero-based index inside the project layout. */
+  index: number;
+  faceId: string;
+  row: number;
+  column: number;
+  /** Bottom-left, bottom-right, top-right, top-left in roof-plane millimetres. */
+  polygonMm: [MetricPoint2D, MetricPoint2D, MetricPoint2D, MetricPoint2D];
+}
+
 export interface ProjectSupport {
   topology: RoofTopology;
   covering: RoofCovering;
@@ -152,6 +162,11 @@ export interface FacePlacement {
   resolvedRightMm?: number;
   widthMm: number;
   slopeLengthMm: number;
+  /**
+   * Physical module polygons become the single source of truth once the V1.2
+   * polygon-aware layout path is promoted to production.
+   */
+  modulePlacementsMm?: PhysicalModulePlacement[];
 }
 
 export interface ProjectContext {
