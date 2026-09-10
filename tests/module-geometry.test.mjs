@@ -108,6 +108,52 @@ test("passes a standard layout fully contained in the support with no obstacles"
   assert.equal(audit.modules.length, 6);
 });
 
+test("allows adjacent modules to touch when the declared inter-panel gap is zero", async () => {
+  const { auditPhysicalModules } = await modulePromise;
+  const zeroGapArray = { ...array, rows: 1, columns: 2, interPanelGapMm: 0 };
+  const zeroGapPlacement = placement({
+    panelCount: 2,
+    rows: 1,
+    columns: 2,
+    lastRowCount: 2,
+    resolvedGutterMm: 300,
+    resolvedLeftMm: 2000,
+    resolvedRightMm: 2000,
+  });
+  const audit = auditPhysicalModules({
+    face: face(),
+    placement: zeroGapPlacement,
+    panel,
+    array: zeroGapArray,
+  });
+  assert.equal(audit.passed, true);
+  assert.deepEqual(audit.errors, []);
+});
+
+test("detects positive-area overlap while ignoring edge-only contact", async () => {
+  const { metricConvexPolygonsOverlapArea } = await modulePromise;
+  const a = [
+    { xMm: 0, yMm: 0 },
+    { xMm: 1000, yMm: 0 },
+    { xMm: 1000, yMm: 2000 },
+    { xMm: 0, yMm: 2000 },
+  ];
+  const touching = [
+    { xMm: 1000, yMm: 0 },
+    { xMm: 2000, yMm: 0 },
+    { xMm: 2000, yMm: 2000 },
+    { xMm: 1000, yMm: 2000 },
+  ];
+  const overlapping = [
+    { xMm: 999, yMm: 0 },
+    { xMm: 1999, yMm: 0 },
+    { xMm: 1999, yMm: 2000 },
+    { xMm: 999, yMm: 2000 },
+  ];
+  assert.equal(metricConvexPolygonsOverlapArea(a, touching), false);
+  assert.equal(metricConvexPolygonsOverlapArea(a, overlapping), true);
+});
+
 test("rejects a module that crosses a trapezoidal roof boundary", async () => {
   const { auditPhysicalModules } = await modulePromise;
   const trapezoid = face({
