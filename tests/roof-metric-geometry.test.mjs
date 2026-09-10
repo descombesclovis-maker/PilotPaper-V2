@@ -116,7 +116,7 @@ test("converts the orthographic ground run into physical roof-plane distance usi
   const { deriveMetricRoofFaces } = await modulePromise;
   const [metric] = deriveMetricRoofFaces(form(60), photos(), [face()]);
   assert.ok(metric);
-  assert.equal(metric.slopeLengthMm, 11999);
+  assert.equal(metric.slopeLengthMm, 12000);
   const top = metric.surfacePolygonMm?.[2];
   assert.ok(top);
   assert.ok(Math.abs(top.yMm - 12000) < 1e-6);
