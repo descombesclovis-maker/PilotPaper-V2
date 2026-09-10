@@ -86,6 +86,41 @@ export function resolvedRowLeftMm(
   return fieldLeft + spareInsideField / 2;
 }
 
+function authoritativePhysicalPolygons(
+  placement: FacePlacement,
+  q: Point2D[],
+  map: QuadMapper,
+): Point2D[][] | undefined {
+  const modules = placement.modulePlacementsMm;
+  if (!modules) return undefined;
+  if (modules.length !== placement.panelCount) return [];
+  if (!(placement.widthMm > 0) || !(placement.slopeLengthMm > 0)) return [];
+
+  const polygons: Point2D[][] = [];
+  for (const placedModule of modules) {
+    if (placedModule.faceId !== placement.faceId || placedModule.polygonMm.length !== 4) return [];
+    const normalized = placedModule.polygonMm.map((point) => ({
+      u: point.xMm / placement.widthMm,
+      v: point.yMm / placement.slopeLengthMm,
+    }));
+    if (
+      normalized.some(
+        ({ u, v }) =>
+          !Number.isFinite(u) ||
+          !Number.isFinite(v) ||
+          u < -1e-9 ||
+          u > 1 + 1e-9 ||
+          v < -1e-9 ||
+          v > 1 + 1e-9,
+      )
+    ) {
+      return [];
+    }
+    polygons.push(normalized.map(({ u, v }) => map(q, u, v)));
+  }
+  return polygons;
+}
+
 function panelPolygonsForViewWithMapper(
   context: ProjectContext,
   view: RoofViewObservation,
@@ -123,6 +158,17 @@ function panelPolygonsForViewWithMapper(
     return polygons;
   }
 
+  // V1.2 single source of truth: once exact roof-plane module polygons exist,
+  // projection must consume them directly. Never reconstruct their positions
+  // from rows/columns because the polygon solver may have translated the field
+  // around an obstacle. An invalid authoritative set fails closed.
+  if (placement.modulePlacementsMm) {
+    const physical = authoritativePhysicalPolygons(placement, q, map);
+    return physical?.length === placement.panelCount ? physical : undefined;
+  }
+
+  // Backward-compatible path for pre-V1.2 contexts that do not yet persist
+  // physical module polygons.
   const { widthMm: panelW, heightMm: panelH } = orientedPanel(context);
   const gap = Math.max(0, context.array.interPanelGapMm ?? 20);
   const roofW = placement.widthMm;
