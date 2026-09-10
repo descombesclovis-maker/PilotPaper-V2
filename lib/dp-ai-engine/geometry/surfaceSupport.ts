@@ -64,6 +64,13 @@ export interface AllocatedSurfaceGateResult {
   audits: Record<string, SurfaceUnderstandingAudit>;
 }
 
+export interface SurfaceLayoutEligibilityResult {
+  eligibleFaceIds: string[];
+  rejected: Record<string, string[]>;
+  warnings: string[];
+  audits: Record<string, SurfaceUnderstandingAudit>;
+}
+
 function finitePoint(point: Point2D) {
   return Number.isFinite(point.x) && Number.isFinite(point.y);
 }
@@ -190,6 +197,64 @@ export function auditSurfaceUnderstanding(
   };
 }
 
+function surfaceBlockingErrors(
+  surface: SurfaceSupport,
+  audit: SurfaceUnderstandingAudit,
+): string[] {
+  const visible = surface.views.filter((view) => view.selectedFaceVisible);
+  const errors = [...audit.errors];
+  const hasOrthographic = visible.some(
+    (view) => view.role === "satellite_mass" && view.polygonNormalized.length === 4,
+  );
+  const hasRealPhoto = visible.some(
+    (view) => !["satellite", "satellite_mass"].includes(view.role) && view.polygonNormalized.length === 4,
+  );
+
+  if (!hasOrthographic) {
+    errors.push(`Surface ${surface.id} is not demonstrated on the metric IGN close view.`);
+  }
+  if (!hasRealPhoto) {
+    errors.push(`Surface ${surface.id} is not demonstrated in a usable real project photograph.`);
+  }
+  return [...new Set(errors)];
+}
+
+/**
+ * Determine which detected surfaces are safe enough to be offered to the
+ * deterministic Layout Engine. Invalid or insufficiently demonstrated faces are
+ * excluded instead of being allowed to influence allocation.
+ */
+export function selectLayoutEligibleSurfaces(
+  faces: RoofFaceObservation[],
+  topology: RoofTopology,
+  minimumConfidence = 0.72,
+): SurfaceLayoutEligibilityResult {
+  const eligibleFaceIds: string[] = [];
+  const rejected: Record<string, string[]> = {};
+  const audits: Record<string, SurfaceUnderstandingAudit> = {};
+  const warnings: string[] = [];
+
+  for (const face of faces) {
+    const surface = surfaceSupportFromRoofFace(face, topology);
+    const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
+    audits[face.id] = audit;
+    const errors = surfaceBlockingErrors(surface, audit);
+    if (errors.length) {
+      rejected[face.id] = errors;
+      continue;
+    }
+    eligibleFaceIds.push(face.id);
+    warnings.push(...audit.warnings);
+  }
+
+  return {
+    eligibleFaceIds,
+    rejected,
+    warnings: [...new Set(warnings)],
+    audits,
+  };
+}
+
 /**
  * Gate only the surfaces that the deterministic Layout Engine actually selected.
  * A weak unrelated face must not block an otherwise well-demonstrated project,
@@ -216,18 +281,7 @@ export function gateAllocatedSurfaces(
     const surface = surfaceSupportFromRoofFace(face, topology);
     const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
     audits[faceId] = audit;
-
-    const visible = surface.views.filter((view) => view.selectedFaceVisible);
-    const hasOrthographic = visible.some(
-      (view) => view.role === "satellite_mass" && view.polygonNormalized.length === 4,
-    );
-    const hasRealPhoto = visible.some(
-      (view) => !["satellite", "satellite_mass"].includes(view.role) && view.polygonNormalized.length === 4,
-    );
-
-    const errors = [...audit.errors];
-    if (!hasOrthographic) errors.push(`Allocated surface ${faceId} is not demonstrated on the metric IGN close view.`);
-    if (!hasRealPhoto) errors.push(`Allocated surface ${faceId} is not demonstrated in a usable real project photograph.`);
+    const errors = surfaceBlockingErrors(surface, audit);
 
     if (errors.length) {
       throw new Error(`Surface understanding rejected ${faceId}: ${errors.join(" ")}`);
