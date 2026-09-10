@@ -34,7 +34,15 @@ export function inspectRenderedSourceBindings(
   }
 
   for (const rendered of renderedViews) {
-    if (!rendered.sourceKind) continue;
+    if (!rendered.sourceKind) {
+      issues.push({
+        code: "SOURCE_KIND_MISSING",
+        field: rendered.kind,
+        message: `${rendered.kind} ne déclare pas la preuve source exacte dont il dérive.`,
+      });
+      continue;
+    }
+
     const source = sourceByKind.get(rendered.sourceKind);
     if (!source) {
       issues.push({
