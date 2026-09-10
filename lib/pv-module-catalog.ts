@@ -135,7 +135,7 @@ export function requireVerifiedPvModule(reference: string): VerifiedPvModule {
   return resolved;
 }
 
-export function totalPowerKwp(module: VerifiedPvModule, quantity: number) {
+export function totalPowerKwp(moduleSpec: VerifiedPvModule, quantity: number) {
   if (!Number.isInteger(quantity) || quantity < 1) throw new Error("Invalid module quantity.");
-  return (module.powerWp * quantity) / 1000;
+  return (moduleSpec.powerWp * quantity) / 1000;
 }
