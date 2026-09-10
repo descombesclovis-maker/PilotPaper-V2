@@ -5,19 +5,19 @@ import {
   resolveVerifiedPvModule,
 } from "@/lib/pv-module-catalog";
 
-function publicModule(module: ReturnType<typeof listVerifiedPvModules>[number]) {
+function publicModule(moduleSpec: ReturnType<typeof listVerifiedPvModules>[number]) {
   return {
-    manufacturer: module.manufacturer,
-    model: module.model,
-    canonicalReference: module.canonicalReference,
-    widthMm: module.widthMm,
-    heightMm: module.heightMm,
-    thicknessMm: module.thicknessMm,
-    powerWp: module.powerWp,
-    sourceUrl: module.sourceUrl,
-    sourceDocument: module.sourceDocument,
-    sourceUpdatedAt: module.sourceUpdatedAt,
-    verifiedAt: module.verifiedAt,
+    manufacturer: moduleSpec.manufacturer,
+    model: moduleSpec.model,
+    canonicalReference: moduleSpec.canonicalReference,
+    widthMm: moduleSpec.widthMm,
+    heightMm: moduleSpec.heightMm,
+    thicknessMm: moduleSpec.thicknessMm,
+    powerWp: moduleSpec.powerWp,
+    sourceUrl: moduleSpec.sourceUrl,
+    sourceDocument: moduleSpec.sourceDocument,
+    sourceUpdatedAt: moduleSpec.sourceUpdatedAt,
+    verifiedAt: moduleSpec.verifiedAt,
   };
 }
 
@@ -35,8 +35,8 @@ export async function GET(request: Request) {
     });
   }
 
-  const module = resolveVerifiedPvModule(reference);
-  if (!module) {
+  const moduleSpec = resolveVerifiedPvModule(reference);
+  if (!moduleSpec) {
     return Response.json({
       code: "MODULE_REFERENCE_UNKNOWN",
       catalogVersion: PV_MODULE_CATALOG_VERSION,
@@ -46,6 +46,6 @@ export async function GET(request: Request) {
 
   return Response.json({
     catalogVersion: PV_MODULE_CATALOG_VERSION,
-    module: publicModule(module),
+    module: publicModule(moduleSpec),
   });
 }
