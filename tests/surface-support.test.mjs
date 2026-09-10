@@ -78,6 +78,17 @@ test("accepts a well-demonstrated standard V1 roof surface", async () => {
   assert.ok(audit.confidence >= 0.9);
 });
 
+test("reports separate surface, boundary, metric, obstacle and multi-view confidences", async () => {
+  const { surfaceSupportFromRoofFace, auditSurfaceUnderstanding } = await modulePromise;
+  const audit = auditSurfaceUnderstanding(surfaceSupportFromRoofFace(face(), "gable"));
+  assert.deepEqual(Object.keys(audit.components).sort(), ["boundaries", "metric", "multiView", "obstacles", "surface"]);
+  assert.equal(audit.components.surface, 0.96);
+  assert.equal(audit.components.metric, 0.97);
+  assert.equal(audit.components.boundaries, 0.97);
+  assert.equal(audit.components.obstacles, 1);
+  assert.equal(audit.components.multiView, 0.93);
+});
+
 test("rejects degenerate or insufficient-confidence roof understanding", async () => {
   const { surfaceSupportFromRoofFace, auditSurfaceUnderstanding } = await modulePromise;
   const bad = face({
@@ -137,6 +148,56 @@ test("rejects an allocated surface without a usable real project photograph", as
     () => gateAllocatedSurfaces([onlyIgn], "gable", ["A"]),
     /not demonstrated in a usable real project photograph/,
   );
+});
+
+test("rejects an obstacle that was detected but has no usable metric polygon", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const obstacleUnknown = face({
+    obstacles: [{ type: "chimney", description: "Cheminée visible", polygonNormalized: undefined }],
+  });
+  const result = selectLayoutEligibleSurfaces([obstacleUnknown], "gable");
+  assert.deepEqual(result.eligibleFaceIds, []);
+  assert.ok(result.rejected.A?.some((message) => message.includes("no usable polygon")));
+});
+
+test("rejects an obstacle localized only in a perspective photo because layout cannot metrically exclude it", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const perspectiveOnly = face({
+    obstacles: [{
+      type: "roof_window",
+      description: "Velux",
+      viewRole: "near",
+      polygonNormalized: [
+        { x: 0.45, y: 0.45 },
+        { x: 0.55, y: 0.44 },
+        { x: 0.56, y: 0.58 },
+        { x: 0.44, y: 0.59 },
+      ],
+    }],
+  });
+  const result = selectLayoutEligibleSurfaces([perspectiveOnly], "gable");
+  assert.deepEqual(result.eligibleFaceIds, []);
+  assert.ok(result.rejected.A?.some((message) => message.includes("no metric IGN footprint")));
+});
+
+test("accepts a metrically localized obstacle for downstream polygonal layout", async () => {
+  const { selectLayoutEligibleSurfaces } = await modulePromise;
+  const metricObstacle = face({
+    obstacles: [{
+      type: "chimney",
+      description: "Cheminée IGN",
+      viewRole: "satellite_mass",
+      polygonNormalized: [
+        { x: 0.45, y: 0.45 },
+        { x: 0.55, y: 0.45 },
+        { x: 0.55, y: 0.55 },
+        { x: 0.45, y: 0.55 },
+      ],
+    }],
+  });
+  const result = selectLayoutEligibleSurfaces([metricObstacle], "gable");
+  assert.deepEqual(result.eligibleFaceIds, ["A"]);
+  assert.ok(result.audits.A.components.obstacles >= 0.9);
 });
 
 test("excludes an unsafe face before layout while keeping independent safe candidates", async () => {
