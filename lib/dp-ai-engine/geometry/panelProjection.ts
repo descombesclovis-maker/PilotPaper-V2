@@ -14,8 +14,7 @@ function bilinear(q: Point2D[], u: number, v: number): Point2D {
 
 /**
  * Exact homography from the unit square to a four-corner planar roof quad.
- * Corner order is the same contract historically used by PilotPaper:
- * bottom-left, bottom-right, top-right, top-left.
+ * Corner order is bottom-left, bottom-right, top-right, top-left.
  *
  * Unlike bilinear interpolation, this preserves straight lines and vanishing
  * geometry on a planar roof face, which is what a perspective camera observes.
@@ -38,8 +37,6 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   let h = 0;
   if (Math.abs(dx3) > 1e-12 || Math.abs(dy3) > 1e-12) {
     if (Math.abs(denominator) < 1e-12) {
-      // Degenerate quadrilateral: preserve the safe historical behavior rather
-      // than creating an unstable homography.
       return bilinear(q, u, v);
     }
     g = (dx3 * dy2 - dx2 * dy3) / denominator;
@@ -71,11 +68,6 @@ function rowWidthMm(panelWidthMm: number, gapMm: number, count: number) {
   return count * panelWidthMm + Math.max(0, count - 1) * gapMm;
 }
 
-/**
- * Resolve the left origin of one row inside the already-resolved full field.
- * This prevents image projection from independently recentering rows and
- * drifting away from the deterministic layout solver.
- */
 export function resolvedRowLeftMm(
   context: ProjectContext,
   placement: FacePlacement,
@@ -170,15 +162,22 @@ function panelPolygonsForViewWithMapper(
   return emitted === placement.panelCount ? polygons : undefined;
 }
 
-/** Historical production projection. Kept unchanged until projective mode is benchmark-validated. */
-export function panelPolygonsForView(
+/** Legacy bilinear projection kept only as an explicit rollback/benchmark path. */
+export function panelPolygonsForViewLegacy(
   context: ProjectContext,
   view: RoofViewObservation,
 ): Point2D[][] | undefined {
   return panelPolygonsForViewWithMapper(context, view, bilinear);
 }
 
-/** Projective planar projection used first by the isolated Admin laboratory. */
+/** Production projection: exact planar homography. */
+export function panelPolygonsForView(
+  context: ProjectContext,
+  view: RoofViewObservation,
+): Point2D[][] | undefined {
+  return panelPolygonsForViewWithMapper(context, view, projectivePointInQuad);
+}
+
 export function panelPolygonsForViewProjective(
   context: ProjectContext,
   view: RoofViewObservation,
@@ -210,15 +209,22 @@ function allPanelPolygonsForRoleWithMapper(
   return output.length ? output : undefined;
 }
 
-/** All expected module polygons in one image role, using the historical production mapping. */
-export function allPanelPolygonsForRole(
+/** Legacy bilinear projection kept only as an explicit rollback/benchmark path. */
+export function allPanelPolygonsForRoleLegacy(
   context: ProjectContext,
   role: RoofViewObservation["role"],
 ): Point2D[][] | undefined {
   return allPanelPolygonsForRoleWithMapper(context, role, bilinear);
 }
 
-/** All expected module polygons in one image role, using exact planar homography. */
+/** Production projection: exact planar homography. */
+export function allPanelPolygonsForRole(
+  context: ProjectContext,
+  role: RoofViewObservation["role"],
+): Point2D[][] | undefined {
+  return allPanelPolygonsForRoleWithMapper(context, role, projectivePointInQuad);
+}
+
 export function allPanelPolygonsForRoleProjective(
   context: ProjectContext,
   role: RoofViewObservation["role"],
