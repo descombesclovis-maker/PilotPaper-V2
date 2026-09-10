@@ -6,6 +6,7 @@ import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
 import { toDataUrl } from "../utils/dataUrl";
 import { openaiJson } from "./openaiJson";
 import { supportRules } from "../geometry/supportRules";
+import { gateAllocatedSurfaces } from "../geometry/surfaceSupport";
 
 const roles=["satellite","satellite_mass","front","left_oblique","right_oblique","near","roof","far"] as const;
 const pointSchema={type:"object",additionalProperties:false,properties:{x:{type:"number"},y:{type:"number"}},required:["x","y"]} as const;
@@ -79,13 +80,12 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const primaryView=primaryFace.views.find(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3);
     if(!primaryView) throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
 
-    // Every allocated face must be evidenced in at least one real user photograph.
-    for(const placement of layout.placements){
-      const face=faces.find(f=>f.id===placement.faceId);
-      if(!face) throw new Error(`Allocated roof face ${placement.faceId} was not detected by vision analysis.`);
-      const visible=face.views.some(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3&&!["satellite","satellite_mass"].includes(v.role));
-      if(!visible) throw new Error(`Allocated roof face ${placement.faceId} is not demonstrated in a real project photograph.`);
-    }
+    const topology=form.support?.topology??"unknown";
+    const understandingGate=gateAllocatedSurfaces(
+      faces,
+      topology,
+      layout.placements.map((placement)=>placement.faceId),
+    );
 
     const field=computePVField(form.panel,{...form.array,rows:primaryPlacement.rows,columns:primaryPlacement.columns});
     const primaryMetric=metricFaces.find(f=>f.id===primaryPlacement.faceId) ?? form.roofGeometry;
@@ -95,12 +95,13 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     }:undefined;
     const flattened=faces.flatMap(f=>f.views);
     const allObstacles=primaryFace.obstacles.map(o=>({type:o.type,description:o.description,polygonNormalized:o.polygonNormalized}));
-    const rules=supportRules(form.support?.topology??"unknown",form.support?.covering??"unknown");
+    const rules=supportRules(topology,form.support?.covering??"unknown");
+    const uncertainties=[...(raw.uncertainties??[]),...understandingGate.warnings];
     return {
       projectId:form.projectId,address:form.address,array:form.array,panel:form.panel,exactPanelCount:layout.count,
       fieldWidthMm:layout.primaryFieldWidthMm,fieldHeightMm:layout.primaryFieldHeightMm,roofGeometry:primaryMetric,
       resolvedPlacement,facePlacements:layout.placements,support:form.support,
-      roof:{selectedFaceDescription:primaryFace.label,confidence:Math.min(...layout.placements.map(p=>faces.find(f=>f.id===p.faceId)?.confidence??0)),roofPolygonNormalized:primaryView.roofPolygonNormalized,gutterLineNormalized:primaryView.gutterLineNormalized,ridgeLineNormalized:primaryView.ridgeLineNormalized,views:flattened,faces,obstacles:allObstacles,perspectiveNotes:raw.perspectiveNotes??[],uncertainties:raw.uncertainties??[]},
+      roof:{selectedFaceDescription:primaryFace.label,confidence:understandingGate.confidence,roofPolygonNormalized:primaryView.roofPolygonNormalized,gutterLineNormalized:primaryView.gutterLineNormalized,ridgeLineNormalized:primaryView.ridgeLineNormalized,views:flattened,faces,obstacles:allObstacles,perspectiveNotes:raw.perspectiveNotes??[],uncertainties},
       immutableFacts:[...multiFaceConstraintFacts(resolvedForm,layout.placements),...rules.visualWarnings]
     };
   }
