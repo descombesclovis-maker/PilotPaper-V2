@@ -6,7 +6,7 @@ import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
 import { toDataUrl } from "../utils/dataUrl";
 import { openaiJson } from "./openaiJson";
 import { supportRules } from "../geometry/supportRules";
-import { gateAllocatedSurfaces } from "../geometry/surfaceSupport";
+import { gateAllocatedSurfaces, selectLayoutEligibleSurfaces } from "../geometry/surfaceSupport";
 
 const roles=["satellite","satellite_mass","front","left_oblique","right_oblique","near","roof","far"] as const;
 const pointSchema={type:"object",additionalProperties:false,properties:{x:{type:"number"},y:{type:"number"}},required:["x","y"]} as const;
@@ -151,16 +151,27 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const faces:RoofFaceObservation[]=(raw.faces??[]).map(f=>({id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,views:(f.views??[]).map(v=>cleanView(v,String(f.id))),obstacles:(f.obstacles??[]).map(o=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined}))}));
     if(!faces.length) throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
 
+    const topology=form.support?.topology??"unknown";
+    const eligibility=selectLayoutEligibleSurfaces(faces,topology);
     const metricFaces=deriveMetricRoofFaces(form,photos,faces);
     if(!metricFaces.length) throw new Error("No roof/support face could be metrically derived from the official IGN close view.");
-    const resolvedForm:ProjectForm={...form,roofFaces:metricFaces};
+
+    const eligibleMetricFaces=metricFaces.filter((face)=>eligibility.eligibleFaceIds.includes(face.id));
+    if(form.roofSelection?.mode==="priority"&&form.roofSelection.priorityFaceId&&eligibility.rejected[form.roofSelection.priorityFaceId]){
+      throw new Error(`Priority surface ${form.roofSelection.priorityFaceId} failed the V1 understanding gate: ${eligibility.rejected[form.roofSelection.priorityFaceId]!.join(" ")}`);
+    }
+    if(!eligibleMetricFaces.length){
+      const details=Object.entries(eligibility.rejected).map(([faceId,reasons])=>`${faceId}: ${reasons.join(" ")}`).join(" ");
+      throw new Error(`No roof/support surface is safe enough for photovoltaic layout.${details?` ${details}`:""}`);
+    }
+
+    const resolvedForm:ProjectForm={...form,roofFaces:eligibleMetricFaces};
     const layout=resolveProjectLayout(resolvedForm);
     const primaryPlacement=layout.placements[0]!;
     const primaryFace=faces.find(f=>f.id===primaryPlacement.faceId) ?? faces[0]!;
     const primaryView=primaryFace.views.find(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3);
     if(!primaryView) throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
 
-    const topology=form.support?.topology??"unknown";
     const understandingGate=gateAllocatedSurfaces(
       faces,
       topology,
@@ -168,7 +179,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     );
 
     const field=computePVField(form.panel,{...form.array,rows:primaryPlacement.rows,columns:primaryPlacement.columns});
-    const primaryMetric=metricFaces.find(f=>f.id===primaryPlacement.faceId) ?? form.roofGeometry;
+    const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId) ?? form.roofGeometry;
     const resolvedPlacement=primaryMetric?.widthMm&&primaryMetric.slopeLengthMm?{
       leftMm:Math.max(0,(primaryMetric.widthMm-field.fieldWidthMm)/2),rightMm:Math.max(0,(primaryMetric.widthMm-field.fieldWidthMm)/2),
       gutterMm:primaryPlacement.resolvedGutterMm,ridgeMm:Math.max(0,primaryMetric.slopeLengthMm-primaryPlacement.resolvedGutterMm-field.fieldHeightMm)
@@ -176,7 +187,8 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const flattened=faces.flatMap(f=>f.views);
     const allObstacles=primaryFace.obstacles.map(o=>({type:o.type,description:o.description,polygonNormalized:o.polygonNormalized}));
     const rules=supportRules(topology,form.support?.covering??"unknown");
-    const uncertainties=[...(raw.uncertainties??[]),...understandingGate.warnings];
+    const excludedSurfaceWarnings=Object.keys(eligibility.rejected).map((faceId)=>`Surface ${faceId} was excluded before PV layout because its geometry/evidence did not pass the V1 gate.`);
+    const uncertainties=[...(raw.uncertainties??[]),...eligibility.warnings,...understandingGate.warnings,...excludedSurfaceWarnings];
     return {
       projectId:form.projectId,address:form.address,array:form.array,panel:form.panel,exactPanelCount:layout.count,
       fieldWidthMm:layout.primaryFieldWidthMm,fieldHeightMm:layout.primaryFieldHeightMm,roofGeometry:primaryMetric,
