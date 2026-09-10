@@ -54,6 +54,21 @@ function face(overrides = {}) {
         ridgeLineNormalized: [{ x: 0.30, y: 0.25 }, { x: 0.67, y: 0.21 }],
         perspectiveNotes: [],
       },
+      {
+        role: "roof",
+        faceId: "A",
+        selectedFaceVisible: true,
+        confidence: 0.91,
+        roofPolygonNormalized: [
+          { x: 0.12, y: 0.86 },
+          { x: 0.91, y: 0.76 },
+          { x: 0.70, y: 0.17 },
+          { x: 0.27, y: 0.22 },
+        ],
+        gutterLineNormalized: [{ x: 0.12, y: 0.86 }, { x: 0.91, y: 0.76 }],
+        ridgeLineNormalized: [{ x: 0.27, y: 0.22 }, { x: 0.70, y: 0.17 }],
+        perspectiveNotes: [],
+      },
     ],
     ...overrides,
   };
@@ -64,7 +79,7 @@ test("adapts current roof-face evidence into generic SurfaceSupport without inve
   const surface = surfaceSupportFromRoofFace(face(), "gable");
   assert.equal(surface.id, "A");
   assert.equal(surface.topology, "gable");
-  assert.equal(surface.views.length, 2);
+  assert.equal(surface.views.length, 3);
   assert.equal(surface.views[0].boundaries[0].kind, "gutter");
   assert.equal(surface.views[0].boundaries[1].kind, "ridge");
   assert.equal("widthMm" in surface, false);
@@ -86,7 +101,7 @@ test("reports separate surface, boundary, metric, obstacle and multi-view confid
   assert.equal(audit.components.metric, 0.97);
   assert.equal(audit.components.boundaries, 0.97);
   assert.equal(audit.components.obstacles, 1);
-  assert.equal(audit.components.multiView, 0.93);
+  assert.equal(audit.components.multiView, 0.91);
 });
 
 test("rejects degenerate or insufficient-confidence roof understanding", async () => {
@@ -147,6 +162,21 @@ test("rejects an allocated surface without a usable real project photograph", as
   assert.throws(
     () => gateAllocatedSurfaces([onlyIgn], "gable", ["A"]),
     /not demonstrated in a usable real project photograph/,
+  );
+});
+
+test("requires the same selected face to be reliably demonstrated in both near and roof evidence", async () => {
+  const { gateAllocatedSurfaces } = await modulePromise;
+  const nearOnly = face({ views: face().views.filter((view) => view.role !== "roof") });
+  assert.throws(
+    () => gateAllocatedSurfaces([nearOnly], "gable", ["A"]),
+    /no reliable roof observation/,
+  );
+
+  const roofOnly = face({ views: face().views.filter((view) => view.role !== "near") });
+  assert.throws(
+    () => gateAllocatedSurfaces([roofOnly], "gable", ["A"]),
+    /no reliable near observation/,
   );
 });
 
