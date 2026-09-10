@@ -12,19 +12,70 @@ function bilinear(q: Point2D[], u: number, v: number): Point2D {
   return { x: bottom.x + (top.x - bottom.x) * v, y: bottom.y + (top.y - bottom.y) * v };
 }
 
+function finitePoint(point: Point2D) {
+  return Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
+function cross(a: Point2D, b: Point2D, c: Point2D) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function signedPolygonArea(points: Point2D[]) {
+  let area2 = 0;
+  for (let index = 0; index < points.length; index++) {
+    const current = points[index]!;
+    const next = points[(index + 1) % points.length]!;
+    area2 += current.x * next.y - next.x * current.y;
+  }
+  return area2 / 2;
+}
+
+/**
+ * Validate the four observed corners before a production homography is used.
+ * Corner order must be BL, BR, TR, TL around one convex planar surface.
+ * We deliberately fail closed instead of silently changing projection model.
+ */
+export function assertValidProjectiveQuad(q: Point2D[]) {
+  if (q.length !== 4) {
+    throw new Error("Projective roof/support geometry requires exactly four ordered corners.");
+  }
+  if (!q.every(finitePoint)) {
+    throw new Error("Projective roof/support geometry contains non-finite coordinates.");
+  }
+
+  const area = signedPolygonArea(q);
+  if (!Number.isFinite(area) || Math.abs(area) < 1e-10) {
+    throw new Error("Projective roof/support quad is degenerate and cannot define a reliable homography.");
+  }
+
+  const turns = q.map((point, index) =>
+    cross(point, q[(index + 1) % 4]!, q[(index + 2) % 4]!),
+  );
+  if (turns.some((turn) => !Number.isFinite(turn) || Math.abs(turn) < 1e-12)) {
+    throw new Error("Projective roof/support quad contains a degenerate corner.");
+  }
+  const sign = Math.sign(turns[0]!);
+  if (turns.some((turn) => Math.sign(turn) !== sign)) {
+    throw new Error("Projective roof/support quad is non-convex, self-crossed or incorrectly ordered.");
+  }
+}
+
 /**
  * Exact homography from the unit square to a four-corner planar roof quad.
  * Corner order is bottom-left, bottom-right, top-right, top-left.
  *
  * Unlike bilinear interpolation, this preserves straight lines and vanishing
  * geometry on a planar roof face, which is what a perspective camera observes.
+ * Invalid projective evidence fails closed; bilinear interpolation exists only
+ * through the explicit legacy functions below.
  */
 export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point2D {
-  const [bl, br, tr, tl] = q;
-  if (!bl || !br || !tr || !tl) {
-    throw new Error("A four-corner roof/support quad is required for projective panel projection.");
+  assertValidProjectiveQuad(q);
+  if (!Number.isFinite(u) || !Number.isFinite(v)) {
+    throw new Error("Projective panel coordinates must be finite.");
   }
 
+  const [bl, br, tr, tl] = q as [Point2D, Point2D, Point2D, Point2D];
   const dx1 = br.x - tr.x;
   const dx2 = tl.x - tr.x;
   const dx3 = bl.x - br.x + tr.x - tl.x;
@@ -36,8 +87,8 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   let g = 0;
   let h = 0;
   if (Math.abs(dx3) > 1e-12 || Math.abs(dy3) > 1e-12) {
-    if (Math.abs(denominator) < 1e-12) {
-      return bilinear(q, u, v);
+    if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-12) {
+      throw new Error("Projective roof/support quad is singular and cannot define a reliable homography.");
     }
     g = (dx3 * dy2 - dx2 * dy3) / denominator;
     h = (dx1 * dy3 - dx3 * dy1) / denominator;
@@ -51,10 +102,14 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   const f = bl.y;
   const w = g * u + h * v + 1;
 
-  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) return bilinear(q, u, v);
+  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) {
+    throw new Error("Projective mapping reached a singular perspective denominator.");
+  }
   const x = (a * u + b * v + c) / w;
   const y = (d * u + e * v + f) / w;
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return bilinear(q, u, v);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error("Projective mapping produced non-finite image coordinates.");
+  }
   return { x, y };
 }
 
