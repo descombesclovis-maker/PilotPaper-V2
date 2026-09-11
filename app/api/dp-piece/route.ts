@@ -1,5 +1,5 @@
 import { generateDp1Piece } from "@/lib/dp1-engine";
-import { generateDp2Piece } from "@/lib/dp2-engine";
+import { generateDp2Piece } from "@/lib/dp2-v1-engine";
 import { generateDpPiece, type DpPieceInput } from "@/lib/dp-piece-engine";
 
 export const dynamic = "force-dynamic";
