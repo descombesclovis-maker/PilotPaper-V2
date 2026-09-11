@@ -33,11 +33,15 @@ test("V1 launcher is a single-instance embedded local application", () => {
   assert.doesNotMatch(launcher, /Process\.Start\(new ProcessStartInfo\(AppUrl\)/);
 });
 
-test("V1 updater is manual, build-aware and verifies the downloaded installer", () => {
+test("V1 updater is manual, build-aware, visible and verifies the downloaded installer", () => {
   assert.match(page, /PilotPaperUpdateButton/);
   assert.match(updateButton, /CHECK_UPDATE/);
+  assert.match(updateButton, /pilotpaper-update-status/);
+  assert.match(updateButton, /addEventListener\("message"/);
+  assert.match(updateButton, /PilotPaper V1 est à jour|Vérification de la dernière V1/);
   assert.match(updateButton, /Mettre à jour PilotPaper/);
   assert.match(launcher, /CheckForUpdateAsync/);
+  assert.match(launcher, /PostUpdateStatus/);
   assert.match(launcher, /PILOTPAPER-BUILD\.txt/);
   assert.match(launcher, /target_commitish/);
   assert.match(launcher, /SHA256\.HashDataAsync/);
