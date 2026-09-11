@@ -12,6 +12,7 @@ on:
       - "lib/**"
       - "public/**"
       - "tests/**"
+      - "worker/**"
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
@@ -94,6 +95,7 @@ jobs:
           Copy-Item $launcher (Join-Path $stage "PilotPaper-V1.exe") -Force
           Copy-Item "desktop/pilotpaper.ico" (Join-Path $stage "pilotpaper.ico") -Force
           Copy-Item (Get-Command node.exe).Source (Join-Path $current "runtime/node.exe") -Force
+          Set-Content -Path (Join-Path $stage "PILOTPAPER-BUILD.txt") -Encoding ascii -Value "${{ github.sha }}"
 
           $tracked = git ls-files
           foreach ($file in $tracked) {
@@ -117,6 +119,7 @@ jobs:
           - DP1 à DP8 testées séparément.
           - Mode TEST / NON VALIDÉ verrouillé.
           - Double-clic répété : aucune seconde instance n'est créée.
+          - Mise à jour uniquement sur action volontaire via le bouton PilotPaper.
           - Les sorties de cette V1 de validation ne doivent pas être déposées en mairie.
           "@
 
@@ -124,7 +127,8 @@ jobs:
             (Join-Path $current "runtime/node.exe"),
             (Join-Path $current "node_modules/vite/bin/vite.js"),
             (Join-Path $current "vite.config.ts"),
-            (Join-Path $stage "PilotPaper-V1.exe")
+            (Join-Path $stage "PilotPaper-V1.exe"),
+            (Join-Path $stage "PILOTPAPER-BUILD.txt")
           )) { if (-not (Test-Path $required)) { throw "V1 payload missing: $required" } }
 
       - name: Install Inno Setup
@@ -157,7 +161,7 @@ jobs:
           gh release delete $tag --repo $env:GITHUB_REPOSITORY -y --cleanup-tag 2>$null
           $global:LASTEXITCODE = 0
           Copy-Item "desktop-output/PilotPaper-V1-Setup.exe" "PilotPaper-V1-Setup.exe" -Force
-          gh release create $tag "PilotPaper-V1-Setup.exe" "PilotPaper-V1.zip" --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper V1 — K-par-K local test" --notes "Snapshot local de validation DP1 à DP8. Mode TEST / NON VALIDÉ. Pas d'auto-mise-à-jour." --prerelease
+          gh release create $tag "PilotPaper-V1-Setup.exe" "PilotPaper-V1.zip" --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper V1 — K-par-K local test" --notes "Snapshot local de validation DP1 à DP8. Mode TEST / NON VALIDÉ. Mise à jour uniquement à la demande depuis PilotPaper." --prerelease
           if ($LASTEXITCODE -ne 0) { throw "Unable to publish PilotPaper V1 test release" }
 
       - name: Upload V1 artifacts
