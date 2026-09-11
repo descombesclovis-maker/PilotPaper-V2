@@ -30,3 +30,9 @@ test("test export can only be enabled by an explicit affirmative value", async (
     assert.equal(isExplicitTestExportEnabled(value), true, `expected ${JSON.stringify(value)} to enable test export`);
   }
 });
+
+test("every test export stays unverified even when its current QA issue list is empty", async () => {
+  const { generationValidationStatus } = await modePromise;
+  assert.equal(generationValidationStatus(true), "test_unverified");
+  assert.equal(generationValidationStatus(false), "verified");
+});
