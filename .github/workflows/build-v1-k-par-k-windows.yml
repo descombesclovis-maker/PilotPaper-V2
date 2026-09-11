@@ -21,6 +21,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: pilotpaper-v1-k-par-k-windows
+  cancel-in-progress: true
+
 jobs:
   windows-v1:
     runs-on: windows-latest
