@@ -17,7 +17,7 @@ export type BuildingFootprint = {
   centroid: LonLat;
   areaM2?: number;
   heightM?: number;
-  source: "BDTOPO_V3:batiment";
+  source: "BDTOPO_V3:batiment" | "assisted-selection";
 };
 
 export type LidarHeightSample = {
