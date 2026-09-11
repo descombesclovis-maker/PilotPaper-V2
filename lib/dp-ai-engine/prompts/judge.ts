@@ -34,7 +34,7 @@ Interpret the legacy JSON field singleRoofPlane as: TRUE when every individual m
 FATAL rejection codes include:
 WRONG_PANEL_COUNT, WRONG_FACE_ALLOCATION, ARRAY_CROSSES_RIDGE, ARRAY_CROSSES_HIP, WRONG_ROOF_FACE, ARRAY_OUTSIDE_ALLOCATED_FACE, BUILDING_GEOMETRY_CHANGED, OBSTACLE_REMOVED, SUPPORT_STRUCTURE_CHANGED.
 
-For DP6, photorealism is a HARD acceptance criterion, not a cosmetic bonus. A geometrically perfect insertion with visible CGI/sticker characteristics MUST fail.
+For DP4 and DP6, photorealism is a HARD acceptance criterion, not a cosmetic bonus. A geometrically perfect insertion with visible CGI/sticker characteristics MUST fail.
 When zoom crops are supplied, inspect every visible module edge and compare crop texture/sharpness/noise against the original crop.
 Exact millimetric clearance may only be certified from authoritative metric evidence. Never infer millimetres from appearance alone.
 Return only the requested JSON object.`;

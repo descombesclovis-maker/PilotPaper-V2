@@ -12,20 +12,70 @@ function bilinear(q: Point2D[], u: number, v: number): Point2D {
   return { x: bottom.x + (top.x - bottom.x) * v, y: bottom.y + (top.y - bottom.y) * v };
 }
 
+function finitePoint(point: Point2D) {
+  return Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
+function cross(a: Point2D, b: Point2D, c: Point2D) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function signedPolygonArea(points: Point2D[]) {
+  let area2 = 0;
+  for (let index = 0; index < points.length; index++) {
+    const current = points[index]!;
+    const next = points[(index + 1) % points.length]!;
+    area2 += current.x * next.y - next.x * current.y;
+  }
+  return area2 / 2;
+}
+
+/**
+ * Validate the four observed corners before a production homography is used.
+ * Corner order must be BL, BR, TR, TL around one convex planar surface.
+ * We deliberately fail closed instead of silently changing projection model.
+ */
+export function assertValidProjectiveQuad(q: Point2D[]) {
+  if (q.length !== 4) {
+    throw new Error("Projective roof/support geometry requires exactly four ordered corners.");
+  }
+  if (!q.every(finitePoint)) {
+    throw new Error("Projective roof/support geometry contains non-finite coordinates.");
+  }
+
+  const area = signedPolygonArea(q);
+  if (!Number.isFinite(area) || Math.abs(area) < 1e-10) {
+    throw new Error("Projective roof/support quad is degenerate and cannot define a reliable homography.");
+  }
+
+  const turns = q.map((point, index) =>
+    cross(point, q[(index + 1) % 4]!, q[(index + 2) % 4]!),
+  );
+  if (turns.some((turn) => !Number.isFinite(turn) || Math.abs(turn) < 1e-12)) {
+    throw new Error("Projective roof/support quad contains a degenerate corner.");
+  }
+  const sign = Math.sign(turns[0]!);
+  if (turns.some((turn) => Math.sign(turn) !== sign)) {
+    throw new Error("Projective roof/support quad is non-convex, self-crossed or incorrectly ordered.");
+  }
+}
+
 /**
  * Exact homography from the unit square to a four-corner planar roof quad.
- * Corner order is the same contract historically used by PilotPaper:
- * bottom-left, bottom-right, top-right, top-left.
+ * Corner order is bottom-left, bottom-right, top-right, top-left.
  *
  * Unlike bilinear interpolation, this preserves straight lines and vanishing
  * geometry on a planar roof face, which is what a perspective camera observes.
+ * Invalid projective evidence fails closed; bilinear interpolation exists only
+ * through the explicit legacy functions below.
  */
 export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point2D {
-  const [bl, br, tr, tl] = q;
-  if (!bl || !br || !tr || !tl) {
-    throw new Error("A four-corner roof/support quad is required for projective panel projection.");
+  assertValidProjectiveQuad(q);
+  if (!Number.isFinite(u) || !Number.isFinite(v)) {
+    throw new Error("Projective panel coordinates must be finite.");
   }
 
+  const [bl, br, tr, tl] = q as [Point2D, Point2D, Point2D, Point2D];
   const dx1 = br.x - tr.x;
   const dx2 = tl.x - tr.x;
   const dx3 = bl.x - br.x + tr.x - tl.x;
@@ -37,10 +87,8 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   let g = 0;
   let h = 0;
   if (Math.abs(dx3) > 1e-12 || Math.abs(dy3) > 1e-12) {
-    if (Math.abs(denominator) < 1e-12) {
-      // Degenerate quadrilateral: preserve the safe historical behavior rather
-      // than creating an unstable homography.
-      return bilinear(q, u, v);
+    if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-12) {
+      throw new Error("Projective roof/support quad is singular and cannot define a reliable homography.");
     }
     g = (dx3 * dy2 - dx2 * dy3) / denominator;
     h = (dx1 * dy3 - dx3 * dy1) / denominator;
@@ -54,10 +102,14 @@ export function projectivePointInQuad(q: Point2D[], u: number, v: number): Point
   const f = bl.y;
   const w = g * u + h * v + 1;
 
-  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) return bilinear(q, u, v);
+  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) {
+    throw new Error("Projective mapping reached a singular perspective denominator.");
+  }
   const x = (a * u + b * v + c) / w;
   const y = (d * u + e * v + f) / w;
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return bilinear(q, u, v);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error("Projective mapping produced non-finite image coordinates.");
+  }
   return { x, y };
 }
 
@@ -71,11 +123,6 @@ function rowWidthMm(panelWidthMm: number, gapMm: number, count: number) {
   return count * panelWidthMm + Math.max(0, count - 1) * gapMm;
 }
 
-/**
- * Resolve the left origin of one row inside the already-resolved full field.
- * This prevents image projection from independently recentering rows and
- * drifting away from the deterministic layout solver.
- */
 export function resolvedRowLeftMm(
   context: ProjectContext,
   placement: FacePlacement,
@@ -92,6 +139,41 @@ export function resolvedRowLeftMm(
   if (context.array.placement === "left") return fieldLeft;
   if (context.array.placement === "right") return fieldLeft + spareInsideField;
   return fieldLeft + spareInsideField / 2;
+}
+
+function authoritativePhysicalPolygons(
+  placement: FacePlacement,
+  q: Point2D[],
+  map: QuadMapper,
+): Point2D[][] | undefined {
+  const modules = placement.modulePlacementsMm;
+  if (!modules) return undefined;
+  if (modules.length !== placement.panelCount) return [];
+  if (!(placement.widthMm > 0) || !(placement.slopeLengthMm > 0)) return [];
+
+  const polygons: Point2D[][] = [];
+  for (const placedModule of modules) {
+    if (placedModule.faceId !== placement.faceId || placedModule.polygonMm.length !== 4) return [];
+    const normalized = placedModule.polygonMm.map((point) => ({
+      u: point.xMm / placement.widthMm,
+      v: point.yMm / placement.slopeLengthMm,
+    }));
+    if (
+      normalized.some(
+        ({ u, v }) =>
+          !Number.isFinite(u) ||
+          !Number.isFinite(v) ||
+          u < -1e-9 ||
+          u > 1 + 1e-9 ||
+          v < -1e-9 ||
+          v > 1 + 1e-9,
+      )
+    ) {
+      return [];
+    }
+    polygons.push(normalized.map(({ u, v }) => map(q, u, v)));
+  }
+  return polygons;
 }
 
 function panelPolygonsForViewWithMapper(
@@ -131,6 +213,17 @@ function panelPolygonsForViewWithMapper(
     return polygons;
   }
 
+  // V1.2 single source of truth: once exact roof-plane module polygons exist,
+  // projection must consume them directly. Never reconstruct their positions
+  // from rows/columns because the polygon solver may have translated the field
+  // around an obstacle. An invalid authoritative set fails closed.
+  if (placement.modulePlacementsMm) {
+    const physical = authoritativePhysicalPolygons(placement, q, map);
+    return physical?.length === placement.panelCount ? physical : undefined;
+  }
+
+  // Backward-compatible path for pre-V1.2 contexts that do not yet persist
+  // physical module polygons.
   const { widthMm: panelW, heightMm: panelH } = orientedPanel(context);
   const gap = Math.max(0, context.array.interPanelGapMm ?? 20);
   const roofW = placement.widthMm;
@@ -170,15 +263,22 @@ function panelPolygonsForViewWithMapper(
   return emitted === placement.panelCount ? polygons : undefined;
 }
 
-/** Historical production projection. Kept unchanged until projective mode is benchmark-validated. */
-export function panelPolygonsForView(
+/** Legacy bilinear projection kept only as an explicit rollback/benchmark path. */
+export function panelPolygonsForViewLegacy(
   context: ProjectContext,
   view: RoofViewObservation,
 ): Point2D[][] | undefined {
   return panelPolygonsForViewWithMapper(context, view, bilinear);
 }
 
-/** Projective planar projection used first by the isolated Admin laboratory. */
+/** Production projection: exact planar homography. */
+export function panelPolygonsForView(
+  context: ProjectContext,
+  view: RoofViewObservation,
+): Point2D[][] | undefined {
+  return panelPolygonsForViewWithMapper(context, view, projectivePointInQuad);
+}
+
 export function panelPolygonsForViewProjective(
   context: ProjectContext,
   view: RoofViewObservation,
@@ -210,15 +310,22 @@ function allPanelPolygonsForRoleWithMapper(
   return output.length ? output : undefined;
 }
 
-/** All expected module polygons in one image role, using the historical production mapping. */
-export function allPanelPolygonsForRole(
+/** Legacy bilinear projection kept only as an explicit rollback/benchmark path. */
+export function allPanelPolygonsForRoleLegacy(
   context: ProjectContext,
   role: RoofViewObservation["role"],
 ): Point2D[][] | undefined {
   return allPanelPolygonsForRoleWithMapper(context, role, bilinear);
 }
 
-/** All expected module polygons in one image role, using exact planar homography. */
+/** Production projection: exact planar homography. */
+export function allPanelPolygonsForRole(
+  context: ProjectContext,
+  role: RoofViewObservation["role"],
+): Point2D[][] | undefined {
+  return allPanelPolygonsForRoleWithMapper(context, role, projectivePointInQuad);
+}
+
 export function allPanelPolygonsForRoleProjective(
   context: ProjectContext,
   role: RoofViewObservation["role"],

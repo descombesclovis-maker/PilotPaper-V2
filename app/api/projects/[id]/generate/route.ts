@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers";
 import { buildDpPdf, type DpProjectRecord, type DpSourceFile } from "@/lib/dp-pdf";
 import { requiredSourceKinds, validateGeneratedPdf, validateGenerationInputs } from "@/lib/generation-gate";
+import { generationValidationStatus, isExplicitTestExportEnabled } from "@/lib/generation-mode";
 import { getRequestUser } from "@/lib/request-user";
 import { runDPAI } from "@/lib/dp-ai-gate";
+import { inspectRenderedSourceBindings } from "@/lib/dp-ai-engine/quality/sourceBindingInspector";
 import { ensureProjectSchema } from "@/lib/ensure-project-schema";
 import { OFFICIAL_CERFA_FILE, OFFICIAL_CERFA_SHA256 } from "@/lib/official-cerfa";
 
@@ -46,14 +48,10 @@ function hex(bytes: ArrayBuffer) {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function testExportEnabled(request: Request) {
+function testExportEnabled() {
   const workerEnv = env as unknown as Record<string, unknown>;
-  const configured = String(
-    workerEnv.DP_TEST_EXPORT ?? (typeof process !== "undefined" ? process.env?.DP_TEST_EXPORT ?? "" : ""),
-  ).trim().toLowerCase();
-  if (configured) return ["1", "true", "yes", "on"].includes(configured);
-  const hostname = new URL(request.url).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const configured = workerEnv.DP_TEST_EXPORT ?? (typeof process !== "undefined" ? process.env?.DP_TEST_EXPORT : undefined);
+  return isExplicitTestExportEnabled(configured);
 }
 
 function aiQualityIssues(aiRun: Awaited<ReturnType<typeof runDPAI>>) {
@@ -87,7 +85,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!user) return Response.json({ error: "Authentification requise." }, { status: 401 });
   await ensureProjectSchema();
 
-  const testExport = testExportEnabled(request);
+  const testExport = testExportEnabled();
   const { id } = await context.params;
   const project = await env.DB.prepare(
     `SELECT id,
@@ -156,6 +154,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }, { status: 422 });
   }
 
+  const sourceBindingIssues = inspectRenderedSourceBindings(aiRun.evidence, sources, aiRun.renderedViews);
+  if (sourceBindingIssues.length && !testExport) {
+    return Response.json({
+      error: "Les rendus projetés ne correspondent pas exactement aux preuves source ayant servi au calcul géométrique.",
+      issues: sourceBindingIssues,
+    }, { status: 422 });
+  }
+
   const qualityIssues = aiQualityIssues(aiRun);
   if (qualityIssues.length && !testExport) {
     return Response.json({
@@ -187,9 +193,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Le contrôle structurel du PDF final a échoué. Aucun dossier n’a été enregistré.", issues: postflightIssues }, { status: 422 });
   }
 
-  const unverifiedIssues = [...qualityIssues, ...postflightIssues];
-  const testUnverified = testExport && unverifiedIssues.length > 0;
-  const validationStatus = testUnverified ? "test_unverified" : "verified";
+  const unverifiedIssues = [...sourceBindingIssues, ...qualityIssues, ...postflightIssues];
+  const validationStatus = generationValidationStatus(testExport);
+  const testUnverified = validationStatus === "test_unverified";
   const generatedAt = new Date().toISOString();
   const fileId = crypto.randomUUID();
   const auditFileId = crypto.randomUUID();

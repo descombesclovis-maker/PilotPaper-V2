@@ -1,7 +1,15 @@
+param(
+  [switch]$ProductionValidation
+)
+
 $ErrorActionPreference = "Stop"
 Write-Host "[PilotPaper] Version DP-AI-FIRST v0.4.3"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$WebStarter = Join-Path $PSScriptRoot "start-web.ps1"
+if ($ProductionValidation) {
+  $WebStarter = Join-Path $PSScriptRoot "start-web-validation.ps1"
+} else {
+  $WebStarter = Join-Path $PSScriptRoot "start-web.ps1"
+}
 $StateDir = Join-Path $ProjectRoot ".pilotpaper-runtime"
 $PidFile = Join-Path $StateDir "web.pid"
 [IO.Directory]::CreateDirectory($StateDir) | Out-Null
@@ -40,9 +48,17 @@ if (-not (Test-Path (Join-Path $ProjectRoot ".dev.vars"))) {
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure-openai.ps1")
   if ($LASTEXITCODE -ne 0) { throw "La configuration OpenAI a echoue." }
 }
-Write-Host "[PilotPaper] Demarrage de l'application et du moteur DP-AI-FIRST integre..."
+if ($ProductionValidation) {
+  Write-Host "[PilotPaper] Demarrage en VALIDATION V1 STRICTE : QA complet, aucun export test implicite."
+} else {
+  Write-Host "[PilotPaper] Demarrage de l'application et du moteur DP-AI-FIRST integre..."
+}
 $Web = Start-Process -FilePath "powershell" -PassThru -WindowStyle Minimized -WorkingDirectory $ProjectRoot -ArgumentList @("-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-File",('"'+$WebStarter+'"'))
 [IO.File]::WriteAllText($PidFile,[string]$Web.Id)
 Wait-ForWeb
 Start-Process "http://localhost:5173"
-Write-Host "[PilotPaper] Pret. Aucun ancien moteur local n'est demarre."
+if ($ProductionValidation) {
+  Write-Host "[PilotPaper] Pret pour le dossier temoin V1 en mode production strict."
+} else {
+  Write-Host "[PilotPaper] Pret. Aucun ancien moteur local n'est demarre."
+}

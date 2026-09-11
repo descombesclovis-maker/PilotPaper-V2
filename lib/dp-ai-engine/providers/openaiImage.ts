@@ -3,7 +3,7 @@ import type { GeneratedAsset, InputPhoto } from "../types";
 import { buildPanelIslandsMaskForPng } from "../utils/maskPng";
 import { strictCompositePng } from "../utils/pngPixels";
 import {
-  allPanelPolygonsForRole,
+  allPanelPolygonsForRoleLegacy,
   allPanelPolygonsForRoleProjective,
 } from "../geometry/panelProjection";
 
@@ -22,7 +22,7 @@ function projectedPolygons(
     if (photo.mimeType !== "image/png") continue;
     const polygons = mode === "projective"
       ? allPanelPolygonsForRoleProjective(context, photo.role)
-      : allPanelPolygonsForRole(context, photo.role);
+      : allPanelPolygonsForRoleLegacy(context, photo.role);
     if (polygons && polygons.length === context.exactPanelCount) {
       return { photo, polygons };
     }
@@ -34,7 +34,7 @@ export class OpenAIImageEditor implements ImageEditor {
   constructor(
     private apiKey: string,
     private model = "gpt-image-2",
-    private projectionMode: ImageProjectionMode = "legacy-bilinear",
+    private projectionMode: ImageProjectionMode = "projective",
   ) {}
 
   async edit({ dp, context, photos, prompt, previous }: Parameters<ImageEditor["edit"]>[0]): Promise<GeneratedAsset> {

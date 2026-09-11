@@ -1,5 +1,6 @@
 import type { FacePlacement, ProjectForm, RoofFaceMetricGeometry } from "../types";
 import { allocateAcrossRoofFaces } from "./multiRoofAllocation";
+import { solvePolygonalPlacement } from "./polygonalLayoutSolver";
 import { computePVField, checkSingleRoofPlaneFit } from "./pvConstraints";
 
 export function requestedPanelCount(form: ProjectForm): number {
@@ -80,6 +81,31 @@ function fieldSize(
   };
 }
 
+function polygonalPlacementForFace(args: {
+  form: ProjectForm;
+  face: RoofFaceMetricGeometry & { widthMm: number; slopeLengthMm: number };
+  panelCount: number;
+  rows: number;
+  columns: number;
+  automatic: boolean;
+  startIndex?: number;
+}): FacePlacement | undefined {
+  const { form, face, panelCount, rows, columns, automatic, startIndex } = args;
+  if (!face.surfacePolygonMm?.length) return undefined;
+  return solvePolygonalPlacement({
+    face,
+    panel: form.panel,
+    array: {
+      ...form.array,
+      rows,
+      columns,
+      layoutMode: automatic ? "automatic" : "fixed",
+    },
+    panelCount,
+    startIndex,
+  })?.placement;
+}
+
 export function resolveProjectLayout(form: ProjectForm): {
   count: number;
   placements: FacePlacement[];
@@ -99,7 +125,8 @@ export function resolveProjectLayout(form: ProjectForm): {
 
   if (faces.length) {
     // Preserve a user-specified exact matrix whenever it fits safely on one
-    // calibrated face. This path remains deterministic and does not reflow.
+    // calibrated face. On metric-polygon faces, the polygon solver is the
+    // authority and may translate the exact matrix but never reflow it.
     if (form.array.layoutMode !== "automatic" && form.array.rows * form.array.columns === count) {
       const ordered =
         form.roofSelection?.mode === "priority"
@@ -113,6 +140,26 @@ export function resolveProjectLayout(form: ProjectForm): {
           : faces;
 
       for (const face of ordered) {
+        if (face.surfacePolygonMm?.length) {
+          const polygonal = polygonalPlacementForFace({
+            form,
+            face,
+            panelCount: count,
+            rows: form.array.rows,
+            columns: form.array.columns,
+            automatic: false,
+          });
+          if (!polygonal) continue;
+          const field = fieldSize(form, polygonal.rows, polygonal.columns);
+          return {
+            count,
+            placements: [polygonal],
+            primaryFieldWidthMm: field.widthMm,
+            primaryFieldHeightMm: field.heightMm,
+            split: false,
+          };
+        }
+
         const fit = checkSingleRoofPlaneFit({ ...form, roofGeometry: face, requestedPanelCount: undefined });
         if (!fit.calibrated || !fit.fits || (face.blockedCells ?? 0) !== 0) continue;
         const field = computePVField(form.panel, form.array);
@@ -143,8 +190,9 @@ export function resolveProjectLayout(form: ProjectForm): {
       }
     }
 
-    // Edge clearances reduce horizontal capacity before the allocator chooses
-    // columns. The placement still stores the full physical face width.
+    // Edge clearances reduce horizontal capacity before the legacy allocator
+    // chooses a face distribution. Any face that has metric polygon geometry
+    // is then solved again by the polygon-aware engine before it is accepted.
     const allocation = allocateAcrossRoofFaces({
       panel: form.panel,
       totalPanels: count,
@@ -154,7 +202,7 @@ export function resolveProjectLayout(form: ProjectForm): {
         label: face.label,
         widthMm: Math.max(0, face.widthMm - minimumLeft - minimumRight),
         slopeLengthMm: face.slopeLengthMm,
-        blockedCells: face.blockedCells,
+        blockedCells: face.surfacePolygonMm?.length ? 0 : face.blockedCells,
       })),
       mode: form.roofSelection?.mode ?? "automatic",
       priorityFaceId: form.roofSelection?.priorityFaceId,
@@ -164,8 +212,29 @@ export function resolveProjectLayout(form: ProjectForm): {
     });
     if (!allocation.fits) throw new Error(allocation.reasons.join(" "));
 
+    let startIndex = 0;
     const placements: FacePlacement[] = allocation.allocations.map((allocated) => {
       const face = faces.find((candidate) => candidate.id === allocated.faceId)!;
+
+      if (face.surfacePolygonMm?.length) {
+        const polygonal = polygonalPlacementForFace({
+          form,
+          face,
+          panelCount: allocated.panelCount,
+          rows: allocated.rows,
+          columns: allocated.columns,
+          automatic: true,
+          startIndex,
+        });
+        if (!polygonal) {
+          throw new Error(
+            `No polygon-safe photovoltaic placement exists on roof face ${face.id} for ${allocated.panelCount} modules.`,
+          );
+        }
+        startIndex += allocated.panelCount;
+        return polygonal;
+      }
+
       const field = fieldSize(form, allocated.rows, allocated.columns);
       const lateral = resolveLateralClearances(form, face.widthMm, field.widthMm);
       if (!lateral.fits) {
@@ -174,6 +243,7 @@ export function resolveProjectLayout(form: ProjectForm): {
       if (allocated.resolvedRidgeMm < minimumRidge - 1e-6) {
         throw new Error(`PV field violates the requested ridge clearance on roof face ${face.id}.`);
       }
+      startIndex += allocated.panelCount;
       return {
         faceId: allocated.faceId,
         label: face.label,

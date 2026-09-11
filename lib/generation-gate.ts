@@ -1,6 +1,7 @@
 import { PDFDocument } from "pdf-lib";
 import type { DpProjectRecord, DpSourceFile } from "@/lib/dp-pdf";
 import { CONFORMITY_POLICY_VERSION } from "@/lib/conformity-policy";
+import { resolveVerifiedPvModule } from "@/lib/pv-module-catalog";
 
 export type GateIssue = {
   code: string;
@@ -33,8 +34,6 @@ const requiredDetailFields = [
   "satelliteMassSourceUrl",
   "satelliteMassMetersPerPixel",
   "satelliteMassGeneratedAt",
-  "moduleWidthMm",
-  "moduleHeightMm",
   "panelGapMm",
 ] as const;
 
@@ -49,8 +48,15 @@ export function validateGenerationInputs(
   if (!project.requesterName.trim()) issues.push({ code: "REQUESTER", field: "requesterName", message: "Identité du demandeur absente." });
   if (!project.siteAddress.trim()) issues.push({ code: "SITE", field: "siteAddress", message: "Adresse du projet absente." });
   if (!project.moduleCount || project.moduleCount < 1) issues.push({ code: "MODULE_COUNT", field: "moduleCount", message: "Nombre de modules invalide." });
-  if (!project.powerKwp || Number(project.powerKwp) <= 0) issues.push({ code: "POWER", field: "powerKwp", message: "Puissance photovoltaïque invalide." });
-  if (!project.moduleReference.trim()) issues.push({ code: "MODULE_REFERENCE", field: "moduleReference", message: "Référence des modules absente." });
+  if (!project.moduleReference.trim()) {
+    issues.push({ code: "MODULE_REFERENCE", field: "moduleReference", message: "Référence des modules absente." });
+  } else if (!resolveVerifiedPvModule(project.moduleReference)) {
+    issues.push({
+      code: "MODULE_REFERENCE_UNKNOWN",
+      field: "moduleReference",
+      message: "La référence du module n'est pas présente dans le catalogue fabricant vérifié. Ajoutez sa fiche technique fabricant avant génération.",
+    });
+  }
   if (!["roof", "carport", "canopy", "flat_roof"].includes(project.supportType)) issues.push({ code: "SUPPORT_NOT_IMPLEMENTED", field: "supportType", message: "Support non pris en charge par le nouveau moteur photovoltaïque." });
 
   requiredDetailFields.forEach((field) => {

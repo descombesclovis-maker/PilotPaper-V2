@@ -47,10 +47,44 @@ export interface RoofMetricGeometry {
   source?: "form" | "survey" | "plan" | "calibration" | "external-data" | "ign-derived";
 }
 
+export interface MetricPoint2D {
+  /** Local coordinate parallel to the low/eave edge. */
+  xMm: number;
+  /** Local coordinate measured up the physical roof/support plane. */
+  yMm: number;
+}
+
+export interface RoofFaceMetricObstacle {
+  type: string;
+  description: string;
+  polygonMm: MetricPoint2D[];
+}
+
 export interface RoofFaceMetricGeometry extends RoofMetricGeometry {
   id: string;
   label?: string;
+  /**
+   * Exact local support polygon derived from the calibrated IGN close view.
+   * Coordinates are expressed in millimetres in the roof-plane basis.
+   */
+  surfacePolygonMm?: MetricPoint2D[];
+  /** Exact obstacle footprints in the same local roof-plane basis. */
+  obstaclePolygonsMm?: RoofFaceMetricObstacle[];
+  /**
+   * Transitional compatibility field used by the legacy capacity allocator.
+   * V1.2 must stop relying on it once polygon-aware placement is validated.
+   */
   blockedCells?: number;
+}
+
+export interface PhysicalModulePlacement {
+  /** Stable zero-based index inside the project layout. */
+  index: number;
+  faceId: string;
+  row: number;
+  column: number;
+  /** Bottom-left, bottom-right, top-right, top-left in roof-plane millimetres. */
+  polygonMm: [MetricPoint2D, MetricPoint2D, MetricPoint2D, MetricPoint2D];
 }
 
 export interface ProjectSupport {
@@ -128,6 +162,11 @@ export interface FacePlacement {
   resolvedRightMm?: number;
   widthMm: number;
   slopeLengthMm: number;
+  /**
+   * Physical module polygons become the single source of truth once the V1.2
+   * polygon-aware layout path is promoted to production.
+   */
+  modulePlacementsMm?: PhysicalModulePlacement[];
 }
 
 export interface ProjectContext {

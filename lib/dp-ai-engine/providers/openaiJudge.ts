@@ -27,8 +27,11 @@ export class OpenAIQualityJudge implements QualityJudge {
     const candidate = `data:${generated.mimeType};base64,${generated.base64}`;
     const imageDataUrls=[...originalPhotos.map(toDataUrl), candidate];
     let prompt=judgePrompt(dp, form, context);
-    // Full-frame inspection can hide seams. For DP6 append source/candidate crops around the exact array.
-    if(dp===6 && generated.sourceRole){
+    const requiresPhotorealism = dp === 4 || dp === 6;
+
+    // Full-frame inspection can hide seams. For every photorealistic project
+    // insertion, append source/candidate crops around the exact PV geometry.
+    if(requiresPhotorealism && generated.sourceRole){
       const base=originalPhotos.find(p=>p.role===generated.sourceRole);
       const polys=allPanelPolygonsForRole(context,generated.sourceRole) ?? [];
       if(base?.mimeType==="image/png" && polys.length){
@@ -55,7 +58,7 @@ export class OpenAIQualityJudge implements QualityJudge {
       !report.buildingPreserved || !report.perspectiveCoherent || !report.scaleCoherent || !report.placementCoherent ||
       !report.roofFaceCorrect || !report.insideSelectedRoofFace || !report.singleRoofPlane || report.crossesRidge ||
       !report.arrayGeometryConsistent || fatalCode ||
-      (dp===6 && (
+      (requiresPhotorealism && (
         (report.photorealismScore ?? 0) < this.realismPassScore || report.materialRealistic!==true || report.lightingMatched!==true ||
         report.reflectionsNatural!==true || report.contactShadowsNatural!==true || report.edgeIntegrationNatural!==true ||
         report.localSharpnessMatched!==true || report.localNoiseCompressionMatched!==true || report.cgiArtifactsAbsent!==true || report.roofTexturePreserved!==true

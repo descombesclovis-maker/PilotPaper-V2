@@ -71,3 +71,45 @@ test("projective mapping remains affine on a parallelogram", async () => {
   almost(center.x, 0.5);
   almost(center.y, 0.5);
 });
+
+test("projective production rejects a degenerate roof quad instead of falling back to bilinear interpolation", async () => {
+  const { projectivePointInQuad } = await modulePromise;
+  const degenerate = [
+    { x: 0.1, y: 0.5 },
+    { x: 0.4, y: 0.5 },
+    { x: 0.7, y: 0.5 },
+    { x: 0.9, y: 0.5 },
+  ];
+  assert.throws(
+    () => projectivePointInQuad(degenerate, 0.5, 0.5),
+    /degenerate|singular/i,
+  );
+});
+
+test("projective production rejects a self-crossed or incorrectly ordered roof quad", async () => {
+  const { projectivePointInQuad } = await modulePromise;
+  const crossed = [
+    { x: 0.1, y: 0.8 },
+    { x: 0.9, y: 0.8 },
+    { x: 0.2, y: 0.2 },
+    { x: 0.8, y: 0.2 },
+  ];
+  assert.throws(
+    () => projectivePointInQuad(crossed, 0.5, 0.5),
+    /non-convex|self-crossed|incorrectly ordered|degenerate/i,
+  );
+});
+
+test("projective production rejects non-finite roof evidence", async () => {
+  const { projectivePointInQuad } = await modulePromise;
+  const invalid = [
+    { x: 0.1, y: 0.8 },
+    { x: 0.9, y: 0.8 },
+    { x: Number.NaN, y: 0.2 },
+    { x: 0.2, y: 0.2 },
+  ];
+  assert.throws(
+    () => projectivePointInQuad(invalid, 0.5, 0.5),
+    /non-finite/i,
+  );
+});

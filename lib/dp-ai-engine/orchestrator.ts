@@ -1,13 +1,30 @@
 import type { CrossPieceJudge, VisionAnalyzer } from "./providers/interfaces";
-import type { GeneratedAsset, GenerationResult, InputPhoto, ProjectForm, QualityReport } from "./types";
+import type { GeneratedAsset, GenerationResult, InputPhoto, ProjectForm, QualityIssue, QualityReport } from "./types";
 import { buildNonVisualDP } from "./generators/nonVisual";
 import { AIVisualGenerator } from "./generators/aiVisualGenerator";
 import { buildDP5RoofPlan } from "./generators/dp5RoofPlan";
 import { resolveProjectLayout } from "./geometry/projectLayout";
 import { OpenAIEnvironmentPhotoJudge } from "./providers/openaiEnvironmentPhotoJudge";
+import { inspectCrossPieceGeometry } from "./quality/crossPieceGeometryInspector";
 
 function sourceAsset(dp:7|8,photo:InputPhoto):GeneratedAsset{return{dp,kind:"image",mimeType:photo.mimeType,base64:photo.base64,attempt:1,sourceRole:photo.role};}
 function fallbackPhotoQuality():QualityReport{return{passed:true,score:.9,panelCountObserved:undefined,rowsObserved:undefined,columnsObserved:undefined,buildingPreserved:true,perspectiveCoherent:true,scaleCoherent:true,placementCoherent:true,roofFaceCorrect:true,insideSelectedRoofFace:true,singleRoofPlane:true,crossesRidge:false,arrayGeometryConsistent:true,issues:[],correctionPrompt:""};}
+
+function appendBlockingIssues(report: QualityReport, issues: QualityIssue[]): QualityReport {
+  if (!issues.length) return report;
+  return {
+    ...report,
+    passed: false,
+    score: Math.min(report.score, 0),
+    arrayGeometryConsistent: false,
+    placementCoherent: false,
+    issues: [...report.issues, ...issues],
+    correctionPrompt: [
+      report.correctionPrompt,
+      ...issues.map((issue) => `${issue.code}: ${issue.correction}`),
+    ].filter(Boolean).join("\n"),
+  };
+}
 
 export class DPAIEngine {
   constructor(private analyzer:VisionAnalyzer,private visual:AIVisualGenerator,private crossJudge?:CrossPieceJudge,private maxCrossRetries=2,private envPhotoJudge?:OpenAIEnvironmentPhotoJudge){}
@@ -25,6 +42,17 @@ export class DPAIEngine {
     const dp5=buildDP5RoofPlan(form,context); fixedAssets.push(dp5.asset); quality[5]=dp5.quality;
     const dp6=await this.visual.generate(6,form,context,photos); visualAssets.set(6,dp6.asset); quality[6]=dp6.quality;
 
+    // Deterministic geometry consistency is checked before any model-based
+    // cross-piece judgement. DP4, DP5 and DP6 must all trace back to exactly the
+    // same persisted physical module identity set.
+    const deterministicCross = inspectCrossPieceGeometry(context, [dp4.asset, dp5.asset, dp6.asset]);
+    if (!deterministicCross.passed) {
+      for (const dp of [4, 5, 6]) {
+        const existing = quality[dp];
+        if (existing) quality[dp] = appendBlockingIssues(existing, deterministicCross.issues);
+      }
+    }
+
     // DP7/DP8 are evidence photographs, not generative edits. Official notice describes them as photographs
     // situating the site in the close and distant environment. We judge them but never invent their pixels.
     const near=photos.find(p=>p.role==="near") ?? userPhotos[0];
@@ -36,9 +64,9 @@ export class DPAIEngine {
     // Failed DP7/DP8 quality is retained in the quality report. The API route
     // decides whether it is blocking (production) or exportable (test mode).
 
-    // Cross-piece visual consistency applies to project representations DP4 and DP6.
-    // DP5 is deterministic from the same allocations, while DP7/DP8 remain immutable source photos.
-    if(this.crossJudge){
+    // AI cross-piece visual consistency is a second independent layer and only
+    // runs when deterministic geometry identity has already passed.
+    if(deterministicCross.passed&&this.crossJudge){
       for(let round=0;round<=this.maxCrossRetries;round++){
         const current=[visualAssets.get(4)!,visualAssets.get(6)!];
         const report=await this.crossJudge.judge({form,context,generated:current});
