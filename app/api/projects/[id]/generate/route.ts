@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { buildDpPdf, type DpProjectRecord, type DpSourceFile } from "@/lib/dp-pdf";
 import { requiredSourceKinds, validateGeneratedPdf, validateGenerationInputs } from "@/lib/generation-gate";
+import { isExplicitTestExportEnabled } from "@/lib/generation-mode";
 import { getRequestUser } from "@/lib/request-user";
 import { runDPAI } from "@/lib/dp-ai-gate";
 import { inspectRenderedSourceBindings } from "@/lib/dp-ai-engine/quality/sourceBindingInspector";
@@ -47,14 +48,10 @@ function hex(bytes: ArrayBuffer) {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function testExportEnabled(request: Request) {
+function testExportEnabled() {
   const workerEnv = env as unknown as Record<string, unknown>;
-  const configured = String(
-    workerEnv.DP_TEST_EXPORT ?? (typeof process !== "undefined" ? process.env?.DP_TEST_EXPORT ?? "" : ""),
-  ).trim().toLowerCase();
-  if (configured) return ["1", "true", "yes", "on"].includes(configured);
-  const hostname = new URL(request.url).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const configured = workerEnv.DP_TEST_EXPORT ?? (typeof process !== "undefined" ? process.env?.DP_TEST_EXPORT : undefined);
+  return isExplicitTestExportEnabled(configured);
 }
 
 function aiQualityIssues(aiRun: Awaited<ReturnType<typeof runDPAI>>) {
@@ -88,7 +85,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!user) return Response.json({ error: "Authentification requise." }, { status: 401 });
   await ensureProjectSchema();
 
-  const testExport = testExportEnabled(request);
+  const testExport = testExportEnabled();
   const { id } = await context.params;
   const project = await env.DB.prepare(
     `SELECT id,
