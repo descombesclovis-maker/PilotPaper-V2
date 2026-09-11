@@ -29,7 +29,10 @@ function planeFrom3(p1: LocalSample, p2: LocalSample, p3: LocalSample): Plane | 
   if (Math.abs(det) < 1e-8) return undefined;
   const a = (z1 * (y2 - y3) + z2 * (y3 - y1) + z3 * (y1 - y2)) / det;
   const b = (x1 * (z2 - z3) + x2 * (z3 - z1) + x3 * (z1 - z2)) / det;
-  const c = (
+  // Cramer's rule for z = a*x + b*y + c. The previous implementation
+  // returned the opposite sign for c, which made otherwise valid RANSAC
+  // candidates miss every inlier whenever absolute elevations were non-zero.
+  const c = -(
     x1 * (y3 * z2 - y2 * z3)
     + x2 * (y1 * z3 - y3 * z1)
     + x3 * (y2 * z1 - y1 * z2)
