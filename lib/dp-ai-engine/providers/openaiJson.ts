@@ -3,11 +3,20 @@ export async function openaiJson<T>(params: {
   model: string;
   prompt: string;
   imageDataUrls: string[];
+  imageLabels?: string[];
   schemaName: string;
   schema: Record<string, unknown>;
 }): Promise<T> {
   const startedAt = Date.now();
   console.log(`[PilotPaper][OpenAI] ${params.schemaName} start; model=${params.model}; images=${params.imageDataUrls.length}`);
+
+  const imageContent = params.imageDataUrls.flatMap((image_url, index) => {
+    const label = params.imageLabels?.[index]?.trim();
+    return [
+      ...(label ? [{ type: "input_text", text: label }] : []),
+      { type: "input_image", image_url, detail: "high" },
+    ];
+  });
 
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -17,7 +26,7 @@ export async function openaiJson<T>(params: {
       store: false,
       input: [{ role: "user", content: [
         { type: "input_text", text: params.prompt },
-        ...params.imageDataUrls.map(image_url => ({ type: "input_image", image_url, detail: "high" }))
+        ...imageContent,
       ] }],
       text: { format: { type: "json_schema", name: params.schemaName, strict: true, schema: params.schema } }
     }),
