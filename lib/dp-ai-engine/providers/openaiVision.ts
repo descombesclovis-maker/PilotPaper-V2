@@ -51,11 +51,73 @@ type Raw={faces:RawFace[];perspectiveNotes:string[];uncertainties:string[]};
 function cleanView(v:RawView,faceId:string):RoofViewObservation {
   return {...v,faceId,gutterLineNormalized:v.gutterLineNormalized??undefined,ridgeLineNormalized:v.ridgeLineNormalized??undefined};
 }
+function rawFaces(raw:Raw):RoofFaceObservation[]{
+  return (raw.faces??[]).map(f=>({
+    id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,
+    views:(f.views??[]).map(v=>cleanView(v,String(f.id))),
+    obstacles:(f.obstacles??[]).map(o=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined})),
+  }));
+}
 
 function distancePx(a:{x:number;y:number},b:{x:number;y:number},width:number,height:number){return Math.hypot((b.x-a.x)*width,(b.y-a.y)*height);}
 function polygonArea(poly:Array<{x:number;y:number}>){let a=0;for(let i=0,j=poly.length-1;i<poly.length;j=i++)a+=poly[j]!.x*poly[i]!.y-poly[i]!.x*poly[j]!.y;return Math.abs(a)/2;}
-
 function normalizedToPixels(point:Point2D,width:number,height:number){return {x:point.x*width,y:point.y*height};}
+function validPoint(point:Point2D|undefined):point is Point2D{return Boolean(point&&Number.isFinite(point.x)&&Number.isFinite(point.y)&&point.x>=-.05&&point.x<=1.05&&point.y>=-.05&&point.y<=1.05);}
+function validLine(line:[Point2D,Point2D]|undefined):line is [Point2D,Point2D]{return Boolean(line&&validPoint(line[0])&&validPoint(line[1])&&Math.hypot(line[1].x-line[0].x,line[1].y-line[0].y)>1e-4);}
+function pointDistance(a:Point2D,b:Point2D){return Math.hypot(a.x-b.x,a.y-b.y);}
+
+function orientedBoxFromPolygon(points:Point2D[],baseLine?:[Point2D,Point2D]):[Point2D,Point2D,Point2D,Point2D]|undefined{
+  const clean=points.filter(validPoint);
+  if(clean.length<3)return undefined;
+  let p0:Point2D,p1:Point2D;
+  if(validLine(baseLine)){[p0,p1]=baseLine;}else{
+    let best=-1;let edge:[Point2D,Point2D]|undefined;
+    for(let i=0;i<clean.length;i++){
+      const a=clean[i]!,b=clean[(i+1)%clean.length]!;const d=pointDistance(a,b);
+      if(d>best){best=d;edge=[a,b];}
+    }
+    if(!edge)return undefined;[p0,p1]=edge;
+  }
+  const dx=p1.x-p0.x,dy=p1.y-p0.y,len=Math.hypot(dx,dy);
+  if(len<1e-5)return undefined;
+  const ex=dx/len,ey=dy/len;let nx=-ey,ny=ex;
+  const mid={x:(p0.x+p1.x)/2,y:(p0.y+p1.y)/2};
+  const centroid={x:clean.reduce((s,p)=>s+p.x,0)/clean.length,y:clean.reduce((s,p)=>s+p.y,0)/clean.length};
+  if((centroid.x-mid.x)*nx+(centroid.y-mid.y)*ny<0){nx*=-1;ny*=-1;}
+  const s=(p:Point2D)=>p.x*ex+p.y*ey,t=(p:Point2D)=>p.x*nx+p.y*ny;
+  const baseT=validLine(baseLine)?(t(p0)+t(p1))/2:Math.min(...clean.map(t));
+  const farT=Math.max(...clean.map(t));
+  const span=farT-baseT;
+  if(span<1e-4)return undefined;
+  const upper=clean.filter(p=>t(p)>=baseT+span*.55);
+  const lowerS=validLine(baseLine)?[s(p0),s(p1)]:clean.map(s);
+  const upperS=upper.length>=2?upper.map(s):clean.map(s);
+  const lsMin=Math.min(...lowerS),lsMax=Math.max(...lowerS),usMin=Math.min(...upperS),usMax=Math.max(...upperS);
+  const from=(sv:number,tv:number):Point2D=>({x:sv*ex+tv*nx,y:sv*ey+tv*ny});
+  return [from(lsMin,baseT),from(lsMax,baseT),from(usMax,farT),from(usMin,farT)];
+}
+
+/**
+ * Normalize a roof-face observation into the four ordered anchors required by the
+ * metric/layout engine. This is deliberately generic: it accepts exact quads,
+ * gutter+ridge line evidence, or a richer polygon that can be reduced safely.
+ */
+export function canonicalizeRoofFaceQuad(view:Pick<RoofViewObservation,"roofPolygonNormalized"|"gutterLineNormalized"|"ridgeLineNormalized">):[Point2D,Point2D,Point2D,Point2D]|undefined{
+  const polygon=(view.roofPolygonNormalized??[]).filter(validPoint);
+  const gutter=validLine(view.gutterLineNormalized)?view.gutterLineNormalized:undefined;
+  const ridge=validLine(view.ridgeLineNormalized)?view.ridgeLineNormalized:undefined;
+
+  if(gutter&&ridge){
+    const [g0,g1]=gutter,[r0,r1]=ridge;
+    const direct=pointDistance(g0,r0)+pointDistance(g1,r1);
+    const crossed=pointDistance(g0,r1)+pointDistance(g1,r0);
+    const quad:[Point2D,Point2D,Point2D,Point2D]=direct<=crossed?[g0,g1,r1,r0]:[g0,g1,r0,r1];
+    if(polygonArea(quad)>1e-6)return quad;
+  }
+  if(polygon.length===4&&polygonArea(polygon)>1e-6)return polygon as [Point2D,Point2D,Point2D,Point2D];
+  const recovered=orientedBoxFromPolygon(polygon,gutter);
+  return recovered&&polygonArea(recovered)>1e-6?recovered:undefined;
+}
 
 function resolvedPhysicalPlacement(
   placement: NonNullable<ProjectContext["facePlacements"]>[number],
@@ -86,10 +148,6 @@ function resolvedPhysicalPlacement(
   };
 }
 
-/**
- * Build a deterministic local roof-plane basis from the calibrated orthographic
- * IGN view. X follows the low/eave edge; Y points inward/up the physical plane.
- */
 function metricBasis(
   quad:[Point2D,Point2D,Point2D,Point2D],
   widthPx:number,
@@ -112,34 +170,29 @@ function metricBasis(
     toMetric(point:Point2D):MetricPoint2D{
       const p=normalizedToPixels(point,widthPx,heightPx);
       const vx=p.x-bl.x,vy=p.y-bl.y;
-      return {
-        xMm:(vx*ex+vy*ey)*mmPerPixel,
-        yMm:((vx*nx+vy*ny)*mmPerPixel)/cosSlope,
-      };
+      return {xMm:(vx*ex+vy*ey)*mmPerPixel,yMm:((vx*nx+vy*ny)*mmPerPixel)/cosSlope};
     },
   };
 }
 
-/** Derive conservative metric roof faces from the official orthographic IGN close view.
- * V1 keeps the historical rectangle dimensions for allocator compatibility, but now
- * also persists the real support polygon and obstacle polygons in roof-plane millimetres.
- */
 export function deriveMetricRoofFaces(form:ProjectForm,photos:InputPhoto[],faces:RoofFaceObservation[]):RoofFaceMetricGeometry[]{
   if((form.roofFaces?.length??0)>0)return form.roofFaces!;
   const sat=photos.find(p=>p.role==="satellite_mass");
   if(!sat?.metersPerPixel||!sat.widthPx||!sat.heightPx)throw new Error("Official IGN close-view metric scale and pixel dimensions are required to derive roof-face capacity.");
   const mpp=sat.metersPerPixel;const out:RoofFaceMetricGeometry[]=[];
   for(const face of faces){
-    const view=face.views.find(v=>v.role==="satellite_mass"&&v.selectedFaceVisible&&v.roofPolygonNormalized.length===4);
+    const view=face.views.find(v=>v.role==="satellite_mass"&&v.selectedFaceVisible&&canonicalizeRoofFaceQuad(v));
     if(!view)continue;
-    const q=view.roofPolygonNormalized;const [bl,br,tr,tl]=q;if(!bl||!br||!tr||!tl)continue;
-    const quad=[bl,br,tr,tl] as [Point2D,Point2D,Point2D,Point2D];
+    const quad=canonicalizeRoofFaceQuad(view);if(!quad)continue;
+    const [bl,br,tr,tl]=quad;
     const eave=distancePx(bl,br,sat.widthPx,sat.heightPx),ridge=distancePx(tl,tr,sat.widthPx,sat.heightPx);
     const left=distancePx(bl,tl,sat.widthPx,sat.heightPx),right=distancePx(br,tr,sat.widthPx,sat.heightPx);
     const widthGround=Math.min(eave,ridge)*mpp,runGround=((left+right)/2)*mpp;
+    if(!(widthGround>.4&&runGround>.4))continue;
     const slope=Math.max(0,Math.min(75,Number(form.roofGeometry?.slopeDeg??face.slopeDeg??0)));
     const slopeLength=runGround/Math.max(.26,Math.cos(slope*Math.PI/180));
-    const faceArea=Math.max(1e-8,polygonArea(q));
+    const sourcePolygon=view.roofPolygonNormalized.length>=3?view.roofPolygonNormalized:quad;
+    const faceArea=Math.max(1e-8,polygonArea(sourcePolygon));
     const relevantObstacles=face.obstacles.filter(o=>!o.viewRole||o.viewRole==="satellite_mass");
     const obsArea=relevantObstacles.reduce((sum,o)=>sum+(o.polygonNormalized?.length?polygonArea(o.polygonNormalized):0),0);
     const panelW=form.array.orientation==="portrait"?form.panel.widthMm:form.panel.heightMm,panelH=form.array.orientation==="portrait"?form.panel.heightMm:form.panel.widthMm,gap=form.array.interPanelGapMm??20;
@@ -149,22 +202,17 @@ export function deriveMetricRoofFaces(form:ProjectForm,photos:InputPhoto[],faces
     const surfacePolygonMm=quad.map(basis.toMetric);
     const obstaclePolygonsMm=relevantObstacles.flatMap((obstacle)=>{
       const polygon=obstacle.polygonNormalized;
-      if(!polygon||polygon.length<3||!polygon.every((point)=>Number.isFinite(point.x)&&Number.isFinite(point.y)))return [];
+      if(!polygon||polygon.length<3||!polygon.every(validPoint))return [];
       return [{type:obstacle.type,description:obstacle.description,polygonMm:polygon.map(basis.toMetric)}];
     });
-    out.push({
-      id:face.id,
-      label:face.label,
-      widthMm:Math.floor(widthGround*1000),
-      slopeLengthMm:Math.floor(slopeLength*1000),
-      slopeDeg:slope,
-      surfacePolygonMm,
-      obstaclePolygonsMm,
-      blockedCells,
-      source:"ign-derived",
-    });
+    out.push({id:face.id,label:face.label,widthMm:Math.floor(widthGround*1000),slopeLengthMm:Math.floor(slopeLength*1000),slopeDeg:slope,surfacePolygonMm,obstaclePolygonsMm,blockedCells,source:"ign-derived"});
   }
   return out;
+}
+
+function imageLabel(photo:InputPhoto,index:number){
+  const scale=photo.metersPerPixel?` Metric scale supplied by host: ${photo.metersPerPixel} metre/pixel.`:"";
+  return `IMAGE ${index+1} — AUTHORITATIVE ROLE = "${photo.role}". In structured output, observations from this exact image MUST use role "${photo.role}".${scale}`;
 }
 
 export class OpenAIVisionAnalyzer implements VisionAnalyzer {
@@ -173,18 +221,46 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     private model="gpt-5.6-sol",
     private minUserPhotos=3,
   ){}
+
+  private async inspect(form:ProjectForm,photos:InputPhoto[],recovery=false):Promise<Raw>{
+    const inventory=photos.map((photo,index)=>`- Image ${index+1}: role=${photo.role}${photo.metersPerPixel?`, scale=${photo.metersPerPixel} m/px`:""}`).join("\n");
+    const recoveryInstruction=recovery?`\nAUTOMATIC METRIC RECOVERY PASS:\nThe normal pass did not yield a usable metric roof face. Image 1 is the official close orthographic IGN view and MUST be returned with role satellite_mass. Use the user roof photograph only to understand which physical slope/face corresponds to the requested support. For every roof face visible in image 1, return its satellite_mass polygon. Prefer exact gutter and ridge lines. A polygon may contain more than four points; do not omit the face just because its outline is not a perfect quadrilateral. Never invent a dimension.`:"";
+    const prompt=`${projectAnalysisPrompt(form)}\n\nAUTHORITATIVE IMAGE INVENTORY:\n${inventory}\nThe role labels above come from PilotPaper and are not to be inferred or renamed. Return each observation under the exact role of the image it came from.${recoveryInstruction}`;
+    return openaiJson<Raw>({
+      apiKey:this.apiKey,
+      model:this.model,
+      prompt,
+      imageDataUrls:photos.map(toDataUrl),
+      imageLabels:photos.map(imageLabel),
+      schemaName:recovery?"dp_roof_faces_metric_recovery":"dp_roof_faces_analysis",
+      schema:schema as unknown as Record<string,unknown>,
+    });
+  }
+
   async analyze(form:ProjectForm,photos:InputPhoto[]):Promise<ProjectContext>{
     const userPhotos=photos.filter(p=>!["satellite","satellite_mass"].includes(p.role));
     if(userPhotos.length<this.minUserPhotos) throw new Error(`At least ${this.minUserPhotos} independent user photograph(s) are required.`);
-    const raw=await openaiJson<Raw>({apiKey:this.apiKey,model:this.model,prompt:projectAnalysisPrompt(form),imageDataUrls:photos.map(toDataUrl),schemaName:"dp_roof_faces_analysis",schema:schema as unknown as Record<string,unknown>});
-    const faces:RoofFaceObservation[]=(raw.faces??[]).map(f=>({id:String(f.id),label:String(f.label),orientation:f.orientation??undefined,confidence:Number(f.confidence),slopeDeg:f.slopeDeg??undefined,views:(f.views??[]).map(v=>cleanView(v,String(f.id))),obstacles:(f.obstacles??[]).map(o=>({...o,polygonNormalized:o.polygonNormalized??undefined,viewRole:o.viewRole??undefined}))}));
-    if(!faces.length) throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
+
+    let raw=await this.inspect(form,photos,false);
+    let faces=rawFaces(raw);
+    if(!faces.length)throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
+
+    let metricFaces=deriveMetricRoofFaces(form,photos,faces);
+    if(!metricFaces.length){
+      const satMass=photos.find(photo=>photo.role==="satellite_mass");
+      const roof=userPhotos.find(photo=>photo.role==="roof")??userPhotos[0];
+      if(satMass&&roof){
+        const recoveryPhotos=[satMass,roof];
+        const recoveredRaw=await this.inspect(form,recoveryPhotos,true);
+        const recoveredFaces=rawFaces(recoveredRaw);
+        const recoveredMetric=deriveMetricRoofFaces(form,recoveryPhotos,recoveredFaces);
+        if(recoveredMetric.length){raw=recoveredRaw;faces=recoveredFaces;metricFaces=recoveredMetric;}
+      }
+    }
+    if(!metricFaces.length)throw new Error("PilotPaper could not automatically reconstruct a metric roof/support face from the official IGN close view and the supplied roof evidence.");
 
     const topology=form.support?.topology??"unknown";
     const eligibility=selectLayoutEligibleSurfaces(faces,topology);
-    const metricFaces=deriveMetricRoofFaces(form,photos,faces);
-    if(!metricFaces.length) throw new Error("No roof/support face could be metrically derived from the official IGN close view.");
-
     const eligibleMetricFaces=metricFaces.filter((face)=>eligibility.eligibleFaceIds.includes(face.id));
     if(form.roofSelection?.mode==="priority"&&form.roofSelection.priorityFaceId&&eligibility.rejected[form.roofSelection.priorityFaceId]){
       throw new Error(`Priority surface ${form.roofSelection.priorityFaceId} failed the V1 understanding gate: ${eligibility.rejected[form.roofSelection.priorityFaceId]!.join(" ")}`);
@@ -197,17 +273,12 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const resolvedForm:ProjectForm={...form,roofFaces:eligibleMetricFaces};
     const layout=resolveProjectLayout(resolvedForm);
     const primaryPlacement=layout.placements[0]!;
-    const primaryFace=faces.find(f=>f.id===primaryPlacement.faceId) ?? faces[0]!;
+    const primaryFace=faces.find(f=>f.id===primaryPlacement.faceId)??faces[0]!;
     const primaryView=primaryFace.views.find(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3);
-    if(!primaryView) throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
+    if(!primaryView)throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
 
-    const understandingGate=gateAllocatedSurfaces(
-      faces,
-      topology,
-      layout.placements.map((placement)=>placement.faceId),
-    );
-
-    const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId) ?? form.roofGeometry;
+    const understandingGate=gateAllocatedSurfaces(faces,topology,layout.placements.map((placement)=>placement.faceId));
+    const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId)??form.roofGeometry;
     const resolvedPlacement=resolvedPhysicalPlacement(primaryPlacement,primaryMetric);
     const flattened=faces.flatMap(f=>f.views);
     const allObstacles=primaryFace.obstacles.map(o=>({type:o.type,description:o.description,polygonNormalized:o.polygonNormalized}));
