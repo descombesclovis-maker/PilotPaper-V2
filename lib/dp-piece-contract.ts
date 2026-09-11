@@ -52,7 +52,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     title: "Plan de masse",
     shortTitle: "Masse",
     purpose: "Montrer la parcelle, le bâtiment et l'implantation du champ photovoltaïque en vue aérienne.",
-    fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm", "roofPhoto"],
+    fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm"],
     output: "svg",
     usesRoofUnderstanding: true,
     usesLayout: true,
