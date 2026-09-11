@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { headers } from "next/headers";
 import { WorkspaceClient } from "./workspace-client";
 import { AdminDpImageLab } from "@/components/admin-dp-image-lab";
+import { PilotPaperExperienceLayer } from "@/components/pilotpaper-experience-layer";
 import { getRequestUser, isPilotPaperAdmin } from "@/lib/request-user";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export default async function Home() {
         }}
       />
       {isAdmin ? <AdminDpImageLab /> : null}
+      <PilotPaperExperienceLayer />
     </>
   );
 }
