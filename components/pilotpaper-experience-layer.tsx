@@ -237,7 +237,7 @@ export function PilotPaperExperienceLayer() {
         <li className="pp-lab-menu-item" data-sidebar="menu-item">
           <button type="button" className="pp-lab-menu-button" onClick={openLab}>
             <FlaskConical />
-            <span>DP k-par-k</span>
+            <span>K-par-k</span>
             <small>LAB</small>
           </button>
         </li>,
