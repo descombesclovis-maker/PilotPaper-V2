@@ -6,7 +6,8 @@ import { projectAnalysisPrompt } from "../prompts/projectAnalysis";
 import { toDataUrl } from "../utils/dataUrl";
 import { openaiJson } from "./openaiJson";
 import { supportRules } from "../geometry/supportRules";
-import { gateAllocatedSurfaces, selectLayoutEligibleSurfaces } from "../geometry/surfaceSupport";
+import { gateAllocatedSurfaces, selectLayoutEligibleSurfaces, type SurfaceEvidencePolicy } from "../geometry/surfaceSupport";
+import { projectivePointInQuad } from "../geometry/panelProjection";
 
 const roles=["satellite","satellite_mass","front","left_oblique","right_oblique","near","roof","far"] as const;
 const pointSchema={type:"object",additionalProperties:false,properties:{x:{type:"number"},y:{type:"number"}},required:["x","y"]} as const;
@@ -119,6 +120,81 @@ export function canonicalizeRoofFaceQuad(view:Pick<RoofViewObservation,"roofPoly
   return recovered&&polygonArea(recovered)>1e-6?recovered:undefined;
 }
 
+function canonicalizeFaceEvidence(faces:RoofFaceObservation[]):RoofFaceObservation[]{
+  return faces.map(face=>({
+    ...face,
+    views:face.views.map(view=>{
+      if(!view.selectedFaceVisible)return view;
+      const quad=canonicalizeRoofFaceQuad(view);
+      return quad?{...view,roofPolygonNormalized:quad}:view;
+    }),
+  }));
+}
+
+function projectiveCoefficients(q:[Point2D,Point2D,Point2D,Point2D]){
+  const [bl,br,tr,tl]=q;
+  const dx1=br.x-tr.x,dx2=tl.x-tr.x,dx3=bl.x-br.x+tr.x-tl.x;
+  const dy1=br.y-tr.y,dy2=tl.y-tr.y,dy3=bl.y-br.y+tr.y-tl.y;
+  const denominator=dx1*dy2-dx2*dy1;
+  let g=0,h=0;
+  if(Math.abs(dx3)>1e-12||Math.abs(dy3)>1e-12){
+    if(!Number.isFinite(denominator)||Math.abs(denominator)<1e-12)return undefined;
+    g=(dx3*dy2-dx2*dy3)/denominator;
+    h=(dx1*dy3-dx3*dy1)/denominator;
+  }
+  return {
+    a:br.x-bl.x+g*br.x,b:tl.x-bl.x+h*tl.x,c:bl.x,
+    d:br.y-bl.y+g*br.y,e:tl.y-bl.y+h*tl.y,f:bl.y,g,h,
+  };
+}
+
+function projectiveCoordinatesInQuad(q:[Point2D,Point2D,Point2D,Point2D],point:Point2D){
+  const coeff=projectiveCoefficients(q);if(!coeff)return undefined;
+  const {a,b,c,d,e,f,g,h}=coeff;
+  const a1=a-point.x*g,b1=b-point.x*h,c1=point.x-c;
+  const a2=d-point.y*g,b2=e-point.y*h,c2=point.y-f;
+  const det=a1*b2-a2*b1;
+  if(!Number.isFinite(det)||Math.abs(det)<1e-12)return undefined;
+  const u=(c1*b2-c2*b1)/det;
+  const v=(a1*c2-a2*c1)/det;
+  return Number.isFinite(u)&&Number.isFinite(v)?{u,v}:undefined;
+}
+
+/**
+ * Obstacles detected on a perspective roof photo are not discarded. Once the
+ * same physical roof face is known in both the photo and the metric IGN view,
+ * transfer the obstacle footprint through the face homography into the metric
+ * view. This keeps the layout deterministic without requiring the chimney to be
+ * visually obvious in the orthophoto itself.
+ */
+export function reprojectObstaclesToMetric(faces:RoofFaceObservation[]):RoofFaceObservation[]{
+  return faces.map(face=>{
+    const metricView=face.views.find(view=>view.role==="satellite_mass"&&view.selectedFaceVisible);
+    const targetQuad=metricView?canonicalizeRoofFaceQuad(metricView):undefined;
+    if(!targetQuad)return face;
+
+    const obstacles=face.obstacles.map(obstacle=>{
+      if(!obstacle.polygonNormalized?.length||obstacle.viewRole==null||obstacle.viewRole==="satellite_mass")return obstacle;
+      const sourceView=face.views.find(view=>view.role===obstacle.viewRole&&view.selectedFaceVisible);
+      const sourceQuad=sourceView?canonicalizeRoofFaceQuad(sourceView):undefined;
+      if(!sourceQuad)return obstacle;
+
+      const mapped:Point2D[]=[];
+      for(const point of obstacle.polygonNormalized){
+        if(!validPoint(point))return obstacle;
+        const uv=projectiveCoordinatesInQuad(sourceQuad,point);
+        if(!uv||uv.u<-.08||uv.u>1.08||uv.v<-.08||uv.v>1.08)return obstacle;
+        const projected=projectivePointInQuad(targetQuad,uv.u,uv.v);
+        if(!validPoint(projected))return obstacle;
+        mapped.push(projected);
+      }
+      if(mapped.length<3||polygonArea(mapped)<1e-8)return obstacle;
+      return {...obstacle,polygonNormalized:mapped,viewRole:"satellite_mass" as const};
+    });
+    return {...face,obstacles};
+  });
+}
+
 function resolvedPhysicalPlacement(
   placement: NonNullable<ProjectContext["facePlacements"]>[number],
   metric: RoofFaceMetricGeometry | undefined,
@@ -220,6 +296,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     private apiKey:string,
     private model="gpt-5.6-sol",
     private minUserPhotos=3,
+    private evidencePolicy?:SurfaceEvidencePolicy,
   ){}
 
   private async inspect(form:ProjectForm,photos:InputPhoto[],recovery=false):Promise<Raw>{
@@ -242,7 +319,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     if(userPhotos.length<this.minUserPhotos) throw new Error(`At least ${this.minUserPhotos} independent user photograph(s) are required.`);
 
     let raw=await this.inspect(form,photos,false);
-    let faces=rawFaces(raw);
+    let faces=canonicalizeFaceEvidence(rawFaces(raw));
     if(!faces.length)throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
 
     let metricFaces=deriveMetricRoofFaces(form,photos,faces);
@@ -252,15 +329,19 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
       if(satMass&&roof){
         const recoveryPhotos=[satMass,roof];
         const recoveredRaw=await this.inspect(form,recoveryPhotos,true);
-        const recoveredFaces=rawFaces(recoveredRaw);
+        const recoveredFaces=canonicalizeFaceEvidence(rawFaces(recoveredRaw));
         const recoveredMetric=deriveMetricRoofFaces(form,recoveryPhotos,recoveredFaces);
         if(recoveredMetric.length){raw=recoveredRaw;faces=recoveredFaces;metricFaces=recoveredMetric;}
       }
     }
     if(!metricFaces.length)throw new Error("PilotPaper could not automatically reconstruct a metric roof/support face from the official IGN close view and the supplied roof evidence.");
 
+    faces=reprojectObstaclesToMetric(canonicalizeFaceEvidence(faces));
+    metricFaces=deriveMetricRoofFaces(form,photos,faces);
+    if(!metricFaces.length)throw new Error("PilotPaper lost the metric roof geometry while reconciling photo evidence with the IGN plan.");
+
     const topology=form.support?.topology??"unknown";
-    const eligibility=selectLayoutEligibleSurfaces(faces,topology);
+    const eligibility=selectLayoutEligibleSurfaces(faces,topology,0.72,this.evidencePolicy);
     const eligibleMetricFaces=metricFaces.filter((face)=>eligibility.eligibleFaceIds.includes(face.id));
     if(form.roofSelection?.mode==="priority"&&form.roofSelection.priorityFaceId&&eligibility.rejected[form.roofSelection.priorityFaceId]){
       throw new Error(`Priority surface ${form.roofSelection.priorityFaceId} failed the V1 understanding gate: ${eligibility.rejected[form.roofSelection.priorityFaceId]!.join(" ")}`);
@@ -277,7 +358,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const primaryView=primaryFace.views.find(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3);
     if(!primaryView)throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
 
-    const understandingGate=gateAllocatedSurfaces(faces,topology,layout.placements.map((placement)=>placement.faceId));
+    const understandingGate=gateAllocatedSurfaces(faces,topology,layout.placements.map((placement)=>placement.faceId),0.72,this.evidencePolicy);
     const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId)??form.roofGeometry;
     const resolvedPlacement=resolvedPhysicalPlacement(primaryPlacement,primaryMetric);
     const flattened=faces.flatMap(f=>f.views);
