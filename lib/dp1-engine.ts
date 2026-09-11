@@ -1,3 +1,15 @@
+import {
+  cadastralCandidates,
+  fetchIgnRaster,
+  orthophotoCandidates,
+} from "@/lib/dp-ai-engine/context/ignRaster";
+import {
+  parcelRings,
+  resolveOfficialParcelContext,
+  toWebMercator,
+  type MetricFrame,
+  type OfficialParcelContext,
+} from "@/lib/dp-ai-engine/context/officialParcel";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/dp-piece-engine";
 
 const IMAGE_WIDTH = 1400;
@@ -8,30 +20,14 @@ const MAP_WIDTH = 1060;
 const MAP_HEIGHT = 590;
 const SITUATION_WIDTH_METERS = 2500;
 const SITUATION_HEIGHT_METERS = SITUATION_WIDTH_METERS * (MAP_HEIGHT / MAP_WIDTH);
-const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
 
-type LonLat = [number, number];
-type GeoJsonPolygon = { type: "Polygon"; coordinates: LonLat[][] };
-type GeoJsonMultiPolygon = { type: "MultiPolygon"; coordinates: LonLat[][][] };
-type ParcelGeometry = GeoJsonPolygon | GeoJsonMultiPolygon;
-
-type IgnDp1Context = {
-  normalizedAddress: string;
-  longitude: number;
-  latitude: number;
-  municipality: string;
-  cityCode: string;
-  parcelReference: string;
-  parcelAreaM2: number;
-  parcelGeometry: ParcelGeometry;
+type IgnDp1Context = OfficialParcelContext & {
   situationBase64: string;
   situationMimeType: "image/jpeg" | "image/png";
   imagerySource: string;
   cadastralOverlayBase64?: string;
-  cadastralOverlayMimeType?: "image/png";
   cadastralOverlaySource?: string;
 };
-
 type ProjectedRing = Array<{ x: number; y: number }>;
 
 function escapeXml(value: unknown) {
@@ -44,17 +40,13 @@ function escapeXml(value: unknown) {
   })[char] ?? char);
 }
 
-function toWebMercator(longitude: number, latitude: number) {
-  const boundedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
-  return {
-    x: (longitude * WEB_MERCATOR_LIMIT) / 180,
-    y: (Math.log(Math.tan(((90 + boundedLatitude) * Math.PI) / 360)) * WEB_MERCATOR_LIMIT) / Math.PI,
-  };
-}
-
-function situationBounds(longitude: number, latitude: number) {
+function situationFrame(longitude: number, latitude: number): MetricFrame {
   const center = toWebMercator(longitude, latitude);
   return {
+    longitude,
+    latitude,
+    widthMeters: SITUATION_WIDTH_METERS,
+    heightMeters: SITUATION_HEIGHT_METERS,
     minX: center.x - SITUATION_WIDTH_METERS / 2,
     maxX: center.x + SITUATION_WIDTH_METERS / 2,
     minY: center.y - SITUATION_HEIGHT_METERS / 2,
@@ -62,259 +54,51 @@ function situationBounds(longitude: number, latitude: number) {
   };
 }
 
-function buildWmsUrl(args: {
-  endpoint: string;
-  layer: string;
-  style?: string;
-  longitude: number;
-  latitude: number;
-  format: "image/jpeg" | "image/png";
-  transparent: boolean;
-}) {
-  const bounds = situationBounds(args.longitude, args.latitude);
-  const url = new URL(args.endpoint);
-  const params: Record<string, string> = {
-    SERVICE: "WMS",
-    VERSION: "1.3.0",
-    REQUEST: "GetMap",
-    LAYERS: args.layer,
-    STYLES: args.style ?? "",
-    CRS: "EPSG:3857",
-    BBOX: [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].join(","),
-    WIDTH: String(IMAGE_WIDTH),
-    HEIGHT: String(IMAGE_HEIGHT),
-    FORMAT: args.format,
-    TRANSPARENT: args.transparent ? "true" : "false",
-  };
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  return url;
-}
-
 export function buildDp1IgnWmsCandidates(longitude: number, latitude: number) {
-  return [
-    {
-      label: "IGN WMS standard",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r/wms", layer: "ORTHOIMAGERY.ORTHOPHOTOS", longitude, latitude, format: "image/jpeg", transparent: false }),
-    },
-    {
-      label: "IGN WMS haute résolution",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r/wms", layer: "HR.ORTHOIMAGERY.ORTHOPHOTOS", style: "normal", longitude, latitude, format: "image/jpeg", transparent: false }),
-    },
-    {
-      label: "IGN WMS standard secours",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r", layer: "ORTHOIMAGERY.ORTHOPHOTOS", longitude, latitude, format: "image/jpeg", transparent: false }),
-    },
-    {
-      label: "IGN WMS haute résolution secours",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r", layer: "HR.ORTHOIMAGERY.ORTHOPHOTOS", style: "normal", longitude, latitude, format: "image/jpeg", transparent: false }),
-    },
-  ] as const;
+  return orthophotoCandidates({
+    frame: situationFrame(longitude, latitude),
+    widthPx: IMAGE_WIDTH,
+    heightPx: IMAGE_HEIGHT,
+    format: "image/jpeg",
+  });
 }
 
 function buildCadastralWmsCandidates(longitude: number, latitude: number) {
-  return [
-    {
-      label: "IGN Parcellaire Express PCI",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r/wms", layer: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS", style: "normal", longitude, latitude, format: "image/png", transparent: true }),
-    },
-    {
-      label: "IGN Parcellaire Express PCI secours",
-      url: buildWmsUrl({ endpoint: "https://data.geopf.fr/wms-r", layer: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS", style: "normal", longitude, latitude, format: "image/png", transparent: true }),
-    },
-  ] as const;
-}
-
-async function fetchImageCandidates(
-  candidates: readonly { label: string; url: URL }[],
-  options: { required: boolean; minBytes: number; expectedTransparent?: boolean },
-) {
-  const failures: string[] = [];
-  for (const candidate of candidates) {
-    try {
-      const response = await fetch(candidate.url, {
-        headers: { Accept: "image/png,image/jpeg;q=0.9,*/*;q=0.1" },
-        signal: AbortSignal.timeout(30_000),
-      });
-      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-      if (!response.ok) {
-        failures.push(`${candidate.label}:${response.status}`);
-        continue;
-      }
-      if (!contentType.startsWith("image/")) {
-        failures.push(`${candidate.label}:type-${contentType || "inconnu"}`);
-        continue;
-      }
-      const bytes = await response.arrayBuffer();
-      if (bytes.byteLength < options.minBytes) {
-        failures.push(`${candidate.label}:image-trop-petite`);
-        continue;
-      }
-      const mimeType = contentType.includes("png") ? "image/png" : "image/jpeg";
-      return {
-        base64: Buffer.from(bytes).toString("base64"),
-        mimeType,
-        source: candidate.label,
-      } as const;
-    } catch (error) {
-      failures.push(`${candidate.label}:${error instanceof Error ? error.name : "erreur"}`);
-    }
-  }
-  console.error("[dp1] WMS candidates failed", failures);
-  if (options.required) {
-    throw new Error("DP1 bloquée : aucune vue aérienne officielle IGN n'a pu être obtenue. PilotPaper a essayé les flux IGN principal et de secours.");
-  }
-  return undefined;
-}
-
-async function fetchOfficialSituation(longitude: number, latitude: number) {
-  return fetchImageCandidates(buildDp1IgnWmsCandidates(longitude, latitude), { required: true, minBytes: 10_000 });
-}
-
-async function fetchCadastralOverlay(longitude: number, latitude: number) {
-  const overlay = await fetchImageCandidates(buildCadastralWmsCandidates(longitude, latitude), { required: false, minBytes: 1_000, expectedTransparent: true });
-  if (!overlay || overlay.mimeType !== "image/png") return undefined;
-  return overlay;
-}
-
-function isLonLatCoordinate(value: unknown): value is LonLat {
-  return Array.isArray(value)
-    && value.length >= 2
-    && Number.isFinite(Number(value[0]))
-    && Number.isFinite(Number(value[1]))
-    && Number(value[0]) >= -180
-    && Number(value[0]) <= 180
-    && Number(value[1]) >= -90
-    && Number(value[1]) <= 90;
-}
-
-function parseParcelGeometry(value: unknown): ParcelGeometry {
-  if (!value || typeof value !== "object") throw new Error("La géométrie cadastrale officielle est absente.");
-  const geometry = value as { type?: unknown; coordinates?: unknown };
-  if (geometry.type === "Polygon" && Array.isArray(geometry.coordinates)) {
-    const rings = geometry.coordinates as unknown[];
-    if (!rings.length || !rings.every((ring) => Array.isArray(ring) && ring.length >= 4 && ring.every(isLonLatCoordinate))) {
-      throw new Error("La géométrie cadastrale Polygon reçue est invalide.");
-    }
-    return { type: "Polygon", coordinates: rings as LonLat[][] };
-  }
-  if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) {
-    const polygons = geometry.coordinates as unknown[];
-    if (!polygons.length || !polygons.every((polygon) => Array.isArray(polygon)
-      && polygon.length > 0
-      && polygon.every((ring) => Array.isArray(ring) && ring.length >= 4 && ring.every(isLonLatCoordinate)))) {
-      throw new Error("La géométrie cadastrale MultiPolygon reçue est invalide.");
-    }
-    return { type: "MultiPolygon", coordinates: polygons as LonLat[][][] };
-  }
-  throw new Error(`Type de géométrie cadastrale non pris en charge : ${String(geometry.type ?? "inconnu")}.`);
-}
-
-async function fetchOfficialParcelGeometry(args: { cityCode: string; section: string; parcelNumber: string }) {
-  const url = new URL("https://apicarto.ign.fr/api/cadastre/parcelle");
-  url.searchParams.set("code_insee", args.cityCode);
-  url.searchParams.set("section", args.section);
-  url.searchParams.set("numero", args.parcelNumber);
-  const response = await fetch(url, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(20_000),
+  return cadastralCandidates({
+    frame: situationFrame(longitude, latitude),
+    widthPx: IMAGE_WIDTH,
+    heightPx: IMAGE_HEIGHT,
   });
-  if (!response.ok) throw new Error(`APICARTO Cadastre indisponible (${response.status}).`);
-  const payload = await response.json() as {
-    features?: Array<{
-      geometry?: unknown;
-      properties?: { contenance?: number; idu?: string; section?: string; numero?: string };
-    }>;
-  };
-  const feature = payload.features?.[0];
-  if (!feature?.geometry) throw new Error("APICARTO n'a retourné aucune géométrie pour la parcelle déterminée.");
-  const geometry = parseParcelGeometry(feature.geometry);
-  const area = Number(feature.properties?.contenance);
-  if (!Number.isFinite(area) || area <= 0) throw new Error("APICARTO n'a retourné aucune superficie cadastrale fiable.");
-  return { geometry, areaM2: area, idu: String(feature.properties?.idu ?? "").trim() };
 }
 
 async function resolveIgnDp1Context(address: string): Promise<IgnDp1Context> {
-  const cleanAddress = address.trim();
-  if (cleanAddress.length < 8) throw new Error("Adresse trop imprécise pour les sources IGN.");
-
-  const search = new URL("https://data.geopf.fr/geocodage/search");
-  search.searchParams.set("q", cleanAddress);
-  search.searchParams.set("index", "address");
-  search.searchParams.set("limit", "1");
-  const response = await fetch(search, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) throw new Error(`Géocodage IGN indisponible (${response.status}).`);
-
-  const payload = await response.json() as {
-    features?: Array<{
-      geometry?: { coordinates?: [number, number] };
-      properties?: Record<string, unknown>;
-    }>;
-  };
-  const feature = payload.features?.[0];
-  const coordinates = feature?.geometry?.coordinates;
-  if (!coordinates) throw new Error("Adresse non retrouvée par l'IGN.");
-  const [longitude, latitude] = coordinates;
-  const props = feature?.properties ?? {};
-  const cityCode = String(props.citycode ?? "").trim();
-  if (!cityCode) throw new Error("Le code INSEE de la commune n'a pas été déterminé par l'IGN.");
-
-  const reverse = new URL("https://data.geopf.fr/geocodage/reverse");
-  reverse.searchParams.set("lon", String(longitude));
-  reverse.searchParams.set("lat", String(latitude));
-  reverse.searchParams.set("index", "parcel");
-  reverse.searchParams.set("limit", "1");
-  const reverseResponse = await fetch(reverse, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!reverseResponse.ok) throw new Error(`Cadastre IGN indisponible (${reverseResponse.status}).`);
-
-  const reversePayload = await reverseResponse.json() as {
-    features?: Array<{ properties?: Record<string, unknown> }>;
-  };
-  const parcel = reversePayload.features?.[0]?.properties ?? {};
-  const section = String(parcel.section ?? "").trim();
-  const parcelNumber = String(parcel.number ?? parcel.numero ?? "").trim();
-  const officialParcelId = String(parcel.idu ?? parcel.id ?? parcel.parcelle ?? "").trim();
-  if (!section || !parcelNumber) throw new Error("La section ou le numéro cadastral n'a pas été déterminé avec certitude.");
-
-  const [parcelVector, situation, cadastralOverlay] = await Promise.all([
-    fetchOfficialParcelGeometry({ cityCode, section, parcelNumber }),
-    fetchOfficialSituation(longitude, latitude),
-    fetchCadastralOverlay(longitude, latitude),
+  const site = await resolveOfficialParcelContext(address);
+  const [situation, cadastralOverlay] = await Promise.all([
+    fetchIgnRaster(buildDp1IgnWmsCandidates(site.longitude, site.latitude), {
+      purpose: "DP1 : vue aérienne IGN",
+      minBytes: 10_000,
+      required: true,
+    }),
+    fetchIgnRaster(buildCadastralWmsCandidates(site.longitude, site.latitude), {
+      purpose: "DP1 : limites cadastrales voisines",
+      minBytes: 1_000,
+      required: false,
+    }),
   ]);
   if (!situation) throw new Error("DP1 bloquée : orthophoto IGN indisponible.");
-
-  const parcelReference = [section, parcelNumber].filter(Boolean).join(" ") || parcelVector.idu || officialParcelId;
   return {
-    normalizedAddress: String(props.label ?? props.name ?? cleanAddress),
-    longitude,
-    latitude,
-    municipality: String(props.city ?? ""),
-    cityCode,
-    parcelReference,
-    parcelAreaM2: parcelVector.areaM2,
-    parcelGeometry: parcelVector.geometry,
+    ...site,
     situationBase64: situation.base64,
     situationMimeType: situation.mimeType,
     imagerySource: situation.source,
-    cadastralOverlayBase64: cadastralOverlay?.base64,
-    cadastralOverlayMimeType: cadastralOverlay?.mimeType === "image/png" ? "image/png" : undefined,
-    cadastralOverlaySource: cadastralOverlay?.source,
+    cadastralOverlayBase64: cadastralOverlay?.mimeType === "image/png" ? cadastralOverlay.base64 : undefined,
+    cadastralOverlaySource: cadastralOverlay?.mimeType === "image/png" ? cadastralOverlay.source : undefined,
   };
 }
 
-function geometryRings(geometry: ParcelGeometry): LonLat[][] {
-  if (geometry.type === "Polygon") return geometry.coordinates;
-  return geometry.coordinates.flatMap((polygon) => polygon);
-}
-
 function projectParcelRings(context: IgnDp1Context): ProjectedRing[] {
-  const bounds = situationBounds(context.longitude, context.latitude);
-  const rings = geometryRings(context.parcelGeometry).map((ring) => ring.map(([longitude, latitude]) => {
+  const bounds = situationFrame(context.longitude, context.latitude);
+  const rings = parcelRings(context.parcelGeometry).map((ring) => ring.map(([longitude, latitude]) => {
     const point = toWebMercator(longitude, latitude);
     const nx = (point.x - bounds.minX) / (bounds.maxX - bounds.minX);
     const ny = (bounds.maxY - point.y) / (bounds.maxY - bounds.minY);
@@ -420,8 +204,8 @@ export async function generateDp1Piece(input: DpPieceInput): Promise<DpPieceOutp
       passed: true,
       score: 1,
       checks: [
-        "Adresse retrouvée par le géocodage IGN",
-        `Parcelle ${context.parcelReference} retrouvée par géocodage inverse`,
+        "Adresse et parcelle résolues par le moteur cadastral commun PilotPaper",
+        `Parcelle ${context.parcelReference} confirmée par IGN + APICARTO`,
         "Géométrie vectorielle officielle récupérée par APICARTO Cadastre",
         "Contour cadastral projeté mathématiquement dans la même emprise EPSG:3857 que l'orthophoto",
         `Superficie cadastrale officielle : ${Math.round(context.parcelAreaM2)} m²`,
