@@ -8,14 +8,20 @@ import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 const IMAGE_WIDTH = 1400;
 const IMAGE_HEIGHT = 1000;
 const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
+const MASS_ASPECT = IMAGE_HEIGHT / IMAGE_WIDTH;
+
+type LonLat = [number, number];
+type ParcelGeometry =
+  | { type: "Polygon"; coordinates: LonLat[][] }
+  | { type: "MultiPolygon"; coordinates: LonLat[][][] };
 
 type IgnDp2Context = {
   normalizedAddress: string;
   municipality: string;
   parcelReference: string;
+  parcelAreaM2: number;
   longitude: number;
   latitude: number;
-  situation: InputPhoto;
   mass: InputPhoto;
   cadastralOverlay: string;
   imagerySource: string;
@@ -48,11 +54,22 @@ function positiveInteger(value: unknown, label: string) {
   return parsed;
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
 function toWebMercator(longitude: number, latitude: number) {
   const boundedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
   return {
     x: (longitude * WEB_MERCATOR_LIMIT) / 180,
     y: (Math.log(Math.tan(((90 + boundedLatitude) * Math.PI) / 360)) * WEB_MERCATOR_LIMIT) / Math.PI,
+  };
+}
+
+function fromWebMercator(x: number, y: number) {
+  return {
+    longitude: (x * 180) / WEB_MERCATOR_LIMIT,
+    latitude: (Math.atan(Math.sinh((y / WEB_MERCATOR_LIMIT) * Math.PI)) * 180) / Math.PI,
   };
 }
 
@@ -172,6 +189,91 @@ async function fetchRaster(candidates: RasterCandidate[], purpose: string) {
   throw new Error(`DP2 bloquée : ${purpose} officielle indisponible après essai des flux IGN principal et de secours.`);
 }
 
+function isLonLat(value: unknown): value is LonLat {
+  return Array.isArray(value)
+    && value.length >= 2
+    && Number.isFinite(Number(value[0]))
+    && Number.isFinite(Number(value[1]));
+}
+
+function parseParcelGeometry(value: unknown): ParcelGeometry {
+  if (!value || typeof value !== "object") throw new Error("DP2 : géométrie cadastrale officielle absente.");
+  const raw = value as { type?: unknown; coordinates?: unknown };
+  if (raw.type === "Polygon" && Array.isArray(raw.coordinates)) {
+    const rings = raw.coordinates as unknown[];
+    if (!rings.length || !rings.every((ring) => Array.isArray(ring) && ring.length >= 4 && ring.every(isLonLat))) {
+      throw new Error("DP2 : géométrie cadastrale Polygon invalide.");
+    }
+    return { type: "Polygon", coordinates: rings as LonLat[][] };
+  }
+  if (raw.type === "MultiPolygon" && Array.isArray(raw.coordinates)) {
+    const polygons = raw.coordinates as unknown[];
+    if (!polygons.length || !polygons.every((polygon) => Array.isArray(polygon)
+      && polygon.length > 0
+      && polygon.every((ring) => Array.isArray(ring) && ring.length >= 4 && ring.every(isLonLat)))) {
+      throw new Error("DP2 : géométrie cadastrale MultiPolygon invalide.");
+    }
+    return { type: "MultiPolygon", coordinates: polygons as LonLat[][][] };
+  }
+  throw new Error(`DP2 : type de géométrie cadastrale non pris en charge (${String(raw.type ?? "inconnu")}).`);
+}
+
+function parcelPoints(geometry: ParcelGeometry): LonLat[] {
+  return geometry.type === "Polygon"
+    ? geometry.coordinates.flat()
+    : geometry.coordinates.flatMap((polygon) => polygon.flat());
+}
+
+async function fetchOfficialParcel(args: { cityCode: string; section: string; parcelNumber: string }) {
+  const url = new URL("https://apicarto.ign.fr/api/cadastre/parcelle");
+  url.searchParams.set("code_insee", args.cityCode);
+  url.searchParams.set("section", args.section);
+  url.searchParams.set("numero", args.parcelNumber);
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`DP2 : APICARTO Cadastre indisponible (${response.status}).`);
+  const payload = await response.json() as {
+    features?: Array<{ geometry?: unknown; properties?: { contenance?: number; idu?: string } }>;
+  };
+  const feature = payload.features?.[0];
+  if (!feature?.geometry) throw new Error("DP2 : APICARTO n'a retourné aucune géométrie pour la parcelle cible.");
+  const geometry = parseParcelGeometry(feature.geometry);
+  const areaM2 = Number(feature.properties?.contenance);
+  if (!Number.isFinite(areaM2) || areaM2 <= 0) throw new Error("DP2 : superficie cadastrale officielle absente.");
+  return { geometry, areaM2, idu: String(feature.properties?.idu ?? "").trim() };
+}
+
+function metricFrameForParcel(geometry: ParcelGeometry, fallbackLongitude: number, fallbackLatitude: number) {
+  const projected = parcelPoints(geometry).map(([longitude, latitude]) => toWebMercator(longitude, latitude));
+  if (!projected.length) throw new Error("DP2 : parcelle officielle sans coordonnées exploitables.");
+  const minX = Math.min(...projected.map((point) => point.x));
+  const maxX = Math.max(...projected.map((point) => point.x));
+  const minY = Math.min(...projected.map((point) => point.y));
+  const maxY = Math.max(...projected.map((point) => point.y));
+  const parcelWidth = Math.max(1, maxX - minX);
+  const parcelHeight = Math.max(1, maxY - minY);
+
+  // Small/normal residential parcels are centered from their official geometry.
+  // Very large rural parcels stay anchored on the geocoded address so a distant
+  // parcel centroid cannot move the dwelling outside the metric frame.
+  const compactParcel = parcelWidth <= 120 && parcelHeight <= 90;
+  const center = compactParcel
+    ? fromWebMercator((minX + maxX) / 2, (minY + maxY) / 2)
+    : { longitude: fallbackLongitude, latitude: fallbackLatitude };
+  const desiredWidth = compactParcel
+    ? Math.max(45, parcelWidth * 2.2, (parcelHeight * 2.2) / MASS_ASPECT)
+    : 90;
+  const widthMeters = clamp(desiredWidth, 45, 140);
+  return {
+    longitude: center.longitude,
+    latitude: center.latitude,
+    widthMeters,
+    heightMeters: widthMeters * MASS_ASPECT,
+  };
+}
+
 async function resolveIgnDp2Context(address: string): Promise<IgnDp2Context> {
   const cleanAddress = address.trim();
   if (cleanAddress.length < 8) throw new Error("Adresse trop imprécise pour les sources IGN.");
@@ -188,12 +290,14 @@ async function resolveIgnDp2Context(address: string): Promise<IgnDp2Context> {
   const feature = payload.features?.[0];
   const coordinates = feature?.geometry?.coordinates;
   if (!coordinates) throw new Error("Adresse non retrouvée par l'IGN.");
-  const [longitude, latitude] = coordinates;
+  const [addressLongitude, addressLatitude] = coordinates;
   const props = feature?.properties ?? {};
+  const cityCode = String(props.citycode ?? "").trim();
+  if (!cityCode) throw new Error("DP2 : code INSEE de la commune introuvable.");
 
   const reverse = new URL("https://data.geopf.fr/geocodage/reverse");
-  reverse.searchParams.set("lon", String(longitude));
-  reverse.searchParams.set("lat", String(latitude));
+  reverse.searchParams.set("lon", String(addressLongitude));
+  reverse.searchParams.set("lat", String(addressLatitude));
   reverse.searchParams.set("index", "parcel");
   reverse.searchParams.set("limit", "1");
   const reverseResponse = await fetch(reverse, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
@@ -202,43 +306,33 @@ async function resolveIgnDp2Context(address: string): Promise<IgnDp2Context> {
   const parcel = reversePayload.features?.[0]?.properties ?? {};
   const section = String(parcel.section ?? "").trim();
   const parcelNumber = String(parcel.number ?? parcel.numero ?? "").trim();
-  const officialParcelId = String(parcel.idu ?? parcel.id ?? parcel.parcelle ?? "").trim();
-  const parcelReference = [section, parcelNumber].filter(Boolean).join(" ") || officialParcelId;
-  if (!parcelReference) throw new Error("La parcelle cadastrale n'a pas été déterminée avec certitude.");
+  const reverseParcelId = String(parcel.idu ?? parcel.id ?? parcel.parcelle ?? "").trim();
+  if (!section || !parcelNumber) throw new Error("DP2 : section ou numéro cadastral introuvable.");
 
-  const situationWidthMeters = 900;
-  const situationHeightMeters = 642.9;
-  const massWidthMeters = 90;
-  const massHeightMeters = 64.3;
-  const [situationRaster, massRaster, cadastralRaster] = await Promise.all([
-    fetchRaster(orthophotoCandidates(longitude, latitude, situationWidthMeters, situationHeightMeters), "la vue de contexte IGN"),
-    fetchRaster(orthophotoCandidates(longitude, latitude, massWidthMeters, massHeightMeters), "la vue métrique rapprochée IGN"),
-    fetchRaster(cadastralCandidates(longitude, latitude, massWidthMeters, massHeightMeters), "la couche cadastrale"),
+  const officialParcel = await fetchOfficialParcel({ cityCode, section, parcelNumber });
+  const parcelReference = [section, parcelNumber].filter(Boolean).join(" ") || officialParcel.idu || reverseParcelId;
+  const frame = metricFrameForParcel(officialParcel.geometry, addressLongitude, addressLatitude);
+
+  const [massRaster, cadastralRaster] = await Promise.all([
+    fetchRaster(orthophotoCandidates(frame.longitude, frame.latitude, frame.widthMeters, frame.heightMeters), "la vue métrique rapprochée IGN centrée sur la parcelle"),
+    fetchRaster(cadastralCandidates(frame.longitude, frame.latitude, frame.widthMeters, frame.heightMeters), "la couche cadastrale"),
   ]);
 
   return {
     normalizedAddress: String(props.label ?? props.name ?? cleanAddress),
-    municipality: String(props.city ?? props.citycode ?? ""),
+    municipality: String(props.city ?? ""),
     parcelReference,
-    longitude,
-    latitude,
-    situation: {
-      role: "satellite",
-      mimeType: "image/png",
-      base64: situationRaster.base64,
-      filename: "ign-dp2-contexte.png",
-      widthPx: IMAGE_WIDTH,
-      heightPx: IMAGE_HEIGHT,
-      metersPerPixel: situationWidthMeters / IMAGE_WIDTH,
-    },
+    parcelAreaM2: officialParcel.areaM2,
+    longitude: frame.longitude,
+    latitude: frame.latitude,
     mass: {
       role: "satellite_mass",
       mimeType: "image/png",
       base64: massRaster.base64,
-      filename: "ign-dp2-masse.png",
+      filename: `ign-dp2-parcelle-${parcelReference.replace(/\s+/g, "-")}.png`,
       widthPx: IMAGE_WIDTH,
       heightPx: IMAGE_HEIGHT,
-      metersPerPixel: massWidthMeters / IMAGE_WIDTH,
+      metersPerPixel: frame.widthMeters / IMAGE_WIDTH,
     },
     cadastralOverlay: cadastralRaster.base64,
     imagerySource: massRaster.source,
@@ -318,10 +412,10 @@ function buildDp2Svg(context: IgnDp2Context, project: Awaited<ReturnType<OpenAIV
     <image href="${orthophoto}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none"/>
     <image href="${cadastre}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none" opacity=".92"/>
     ${panelSvg(polygons, x, y, imageWidth, imageHeight)}
-    <rect x="82" y="650" width="465" height="86" rx="10" fill="#fff" fill-opacity=".94"/>
+    <rect x="82" y="650" width="485" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
     <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">PARCELLE ${escapeXml(context.parcelReference)} · ${project.exactPanelCount} MODULES</text>
     <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Calepinage ${project.array.rows} × ${project.array.columns} · ${escapeXml(project.array.orientation)}</text>
-    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Orthophoto + cadastre IGN · projection géométrique contrôlée</text>
+    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">${Math.round(context.parcelAreaM2)} m² cadastraux · projection géométrique contrôlée</text>
     <text x="1082" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1082 217 L1070 251 L1082 242 L1094 251 Z" fill="#102a56"/>`;
 
@@ -349,12 +443,11 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
 
-  // DP2 has its own evidence policy: the official IGN views provide the metric
-  // orthographic evidence and exactly one user roof photograph links that geometry
-  // to the real building. The 3-photo rule belongs to the complete dossier/DP6,
-  // not to the isolated DP2 workshop.
+  // DP2 is deliberately narrow: one parcel-centered metric IGN image is matched
+  // against one real roof photograph. The wide situation view belongs to DP1 and
+  // must not introduce neighboring roofs into isolated DP2 face association.
   const analyzer = new OpenAIVisionAnalyzer(config.openaiApiKey, config.analysisModel, 1);
-  const project = await analyzer.analyze(form, [ign.situation, ign.mass, roofPhoto]);
+  const project = await analyzer.analyze(form, [ign.mass, roofPhoto]);
   const svg = buildDp2Svg(ign, project);
 
   return {
@@ -365,8 +458,8 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
     text: svg,
     sourceSummary: [
       `IGN Géoplateforme — adresse : ${ign.normalizedAddress}`,
-      `IGN Géoplateforme — parcelle : ${ign.parcelReference}`,
-      `IGN Géoplateforme — orthophoto : ${ign.imagerySource}`,
+      `APICARTO Cadastre — parcelle cible : ${ign.parcelReference} (${Math.round(ign.parcelAreaM2)} m²)`,
+      `IGN Géoplateforme — orthophoto métrique recentrée sur la parcelle : ${ign.imagerySource}`,
       `IGN Géoplateforme — cadastre : ${ign.cadastreSource}`,
       `OpenAI ${config.analysisModel} — compréhension du pan à partir de la vue toiture`,
       "PV Layout Engine — dimensions fabricant et calepinage déterministe",
@@ -376,8 +469,9 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
       passed: true,
       score: project.roof.confidence,
       checks: [
-        "Politique DP2 : 1 vue toiture utilisateur + preuves officielles IGN",
-        `Parcelle ${ign.parcelReference} identifiée`,
+        "Politique DP2 : 1 vue toiture utilisateur + 1 vue métrique IGN centrée sur la parcelle officielle",
+        `Parcelle ${ign.parcelReference} identifiée par APICARTO`,
+        "Aucune vue aérienne large concurrente envoyée au Roof Understanding Engine",
         "Couche cadastrale récupérée séparément de l'orthophoto",
         `Roof Understanding Engine exécuté avec OpenAI (${config.analysisModel})`,
         `${project.exactPanelCount} modules projetés par homographie`,
