@@ -178,7 +178,7 @@ test("rejects an allocated surface without a usable real project photograph", as
   const onlyIgn = face({ views: face().views.filter((view) => view.role === "satellite_mass") });
   assert.throws(
     () => gateAllocatedSurfaces([onlyIgn], "gable", ["A"]),
-    /not demonstrated in a usable real project photograph/,
+    /reliable real-photo observation/,
   );
 });
 
@@ -262,5 +262,5 @@ test("never offers a face without real-photo evidence to the Layout Engine", asy
   const onlyIgn = face({ views: face().views.filter((view) => view.role === "satellite_mass") });
   const result = selectLayoutEligibleSurfaces([onlyIgn], "gable");
   assert.deepEqual(result.eligibleFaceIds, []);
-  assert.ok(result.rejected.A?.some((message) => message.includes("usable real project photograph")));
+  assert.ok(result.rejected.A?.some((message) => message.includes("reliable real-photo observation")));
 });
