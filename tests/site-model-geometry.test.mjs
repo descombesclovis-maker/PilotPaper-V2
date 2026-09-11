@@ -11,8 +11,10 @@ after(async () => { await vite.close(); });
 const lidarModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/lidarAltimetry.ts");
 const roofModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/roofGeometryEngine.ts");
 const parcelModule = await vite.ssrLoadModule("/lib/dp-ai-engine/context/officialParcel.ts");
+const assistedModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/assistedRoofRecovery.ts");
 const dp2Source = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
 const buildingSource = await readFile(new URL("../lib/dp-ai-engine/site-model/buildingResolver.ts", import.meta.url), "utf8");
+const siteModelSource = await readFile(new URL("../lib/dp-ai-engine/site-model/siteModelEngine.ts", import.meta.url), "utf8");
 
 function lonLatFromLocal(origin, x, y) {
   const base = parcelModule.toWebMercator(origin[0], origin[1]);
@@ -40,6 +42,19 @@ test("MNX decoder can recover an unlabeled surface/terrain/height triple determi
   assert.equal(values.heightM, 8.5);
 });
 
+test("polygon LiDAR grid is deterministic and remains inside the selected roof polygon", () => {
+  const origin = [4.75, 46.30];
+  const polygon = [
+    lonLatFromLocal(origin, -4, -3),
+    lonLatFromLocal(origin, 4, -3),
+    lonLatFromLocal(origin, 4, 3),
+    lonLatFromLocal(origin, -4, 3),
+  ];
+  const grid = lidarModule.buildPolygonSamplingGrid(polygon, 1);
+  assert.ok(grid.points.length >= 30);
+  assert.equal(grid.stepM, 1);
+});
+
 test("LiDAR roof geometry extracts multiple planes and keeps protrusions out of the fitted roof planes", () => {
   const origin = [4.75, 46.30];
   const footprint = [
@@ -65,6 +80,35 @@ test("LiDAR roof geometry extracts multiple planes and keeps protrusions out of 
   assert.ok(roof.planes.every((plane) => plane.rmsErrorM < 0.30));
   assert.ok(roof.planes.every((plane) => plane.projectionQuadLocalM.length === 4));
   assert.ok(roof.obstacles.some((obstacle) => obstacle.maxHeightAbovePlaneM > 0.5));
+});
+
+test("four-click Assisted Recovery converts only selection coordinates, never user-entered metres", () => {
+  const frame = {
+    longitude: 4.75,
+    latitude: 46.30,
+    widthMeters: 100,
+    heightMeters: 80,
+    minX: 500,
+    maxX: 600,
+    minY: 900,
+    maxY: 980,
+  };
+  const quad = [
+    { x: 0.25, y: 0.70 },
+    { x: 0.75, y: 0.70 },
+    { x: 0.75, y: 0.30 },
+    { x: 0.25, y: 0.30 },
+  ];
+  const polygon = assistedModule.assistedQuadToLonLat(quad, frame);
+  assert.equal(polygon.length, 4);
+  assert.ok(polygon.flat().every(Number.isFinite));
+});
+
+test("Assisted SiteModel still derives metrics from LiDAR after four-click face selection", () => {
+  assert.match(siteModelSource, /buildAssistedSiteModelFromParcel/);
+  assert.match(siteModelSource, /recoverRoofFromFourClicks/);
+  assert.match(siteModelSource, /Sélection uniquement ; aucune dimension métrique saisie/);
+  assert.match(siteModelSource, /kind: "lidar-altimetry"/);
 });
 
 test("DP2 tries official SiteModel geometry before any legacy vision fallback", () => {
