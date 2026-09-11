@@ -8,6 +8,7 @@
     <AssemblyName>PilotPaper-V1</AssemblyName>
     <RootNamespace>PilotPaperLauncher</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationIcon Condition="Exists('..\pilotpaper.ico')">..\pilotpaper.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
