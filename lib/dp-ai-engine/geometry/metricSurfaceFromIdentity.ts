@@ -16,6 +16,70 @@ function polygonArea(poly: Point2D[]) {
   return Math.abs(area) / 2;
 }
 
+function pointOnSegment(point: Point2D, a: Point2D, b: Point2D, epsilon = 1e-9) {
+  const cross = (point.y - a.y) * (b.x - a.x) - (point.x - a.x) * (b.y - a.y);
+  if (Math.abs(cross) > epsilon) return false;
+  const dot = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
+  if (dot < -epsilon) return false;
+  const lengthSq = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+  return dot <= lengthSq + epsilon;
+}
+
+function pointInPolygonInclusive(point: Point2D, polygon: Point2D[]) {
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    if (pointOnSegment(point, polygon[j]!, polygon[i]!)) return true;
+  }
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i]!;
+    const b = polygon[j]!;
+    const intersects = (a.y > point.y) !== (b.y > point.y)
+      && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || 1e-12) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function orientation(a: Point2D, b: Point2D, c: Point2D) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function segmentsIntersect(a1: Point2D, a2: Point2D, b1: Point2D, b2: Point2D) {
+  const epsilon = 1e-9;
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+  if (((o1 > epsilon && o2 < -epsilon) || (o1 < -epsilon && o2 > epsilon))
+    && ((o3 > epsilon && o4 < -epsilon) || (o3 < -epsilon && o4 > epsilon))) return true;
+  if (Math.abs(o1) <= epsilon && pointOnSegment(b1, a1, a2)) return true;
+  if (Math.abs(o2) <= epsilon && pointOnSegment(b2, a1, a2)) return true;
+  if (Math.abs(o3) <= epsilon && pointOnSegment(a1, b1, b2)) return true;
+  if (Math.abs(o4) <= epsilon && pointOnSegment(a2, b1, b2)) return true;
+  return false;
+}
+
+/**
+ * Deterministically decides whether two polygons touch or overlap. This is used
+ * to keep contextual obstacles on neighbouring roofs out of the selected
+ * SurfaceSupport without relying on an AI-written description.
+ */
+export function polygonsOverlapOrTouch(a: Point2D[], b: Point2D[]) {
+  if (a.length < 3 || b.length < 3) return false;
+  if (a.some((point) => pointInPolygonInclusive(point, b))) return true;
+  if (b.some((point) => pointInPolygonInclusive(point, a))) return true;
+  for (let i = 0; i < a.length; i++) {
+    const a1 = a[i]!;
+    const a2 = a[(i + 1) % a.length]!;
+    for (let j = 0; j < b.length; j++) {
+      const b1 = b[j]!;
+      const b2 = b[(j + 1) % b.length]!;
+      if (segmentsIntersect(a1, a2, b1, b2)) return true;
+    }
+  }
+  return false;
+}
+
 function projectiveCoefficients(q: [Point2D, Point2D, Point2D, Point2D]) {
   const [bl, br, tr, tl] = q;
   const dx1 = br.x - tr.x;
@@ -141,16 +205,35 @@ export function metricSurfaceFromIdentity(args: {
 
   const basis = metricBasis(quad, widthPx, heightPx, mpp, slopeDeg);
   const obstaclePolygonsMm = identity.obstacles.flatMap((obstacle) => {
-    let metricPolygon = obstacle.metricPolygonNormalized ?? undefined;
-    if (!metricPolygon?.length && obstacle.roofPolygonNormalized?.length) {
+    const roofPolygon = obstacle.roofPolygonNormalized ?? undefined;
+    const metricPolygonDirect = obstacle.metricPolygonNormalized ?? undefined;
+
+    // Contextual obstacles on neighbouring roofs/buildings must never block the
+    // selected support. Classification is purely geometric, not text based.
+    if (roofPolygon?.length >= 3
+      && roofPolygon.every(normalizedPoint)
+      && !polygonsOverlapOrTouch(roofPolygon, identity.roofPlane.polygonNormalized)) {
+      return [];
+    }
+    if (metricPolygonDirect?.length >= 3
+      && metricPolygonDirect.every(normalizedPoint)
+      && !polygonsOverlapOrTouch(metricPolygonDirect, identity.metricPlane.polygonNormalized)) {
+      return [];
+    }
+
+    let metricPolygon = metricPolygonDirect;
+    if (!metricPolygon?.length && roofPolygon?.length) {
       metricPolygon = reprojectPolygonBetweenQuads(
         identity.roofPlane.polygonNormalized,
         identity.metricPlane.polygonNormalized,
-        obstacle.roofPolygonNormalized,
+        roofPolygon,
       );
     }
     if (!metricPolygon?.length || metricPolygon.length < 3 || !metricPolygon.every(normalizedPoint)) {
-      throw new Error(`Surface métrique : l'obstacle « ${obstacle.description} » est visible mais son emprise métrique ne peut pas être démontrée.`);
+      throw new Error(`Surface métrique : l'obstacle « ${obstacle.description} » touche potentiellement le pan sélectionné mais son emprise métrique ne peut pas être démontrée.`);
+    }
+    if (!polygonsOverlapOrTouch(metricPolygon, identity.metricPlane.polygonNormalized)) {
+      return [];
     }
     return [{
       type: obstacle.type,
