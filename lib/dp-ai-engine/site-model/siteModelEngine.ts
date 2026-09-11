@@ -7,7 +7,7 @@ import { recoverRoofFromFourClicks, type AssistedRoofQuad } from "./assistedRoof
 import { resolveTargetBuilding } from "./buildingResolver";
 import { sampleBuildingLidarHeights } from "./lidarAltimetry";
 import { buildRoofModelFromLidar } from "./roofGeometryEngine";
-import type { SiteModel } from "./types";
+import type { BuildingFootprint, SiteModel, SiteModelEvidence } from "./types";
 
 export class AssistedRecoveryRequiredError extends Error {
   readonly code = "SITE_MODEL_ASSISTED_RECOVERY_REQUIRED";
@@ -19,7 +19,7 @@ export class AssistedRecoveryRequiredError extends Error {
 
 export function inspectAutomaticSiteModel(model: SiteModel) {
   const issues: string[] = [];
-  if (!model.building.polygon.length || (model.building.areaM2 ?? 0) < 12) {
+  if (model.mode === "automatic" && (!model.building.polygon.length || (model.building.areaM2 ?? 0) < 12)) {
     issues.push("L'empreinte du bâtiment cible est trop faible ou absente.");
   }
   if (model.roof.coverageConfidence < 0.68) {
@@ -86,6 +86,10 @@ export async function buildAutomaticSiteModelFromParcel(parcel: OfficialParcelCo
  * Assisted mode changes only one thing: the operator identifies the intended
  * physical roof face with four clicks. Metric geometry, slope and obstacles are
  * still derived from LiDAR and validated by the same SiteModel contract.
+ *
+ * This path deliberately remains usable when BD TOPO is the failing evidence:
+ * the four-click polygon becomes the traced support while LiDAR remains the
+ * metric source of truth.
  */
 export async function buildAssistedSiteModelFromParcel(args: {
   parcel: OfficialParcelContext;
@@ -93,12 +97,34 @@ export async function buildAssistedSiteModelFromParcel(args: {
   quadNormalized: AssistedRoofQuad;
   faceId?: string;
 }): Promise<SiteModel> {
-  const building = await resolveTargetBuilding(args.parcel);
   const recovered = await recoverRoofFromFourClicks({
     frame: args.frame,
     quadNormalized: args.quadNormalized,
     faceId: args.faceId,
   });
+
+  let building: BuildingFootprint = recovered.support;
+  let buildingWarning = "BD TOPO non requis pour la récupération : le support correspond aux 4 coins sélectionnés.";
+  let buildingEvidence: SiteModelEvidence = {
+    kind: "manual",
+    source: "Support sélectionné par 4 coins",
+    confidence: 1,
+    notes: ["Sélection uniquement ; aucune dimension métrique saisie."],
+  };
+  try {
+    const officialBuilding = await resolveTargetBuilding(args.parcel);
+    building = officialBuilding;
+    buildingWarning = "Le pan a été sélectionné manuellement ; l'empreinte BD TOPO reste une preuve de contexte uniquement.";
+    buildingEvidence = {
+      kind: "bdtopo",
+      source: `BDTOPO_V3:batiment · ${officialBuilding.id}`,
+      confidence: 0.98,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "BD TOPO indisponible";
+    buildingWarning = `Support assisté utilisé car BD TOPO n'a pas pu être démontré : ${reason}`;
+  }
+
   const model: SiteModel = {
     version: "pilotpaper-site-model-v1",
     mode: "assisted",
@@ -116,11 +142,7 @@ export async function buildAssistedSiteModelFromParcel(args: {
         source: `APICARTO Cadastre · ${args.parcel.parcelReference}`,
         confidence: 1,
       },
-      {
-        kind: "bdtopo",
-        source: `BDTOPO_V3:batiment · ${building.id}`,
-        confidence: 0.98,
-      },
+      buildingEvidence,
       {
         kind: "manual",
         source: "4 coins du pan sélectionnés par l'opérateur",
@@ -133,7 +155,10 @@ export async function buildAssistedSiteModelFromParcel(args: {
         confidence: recovered.roof.coverageConfidence,
       },
     ],
-    warnings: ["SiteModel récupéré en mode assisté après échec ou ambiguïté de l'automatique."],
+    warnings: [
+      "SiteModel récupéré en mode assisté après échec ou ambiguïté de l'automatique.",
+      buildingWarning,
+    ],
   };
   const issues = inspectAutomaticSiteModel(model);
   if (issues.length) {
