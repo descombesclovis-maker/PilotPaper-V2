@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { buildDpPdf, type DpProjectRecord, type DpSourceFile } from "@/lib/dp-pdf";
 import { requiredSourceKinds, validateGeneratedPdf, validateGenerationInputs } from "@/lib/generation-gate";
-import { isExplicitTestExportEnabled } from "@/lib/generation-mode";
+import { generationValidationStatus, isExplicitTestExportEnabled } from "@/lib/generation-mode";
 import { getRequestUser } from "@/lib/request-user";
 import { runDPAI } from "@/lib/dp-ai-gate";
 import { inspectRenderedSourceBindings } from "@/lib/dp-ai-engine/quality/sourceBindingInspector";
@@ -194,8 +194,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   const unverifiedIssues = [...sourceBindingIssues, ...qualityIssues, ...postflightIssues];
-  const testUnverified = testExport && unverifiedIssues.length > 0;
-  const validationStatus = testUnverified ? "test_unverified" : "verified";
+  const validationStatus = generationValidationStatus(testExport);
+  const testUnverified = validationStatus === "test_unverified";
   const generatedAt = new Date().toISOString();
   const fileId = crypto.randomUUID();
   const auditFileId = crypto.randomUUID();
