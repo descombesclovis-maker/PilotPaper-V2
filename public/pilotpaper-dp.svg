@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PilotPaper dP">
+  <defs>
+    <linearGradient id="pilotBlue" x1="70" y1="420" x2="260" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0a58a6"/>
+      <stop offset="1" stop-color="#173b67"/>
+    </linearGradient>
+    <linearGradient id="paperCharcoal" x1="280" y1="100" x2="438" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#16191d"/>
+      <stop offset="1" stop-color="#30343a"/>
+    </linearGradient>
+  </defs>
+  <!-- P inversé : sa boucle basse suggère discrètement le D de DP. -->
+  <path d="M220 74h42v364h-42z" rx="21" fill="url(#pilotBlue)"/>
+  <path d="M226 244h-76c-58 0-102 39-102 96s44 98 102 98h76v-42h-72c-34 0-59-22-59-56 0-33 25-54 59-54h72z" fill="url(#pilotBlue)"/>
+  <!-- P droit : même axe visuel, sans croisement avec le premier glyphe. -->
+  <path d="M274 74h42v364h-42z" fill="url(#paperCharcoal)"/>
+  <path d="M310 74h61c57 0 93 38 93 91 0 54-36 93-93 93h-61v-42h56c33 0 53-19 53-51 0-31-20-49-53-49h-56z" fill="url(#paperCharcoal)"/>
+</svg>
