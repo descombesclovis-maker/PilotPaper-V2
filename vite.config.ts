@@ -23,9 +23,12 @@ const workerEnvironmentKeys = [
 ] as const;
 
 const runtimeVars = Object.fromEntries(
-  workerEnvironmentKeys
-    .map((key) => [key, process.env[key]] as const)
-    .filter((entry): entry is readonly [string, string] => typeof entry[1] === "string" && entry[1].length > 0),
+  workerEnvironmentKeys.flatMap((key) => {
+    const value = process.env[key];
+    return typeof value === "string" && value.length > 0
+      ? ([[key, value]] as const)
+      : [];
+  }),
 );
 
 const localBindingConfig = {
