@@ -8,17 +8,21 @@ const raster = await readFile(new URL("../lib/dp-ai-engine/context/ignRaster.ts"
 const route = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
 const contract = await readFile(new URL("../lib/dp-piece-contract.ts", import.meta.url), "utf8");
 
-test("DP2 isolated workshop requires one roof photo, not the complete-dossier three-photo rule", () => {
-  assert.match(engine, /une vue oblique de toiture exploitable est requise/);
+test("DP2 isolated workshop can use one roof photo for fallback without the complete-dossier three-photo rule", () => {
+  assert.match(engine, /une vue oblique de toiture exploitable est requise pour le fallback visuel/);
   assert.doesNotMatch(engine, /At least 3 independent user photograph/);
   assert.match(identity, /realImage/);
 });
 
-test("DP2 routes through its dedicated orchestrator and actually requires OpenAI configuration", () => {
+test("DP2 routes through its dedicated orchestrator and only requires OpenAI when geometry-first fallback is needed", () => {
   assert.match(route, /generateDp2Piece/);
   assert.match(route, /input\.dp === 2/);
-  assert.match(engine, /if \(!config\.openaiApiKey\) throw new Error\("OPENAI_API_KEY absente du poste local\."\)/);
-  assert.match(engine, /Cross-View Surface Identity Engine/);
+  assert.match(engine, /buildAutomaticSiteModelFromParcel/);
+  assert.match(engine, /const config = configFromEnv\(\)/);
+  assert.match(engine, /OPENAI_API_KEY absente pour le fallback/);
+  const primaryAt = engine.indexOf("buildAutomaticSiteModelFromParcel(official)");
+  const fallbackAt = engine.indexOf("generateWithLegacyVision(input, form, official, reason)");
+  assert.ok(primaryAt >= 0 && fallbackAt > primaryAt);
 });
 
 test("DP2 consumes separate shared orthophoto and cadastral raster layers", () => {
