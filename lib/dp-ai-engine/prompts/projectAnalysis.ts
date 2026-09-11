@@ -20,13 +20,21 @@ Hard facts:
 - roof-selection mode: ${form.roofSelection?.mode ?? "automatic"}
 ${form.roofSelection?.priorityFaceId?`- priority face: ${form.roofSelection.priorityFaceId}`:""}
 
-DETECT ALL DISTINCT USABLE ROOF/SUPPORT PLANES, not one merged roof silhouette.
+CROSS-VIEW IDENTITY IS CRITICAL:
+- First match the SAME physical building and the SAME physical roof plane across the authoritative image roles before assigning face IDs.
+- A face visible in both satellite_mass and roof evidence MUST keep one identical face ID across those views. Never create a separate ID merely because the camera angle changed.
+- In isolated DP2, satellite_mass is the official metric view centered on the target cadastral parcel and roof is the real project photograph. Use roof shape, ridge/eave axis, obstacle placement, annexes and relative proportions to establish correspondence.
+- Ignore neighboring roofs that do not correspond to the real roof photograph, even when they are visible in the metric image.
+- If the correspondence is genuinely ambiguous, lower confidence and report the ambiguity; do not silently attach the roof photograph to a different building.
+
+DETECT ALL DISTINCT USABLE ROOF/SUPPORT PLANES OF THE TARGET BUILDING, not one merged roof silhouette.
 Assign stable IDs A, B, C... consistently across views. If form.roofFaces already provides IDs, preserve those IDs.
 For EACH face and EACH view where it is visible, return that face polygon in normalized 0..1 image coordinates.
 When a face is quadrilateral, order points as lower-edge-left, lower-edge-right, upper-edge-right, upper-edge-left relative to that plane. Never merge two slopes separated by a ridge/hip.
 Identify gutter/low edge and ridge/high edge when applicable. A boundary between faces is hard: modules may be allocated independently to both faces, but no individual module or continuous panel polygon may cross it.
 
 OBSTACLES: report chimneys, roof windows, vents, dormers, parapets and other real exclusion zones, attached to the correct face and view. Never erase an obstacle merely because the requested quantity is large.
+When the same obstacle can be identified in more than one view, keep it attached to the SAME face. Do not duplicate one physical chimney or roof window as unrelated obstacles on different face IDs.
 
 MATERIAL/TOPOLOGY RULES:
 ${rules.visualWarnings.map(x=>`- ${x}`).join("\n")}
