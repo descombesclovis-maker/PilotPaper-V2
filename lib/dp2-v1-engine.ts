@@ -8,6 +8,8 @@ import {
   metricFrameForParcel,
   projectParcelRingNormalized,
   resolveOfficialParcelContext,
+  toWebMercator,
+  type MetricFrame,
   type OfficialParcelContext,
 } from "@/lib/dp-ai-engine/context/officialParcel";
 import {
@@ -38,8 +40,13 @@ export const validateDp2CrossViewIdentity = validateCrossViewSurfaceIdentity;
 type Dp2OfficialContext = OfficialParcelContext & {
   parcelPolygonNormalized: Point2D[];
   mass: InputPhoto;
+  metricFrame: MetricFrame;
+  presentationFrame: MetricFrame;
+  presentationOrthophoto: string;
   cadastralOverlay: string;
+  addressPointNormalized: Point2D;
   imagerySource: string;
+  presentationImagerySource: string;
   cadastreSource: string;
 };
 
@@ -64,45 +71,80 @@ function positiveInteger(value: unknown, label: string) {
   return parsed;
 }
 
+function normalizedPointInFrame(longitude: number, latitude: number, frame: MetricFrame): Point2D {
+  const point = toWebMercator(longitude, latitude);
+  return {
+    x: (point.x - frame.minX) / (frame.maxX - frame.minX),
+    y: (frame.maxY - point.y) / (frame.maxY - frame.minY),
+  };
+}
+
+function reframePoint(point: Point2D, source: MetricFrame, target: MetricFrame): Point2D {
+  const x = source.minX + point.x * (source.maxX - source.minX);
+  const y = source.maxY - point.y * (source.maxY - source.minY);
+  return {
+    x: (x - target.minX) / (target.maxX - target.minX),
+    y: (target.maxY - y) / (target.maxY - target.minY),
+  };
+}
+
 /**
- * DP2-specific raster composition. Address/cadastral truth is resolved by the
- * shared officialParcel engine so DP1/DP2/future pieces cannot disagree on site identity.
+ * DP2 deliberately uses two geographic frames:
+ * - metricFrame: close, calibrated evidence for roof understanding/layout;
+ * - presentationFrame: wider cadastral context for the human-readable DP2.
+ * Changing the visual zoom must never degrade the metric engine.
  */
 async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialContext> {
   const site = await resolveOfficialParcelContext(address);
-  const frame = metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
+  const metricFrame = metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
     aspect: MASS_ASPECT,
     minWidthMeters: 45,
     maxWidthMeters: 140,
     parcelScale: 2.2,
     fallbackWidthMeters: 90,
   });
-  const parcelPolygonNormalized = projectParcelRingNormalized(site.parcelGeometry, frame);
-  const [massRaster, cadastralRaster] = await Promise.all([
+  const presentationFrame = metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
+    aspect: MASS_ASPECT,
+    minWidthMeters: 130,
+    maxWidthMeters: 280,
+    parcelScale: 5.2,
+    fallbackWidthMeters: 180,
+  });
+  const parcelPolygonNormalized = projectParcelRingNormalized(site.parcelGeometry, metricFrame);
+  const [massRaster, presentationRaster, cadastralRaster] = await Promise.all([
     fetchIgnRaster(
-      orthophotoCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "DP2 : vue métrique IGN centrée sur la parcelle", minBytes: 2_000, required: true },
+      orthophotoCandidates({ frame: metricFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
+      { purpose: "DP2 : vue métrique IGN serrée pour le moteur", minBytes: 2_000, required: true },
     ),
     fetchIgnRaster(
-      cadastralCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT }),
-      { purpose: "DP2 : couche cadastrale", minBytes: 1_000, required: true },
+      orthophotoCandidates({ frame: presentationFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
+      { purpose: "DP2 : vue de présentation élargie", minBytes: 2_000, required: true },
+    ),
+    fetchIgnRaster(
+      cadastralCandidates({ frame: presentationFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT }),
+      { purpose: "DP2 : contexte cadastral élargi", minBytes: 1_000, required: true },
     ),
   ]);
-  if (!massRaster || !cadastralRaster) throw new Error("DP2 : contexte IGN incomplet.");
+  if (!massRaster || !presentationRaster || !cadastralRaster) throw new Error("DP2 : contexte IGN incomplet.");
   return {
     ...site,
     parcelPolygonNormalized,
+    metricFrame,
+    presentationFrame,
     mass: {
       role: "satellite_mass",
       mimeType: "image/png",
       base64: massRaster.base64,
-      filename: `ign-dp2-${site.parcelReference.replace(/\s+/g, "-")}.png`,
+      filename: `ign-dp2-metric-${site.parcelReference.replace(/\s+/g, "-")}.png`,
       widthPx: IMAGE_WIDTH,
       heightPx: IMAGE_HEIGHT,
-      metersPerPixel: frame.widthMeters / IMAGE_WIDTH,
+      metersPerPixel: metricFrame.widthMeters / IMAGE_WIDTH,
     },
+    presentationOrthophoto: presentationRaster.base64,
     cadastralOverlay: cadastralRaster.base64,
+    addressPointNormalized: normalizedPointInFrame(site.longitude, site.latitude, presentationFrame),
     imagerySource: massRaster.source,
+    presentationImagerySource: presentationRaster.source,
     cadastreSource: cadastralRaster.source,
   };
 }
@@ -210,7 +252,7 @@ function buildProjectContext(
     roofPolygonNormalized: identity.metricPlane.polygonNormalized,
     gutterLineNormalized: identity.metricPlane.gutterLineNormalized,
     ridgeLineNormalized: identity.metricPlane.ridgeLineNormalized,
-    perspectiveNotes: ["Vue orthographique IGN métrique ancrée sur la parcelle officielle."],
+    perspectiveNotes: ["Vue orthographique IGN métrique serrée, réservée aux calculs."],
   };
   const roofView = {
     role: "roof" as const,
@@ -264,23 +306,28 @@ function buildProjectContext(
 function panelSvg(polygons: Point2D[][], x: number, y: number, width: number, height: number) {
   return polygons.map((polygon, index) => {
     const points = polygon.map((point) => `${(x + point.x * width).toFixed(1)},${(y + point.y * height).toFixed(1)}`).join(" ");
-    return `<polygon data-module="${index + 1}" points="${points}" fill="#142f52" fill-opacity=".94" stroke="#ffffff" stroke-width="2"/>`;
+    return `<polygon data-module="${index + 1}" points="${points}" fill="#142f52" fill-opacity=".94" stroke="#ffffff" stroke-width="1.4"/>`;
   }).join("");
 }
 
 function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
-  const polygons = allPanelPolygonsForRoleProjective(project, "satellite_mass");
-  if (!polygons || polygons.length !== project.exactPanelCount) {
+  const metricPolygons = allPanelPolygonsForRoleProjective(project, "satellite_mass");
+  if (!metricPolygons || metricPolygons.length !== project.exactPanelCount) {
     throw new Error("DP2 bloquée : la projection homographique ne démontre pas exactement tous les modules sur la vue métrique IGN.");
   }
+  const displayPolygons = metricPolygons.map((polygon) => polygon.map((point) => (
+    reframePoint(point, context.metricFrame, context.presentationFrame)
+  )));
   const width = 1200;
   const height = 900;
   const x = 70;
   const y = 166;
   const imageWidth = 1060;
   const imageHeight = 590;
-  const orthophoto = `data:image/png;base64,${context.mass.base64}`;
+  const orthophoto = `data:image/png;base64,${context.presentationOrthophoto}`;
   const cadastre = `data:image/png;base64,${context.cadastralOverlay}`;
+  const entranceX = x + context.addressPointNormalized.x * imageWidth;
+  const entranceY = y + context.addressPointNormalized.y * imageHeight;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="100%" height="100%" fill="#f7f7f4"/>
     <rect x="30" y="30" width="1140" height="840" rx="18" fill="#fff" stroke="#d9dde2" stroke-width="2"/>
@@ -290,12 +337,13 @@ function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
     <text x="58" y="126" font-family="Arial,sans-serif" font-size="16" fill="#656b75">${escapeXml(context.normalizedAddress)}</text>
     <rect x="58" y="154" width="1084" height="620" rx="12" fill="#edf0f2"/>
     <image href="${orthophoto}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none"/>
-    <image href="${cadastre}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none" opacity=".9"/>
-    ${panelSvg(polygons, x, y, imageWidth, imageHeight)}
-    <rect x="82" y="650" width="510" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
-    <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">PARCELLE ${escapeXml(context.parcelReference)} · ${project.exactPanelCount} MODULES</text>
-    <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Pan verrouillé ${escapeXml(project.array.roofFace)} · calepinage ${project.array.rows} × ${project.array.columns}</text>
-    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">${Math.round(context.parcelAreaM2)} m² cadastraux · identité et obstacles multi-vues contrôlés</text>
+    <image href="${cadastre}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none" opacity=".88"/>
+    ${panelSvg(displayPolygons, x, y, imageWidth, imageHeight)}
+    <circle cx="${entranceX.toFixed(1)}" cy="${entranceY.toFixed(1)}" r="8" fill="#e54b2b" stroke="#ffffff" stroke-width="3"/>
+    <rect x="82" y="650" width="500" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
+    <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">${project.exactPanelCount} MODULES · PAN ${escapeXml(project.array.roofFace)}</text>
+    <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Calepinage ${project.array.rows} × ${project.array.columns} · parcelles voisines visibles</text>
+    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Point rouge : accès/adresse du projet · Réf. cadastrale ${escapeXml(context.parcelReference)}</text>
     <text x="1082" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1082 217 L1070 251 L1082 242 L1094 251 Z" fill="#102a56"/>
     <line x1="58" y1="832" x2="1142" y2="832" stroke="#102a56" stroke-width="2"/>
@@ -355,18 +403,21 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
     sourceSummary: [
       `IGN Géoplateforme — adresse : ${official.normalizedAddress}`,
       `APICARTO Cadastre — parcelle ${official.parcelReference} (${Math.round(official.parcelAreaM2)} m²)`,
-      `IGN Géoplateforme — orthophoto métrique centrée sur la parcelle : ${official.imagerySource}`,
+      `IGN Géoplateforme — vue métrique serrée réservée au moteur : ${official.imagerySource}`,
+      `IGN Géoplateforme — vue cadastrale élargie réservée au rendu DP2 : ${official.presentationImagerySource}`,
       `OpenAI ${config.analysisModel} — Cross-View Surface Identity Engine`,
       `OpenAI ${config.analysisModel} — Surface Obstacle Census + Independent Audit`,
       "Surface Understanding — reconstruction métrique du pan et des obstacles audités",
       "PV Layout Engine — placement déterministe sur le pan physiquement verrouillé",
-      "Projection Engine — homographie sur la vue métrique IGN",
+      "Projection Engine — homographie métrique puis reprojection dans le cadrage DP2 élargi",
     ],
     inspector: {
       passed: true,
       score,
       checks: [
         "Parcelle officielle résolue par le moteur commun avant toute compréhension de toiture",
+        "Vue métrique serrée séparée du cadrage cadastral de présentation",
+        "Point d'accès/adresse projeté depuis la coordonnée IGN dans le cadrage élargi",
         "Même bâtiment démontré entre IGN et photo réelle",
         "Même pan physique verrouillé dans les deux vues avant détection des obstacles",
         "Obstacle Census effectué uniquement après verrouillage du pan physique",
