@@ -5,6 +5,18 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  BUCKET: R2Bucket;
+  OPENAI_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  DP_ANALYSIS_MODEL?: string;
+  DP_JUDGE_MODEL?: string;
+  DP_IMAGE_MODEL?: string;
+  DP_IMAGE_PROVIDER?: string;
+  DP_MAX_RETRIES?: string;
+  DP_QA_PASS_SCORE?: string;
+  DP_REALISM_PASS_SCORE?: string;
+  DP_TEST_EXPORT?: string;
+  DP_TEST_FAST?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -19,14 +31,28 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
-// Image security config. SVG sources with .svg extension auto-skip the
-// optimization endpoint on the client side (served directly, no proxy).
-// To route SVGs through the optimizer (with security headers), set
-// dangerouslyAllowSVG: true in next.config.js and uncomment below:
-// const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
+function syncRuntimeVars(env: Env) {
+  const vars = {
+    OPENAI_API_KEY: env.OPENAI_API_KEY,
+    GEMINI_API_KEY: env.GEMINI_API_KEY,
+    DP_ANALYSIS_MODEL: env.DP_ANALYSIS_MODEL,
+    DP_JUDGE_MODEL: env.DP_JUDGE_MODEL,
+    DP_IMAGE_MODEL: env.DP_IMAGE_MODEL,
+    DP_IMAGE_PROVIDER: env.DP_IMAGE_PROVIDER,
+    DP_MAX_RETRIES: env.DP_MAX_RETRIES,
+    DP_QA_PASS_SCORE: env.DP_QA_PASS_SCORE,
+    DP_REALISM_PASS_SCORE: env.DP_REALISM_PASS_SCORE,
+    DP_TEST_EXPORT: env.DP_TEST_EXPORT,
+    DP_TEST_FAST: env.DP_TEST_FAST,
+  };
+  for (const [key, value] of Object.entries(vars)) {
+    if (typeof value === "string" && value.length > 0) process.env[key] = value;
+  }
+}
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    syncRuntimeVars(env);
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {
