@@ -111,13 +111,17 @@ test("Assisted SiteModel still derives metrics from LiDAR after four-click face 
   assert.match(siteModelSource, /kind: "lidar-altimetry"/);
 });
 
-test("DP2 tries official SiteModel geometry before any legacy vision fallback", () => {
+test("DP2 tries automatic SiteModel then requests assisted LiDAR recovery, never legacy vision", () => {
   const autoIndex = dp2Source.indexOf("buildAutomaticSiteModelFromParcel(official)");
-  const legacyIndex = dp2Source.indexOf("generateWithLegacyVision(input, form, official, reason)");
+  const assistedIndex = dp2Source.indexOf("buildAssistedSiteModelFromParcel");
+  const recoveryErrorIndex = dp2Source.indexOf("Dp2AssistedRecoveryRequiredError");
   assert.ok(autoIndex >= 0);
-  assert.ok(legacyIndex > autoIndex);
+  assert.ok(assistedIndex >= 0);
+  assert.ok(recoveryErrorIndex >= 0);
+  assert.equal(dp2Source.indexOf("generateWithLegacyVision"), -1);
+  assert.equal(dp2Source.indexOf("resolveCrossViewSurfaceIdentity"), -1);
+  assert.equal(dp2Source.indexOf("resolveSurfaceObstacleInventory"), -1);
   assert.match(dp2Source, /Aucune IA générative utilisée pour créer la géométrie métrique/);
-  assert.match(dp2Source, /BD TOPO — bâtiment/);
   assert.match(dp2Source, /LiDAR HD IGN/);
 });
 
