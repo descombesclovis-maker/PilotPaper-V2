@@ -105,17 +105,20 @@ test("cross-view engine refuses a match supported by fewer than two independent 
   assert.ok(issues.some((issue) => issue.includes("indices visuels")));
 });
 
-test("identity and metric reconstruction are promoted out of DP2 into shared engine bricks", () => {
+test("cross-view identity remains a shared QA brick but is no longer a DP2 metric source", () => {
   assert.match(routeSource, /@\/lib\/dp2-v1-engine/);
-  assert.match(engineSource, /resolveCrossViewSurfaceIdentity/);
-  assert.match(engineSource, /metricSurfaceFromIdentity/);
-  assert.match(engineSource, /resolveProjectLayout/);
-  assert.doesNotMatch(engineSource, /identitySchema\s*=/);
-  assert.doesNotMatch(engineSource, /function pointInPolygon/);
   assert.match(identitySource, /cross_view_surface_identity/);
   assert.match(identitySource, /cross_view_surface_identity_recovery/);
   assert.match(identitySource, /validateCrossViewSurfaceIdentity/);
   assert.match(metricSource, /metricSurfaceFromIdentity/);
   assert.match(metricSource, /reprojectPolygonBetweenQuads/);
-  assert.ok(engineSource.indexOf("resolveCrossViewSurfaceIdentity") < engineSource.lastIndexOf("resolveProjectLayout"));
+
+  assert.doesNotMatch(engineSource, /resolveCrossViewSurfaceIdentity/);
+  assert.doesNotMatch(engineSource, /metricSurfaceFromIdentity/);
+  assert.match(engineSource, /metricSurfaceFromSitePlane/);
+  assert.match(engineSource, /buildAutomaticSiteModelFromParcel/);
+  assert.match(engineSource, /buildAssistedSiteModelFromParcel/);
+  assert.match(engineSource, /resolveProjectLayout/);
+  assert.doesNotMatch(engineSource, /identitySchema\s*=/);
+  assert.doesNotMatch(engineSource, /function pointInPolygon/);
 });
