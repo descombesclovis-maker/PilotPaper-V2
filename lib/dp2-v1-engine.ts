@@ -23,6 +23,7 @@ import {
   validateCrossViewSurfaceIdentity,
   type CrossViewSurfaceIdentity,
 } from "@/lib/dp-ai-engine/identity/crossViewSurfaceIdentity";
+import { resolveSurfaceObstacleInventory } from "@/lib/dp-ai-engine/obstacles/surfaceObstacleEngine";
 import type { InputPhoto, Point2D, ProjectContext, ProjectForm } from "@/lib/dp-ai-engine/types";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/dp-piece-engine";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
@@ -167,8 +168,8 @@ function metricObstacles(identity: CrossViewSurfaceIdentity) {
 }
 
 /**
- * Hand-off chain: proven cross-view identity -> deterministic metric SurfaceSupport
- * -> deterministic Layout Engine. No layout is allowed before identity succeeds.
+ * Hand-off chain: proven cross-view identity -> independently audited obstacles
+ * -> deterministic metric SurfaceSupport -> deterministic Layout Engine.
  */
 function buildProjectContext(
   form: ProjectForm,
@@ -294,7 +295,7 @@ function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
     <rect x="82" y="650" width="510" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
     <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">PARCELLE ${escapeXml(context.parcelReference)} · ${project.exactPanelCount} MODULES</text>
     <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Pan verrouillé ${escapeXml(project.array.roofFace)} · calepinage ${project.array.rows} × ${project.array.columns}</text>
-    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">${Math.round(context.parcelAreaM2)} m² cadastraux · identité multi-vues contrôlée</text>
+    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">${Math.round(context.parcelAreaM2)} m² cadastraux · identité et obstacles multi-vues contrôlés</text>
     <text x="1082" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1082 217 L1070 251 L1082 242 L1094 251 Z" fill="#102a56"/>
     <line x1="58" y1="832" x2="1142" y2="832" stroke="#102a56" stroke-width="2"/>
@@ -323,9 +324,27 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
     faceLabel: form.array.roofFace,
     contextNotes: `Photovoltaic DP2; requested array ${form.array.rows}×${form.array.columns} ${form.array.orientation}.`,
   });
-  const project = buildProjectContext(form, official, identity);
+
+  const obstacleInventory = await resolveSurfaceObstacleInventory({
+    apiKey: config.openaiApiKey,
+    model: config.analysisModel,
+    identity,
+    metricImage: official.mass,
+    realImage: roofPhoto,
+    faceLabel: form.array.roofFace,
+  });
+
+  // Identity analysis may mention obstacles as matching cues, but the Layout
+  // Engine consumes only the independently censused and audited obstacle list.
+  const surfaceIdentity: CrossViewSurfaceIdentity = {
+    ...identity,
+    obstacles: obstacleInventory.obstacles,
+    notes: [...identity.notes, ...obstacleInventory.notes],
+  };
+
+  const project = buildProjectContext(form, official, surfaceIdentity);
   const svg = buildDp2Svg(official, project);
-  const score = Math.min(identity.confidence, identity.slopeConfidence);
+  const score = Math.min(identity.confidence, identity.slopeConfidence, obstacleInventory.coverageConfidence);
 
   return {
     dp: 2,
@@ -338,7 +357,8 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
       `APICARTO Cadastre — parcelle ${official.parcelReference} (${Math.round(official.parcelAreaM2)} m²)`,
       `IGN Géoplateforme — orthophoto métrique centrée sur la parcelle : ${official.imagerySource}`,
       `OpenAI ${config.analysisModel} — Cross-View Surface Identity Engine`,
-      "Surface Understanding — reconstruction métrique du pan et obstacles",
+      `OpenAI ${config.analysisModel} — Surface Obstacle Census + Independent Audit`,
+      "Surface Understanding — reconstruction métrique du pan et des obstacles audités",
       "PV Layout Engine — placement déterministe sur le pan physiquement verrouillé",
       "Projection Engine — homographie sur la vue métrique IGN",
     ],
@@ -348,13 +368,17 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
       checks: [
         "Parcelle officielle résolue par le moteur commun avant toute compréhension de toiture",
         "Même bâtiment démontré entre IGN et photo réelle",
-        "Même pan physique verrouillé dans les deux vues avant Layout Engine",
+        "Même pan physique verrouillé dans les deux vues avant détection des obstacles",
+        "Obstacle Census effectué uniquement après verrouillage du pan physique",
+        "Audit indépendant des obstacles effectué avant le Layout Engine",
+        `Couverture obstacle audit ${(obstacleInventory.coverageConfidence * 100).toFixed(0)} %`,
+        `${obstacleInventory.obstacles.length} obstacle(s) physique(s) conservé(s) sur le pan après filtrage géométrique`,
         "Centre du pan métrique vérifié à l'intérieur de la parcelle cible",
         "Au moins deux indices visuels indépendants confirment l'identité multi-vues",
         `Confiance identité ${(identity.confidence * 100).toFixed(0)} %`,
         `${project.exactPanelCount} modules projetés sur le même pan physique`,
       ],
-      issues: identity.notes,
+      issues: surfaceIdentity.notes,
     },
   };
 }
