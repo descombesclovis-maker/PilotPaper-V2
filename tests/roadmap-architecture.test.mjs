@@ -5,8 +5,9 @@ import { readFile } from "node:fs/promises";
 const dp1 = await readFile(new URL("../lib/dp1-engine.ts", import.meta.url), "utf8");
 const dp2 = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
 const parcel = await readFile(new URL("../lib/dp-ai-engine/context/officialParcel.ts", import.meta.url), "utf8");
-const identity = await readFile(new URL("../lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts", import.meta.url), "utf8");
-const metric = await readFile(new URL("../lib/dp-ai-engine/geometry/metricSurfaceFromIdentity.ts", import.meta.url), "utf8");
+const siteModel = await readFile(new URL("../lib/dp-ai-engine/site-model/siteModelEngine.ts", import.meta.url), "utf8");
+const lidar = await readFile(new URL("../lib/dp-ai-engine/site-model/lidarAltimetry.ts", import.meta.url), "utf8");
+const roofGeometry = await readFile(new URL("../lib/dp-ai-engine/site-model/roofGeometryEngine.ts", import.meta.url), "utf8");
 const roadmap = await readFile(new URL("../V1-K-PAR-K.md", import.meta.url), "utf8");
 
 test("DP1 and DP2 share one official parcel truth", () => {
@@ -17,13 +18,22 @@ test("DP1 and DP2 share one official parcel truth", () => {
   assert.doesNotMatch(dp2, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
 });
 
-test("DP2 consumes promoted identity and metric engines before deterministic layout", () => {
-  assert.match(dp2, /resolveCrossViewSurfaceIdentity/);
-  assert.match(dp2, /metricSurfaceFromIdentity/);
+test("DP2 consumes SiteModel geometry before deterministic layout", () => {
+  assert.match(dp2, /buildAutomaticSiteModelFromParcel/);
+  assert.match(dp2, /buildAssistedSiteModelFromParcel/);
+  assert.match(dp2, /metricSurfaceFromSitePlane/);
   assert.match(dp2, /resolveProjectLayout/);
-  assert.ok(dp2.indexOf("resolveCrossViewSurfaceIdentity") < dp2.lastIndexOf("resolveProjectLayout"));
-  assert.match(identity, /Fail-closed two-pass identity reconciliation/);
-  assert.match(metric, /hand-off from Roof\/Surface Understanding to the Layout Engine/);
+  assert.doesNotMatch(dp2, /resolveCrossViewSurfaceIdentity/);
+  assert.doesNotMatch(dp2, /metricSurfaceFromIdentity/);
+  assert.doesNotMatch(dp2, /resolveSurfaceObstacleInventory/);
+});
+
+test("SiteModel geometry is grounded in official context LiDAR and deterministic roof mathematics", () => {
+  assert.match(siteModel, /resolveTargetBuilding/);
+  assert.match(siteModel, /buildRoofModelFromLidar/);
+  assert.match(lidar, /LiDAR|MNX|altim/i);
+  assert.match(roofGeometry, /extractPlaneRansac/);
+  assert.match(roofGeometry, /deriveLidarObstacles/);
 });
 
 test("roadmap explicitly forbids document-specific copies of engine-level rules", () => {
