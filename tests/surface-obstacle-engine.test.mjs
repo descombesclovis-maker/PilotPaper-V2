@@ -49,7 +49,7 @@ const identity = {
   notes: [],
 };
 
-test("dedicated obstacle engine scans the locked face systematically and audits completeness", () => {
+test("dedicated legacy obstacle engine still scans a locked face systematically and audits completeness", () => {
   assert.match(obstacleSource, /Surface Obstacle Census Engine/);
   assert.match(obstacleSource, /LEFT -> CENTER -> RIGHT/);
   assert.match(obstacleSource, /GUTTER -> MID-SLOPE -> RIDGE/);
@@ -91,7 +91,7 @@ test("small slender obstacle intersecting the selected face is retained for metr
   assert.ok(result[0].roofPolygonNormalized.length >= 3);
 });
 
-test("duplicate detections are collapsed before the Layout Engine sees them", async () => {
+test("duplicate detections are collapsed inside the legacy visual audit", async () => {
   const { finalizeSurfaceObstacleCandidates } = await obstacleModulePromise;
   const candidates = [
     {
@@ -118,17 +118,9 @@ test("duplicate detections are collapsed before the Layout Engine sees them", as
   assert.equal(finalizeSurfaceObstacleCandidates(candidates, identity).length, 1);
 });
 
-test("legacy DP2 fallback replaces identity-pass obstacles with the independently audited inventory before layout", () => {
-  const fallbackStart = dp2Source.indexOf("async function generateWithLegacyVision");
-  const generatorStart = dp2Source.indexOf("export async function generateDp2Piece");
-  assert.ok(fallbackStart >= 0 && generatorStart > fallbackStart);
-  const fallback = dp2Source.slice(fallbackStart, generatorStart);
-  const identityAt = fallback.indexOf("resolveCrossViewSurfaceIdentity");
-  const obstacleAt = fallback.indexOf("resolveSurfaceObstacleInventory");
-  const replacementAt = fallback.indexOf("obstacles: obstacleInventory.obstacles");
-  const layoutAt = fallback.indexOf("buildLegacyProjectContext");
-  assert.ok(identityAt >= 0 && obstacleAt > identityAt);
-  assert.ok(replacementAt > obstacleAt);
-  assert.ok(layoutAt > replacementAt);
-  assert.match(fallback, /fallback Cross-View \+ obstacle audit/);
+test("DP2 primary geometry path cannot invoke the legacy visual obstacle engine", () => {
+  assert.doesNotMatch(dp2Source, /resolveSurfaceObstacleInventory/);
+  assert.doesNotMatch(dp2Source, /surfaceObstacleEngine/);
+  assert.match(dp2Source, /Keepout Engine/);
+  assert.match(dp2Source, /buildAssistedSiteModelFromParcel/);
 });
