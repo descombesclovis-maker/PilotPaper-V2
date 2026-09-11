@@ -1,4 +1,4 @@
-import { resolveOfficialParcelContext } from "../context/officialParcel";
+import { resolveOfficialParcelContext, type OfficialParcelContext } from "../context/officialParcel";
 import { resolveTargetBuilding } from "./buildingResolver";
 import { sampleBuildingLidarHeights } from "./lidarAltimetry";
 import { buildRoofModelFromLidar } from "./roofGeometryEngine";
@@ -30,12 +30,8 @@ export function inspectAutomaticSiteModel(model: SiteModel) {
   return issues;
 }
 
-/**
- * Geometry-first site understanding. No generative vision is permitted to
- * create metric roof geometry in this path.
- */
-export async function buildAutomaticSiteModel(address: string): Promise<SiteModel> {
-  const parcel = await resolveOfficialParcelContext(address);
+/** Geometry-first site understanding from an already resolved official parcel. */
+export async function buildAutomaticSiteModelFromParcel(parcel: OfficialParcelContext): Promise<SiteModel> {
   const building = await resolveTargetBuilding(parcel);
   const lidar = await sampleBuildingLidarHeights(building);
   const roof = buildRoofModelFromLidar({
@@ -79,4 +75,13 @@ export async function buildAutomaticSiteModel(address: string): Promise<SiteMode
     throw new AssistedRecoveryRequiredError(`SiteModel automatique non démontré : ${issues.join(" ")}`);
   }
   return model;
+}
+
+/**
+ * Geometry-first site understanding. No generative vision is permitted to
+ * create metric roof geometry in this path.
+ */
+export async function buildAutomaticSiteModel(address: string): Promise<SiteModel> {
+  const parcel = await resolveOfficialParcelContext(address);
+  return buildAutomaticSiteModelFromParcel(parcel);
 }
