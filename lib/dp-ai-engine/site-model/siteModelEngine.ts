@@ -1,4 +1,9 @@
-import { resolveOfficialParcelContext, type OfficialParcelContext } from "../context/officialParcel";
+import {
+  resolveOfficialParcelContext,
+  type MetricFrame,
+  type OfficialParcelContext,
+} from "../context/officialParcel";
+import { recoverRoofFromFourClicks, type AssistedRoofQuad } from "./assistedRoofRecovery";
 import { resolveTargetBuilding } from "./buildingResolver";
 import { sampleBuildingLidarHeights } from "./lidarAltimetry";
 import { buildRoofModelFromLidar } from "./roofGeometryEngine";
@@ -73,6 +78,66 @@ export async function buildAutomaticSiteModelFromParcel(parcel: OfficialParcelCo
   const issues = inspectAutomaticSiteModel(model);
   if (issues.length) {
     throw new AssistedRecoveryRequiredError(`SiteModel automatique non démontré : ${issues.join(" ")}`);
+  }
+  return model;
+}
+
+/**
+ * Assisted mode changes only one thing: the operator identifies the intended
+ * physical roof face with four clicks. Metric geometry, slope and obstacles are
+ * still derived from LiDAR and validated by the same SiteModel contract.
+ */
+export async function buildAssistedSiteModelFromParcel(args: {
+  parcel: OfficialParcelContext;
+  frame: MetricFrame;
+  quadNormalized: AssistedRoofQuad;
+  faceId?: string;
+}): Promise<SiteModel> {
+  const building = await resolveTargetBuilding(args.parcel);
+  const recovered = await recoverRoofFromFourClicks({
+    frame: args.frame,
+    quadNormalized: args.quadNormalized,
+    faceId: args.faceId,
+  });
+  const model: SiteModel = {
+    version: "pilotpaper-site-model-v1",
+    mode: "assisted",
+    address: args.parcel.normalizedAddress,
+    parcel: {
+      reference: args.parcel.parcelReference,
+      areaM2: args.parcel.parcelAreaM2,
+      geometry: args.parcel.parcelGeometry,
+    },
+    building,
+    roof: recovered.roof,
+    evidence: [
+      {
+        kind: "cadastre",
+        source: `APICARTO Cadastre · ${args.parcel.parcelReference}`,
+        confidence: 1,
+      },
+      {
+        kind: "bdtopo",
+        source: `BDTOPO_V3:batiment · ${building.id}`,
+        confidence: 0.98,
+      },
+      {
+        kind: "manual",
+        source: "4 coins du pan sélectionnés par l'opérateur",
+        confidence: 1,
+        notes: ["Sélection uniquement ; aucune dimension métrique saisie."],
+      },
+      {
+        kind: "lidar-altimetry",
+        source: recovered.evidence.join(" · "),
+        confidence: recovered.roof.coverageConfidence,
+      },
+    ],
+    warnings: ["SiteModel récupéré en mode assisté après échec ou ambiguïté de l'automatique."],
+  };
+  const issues = inspectAutomaticSiteModel(model);
+  if (issues.length) {
+    throw new AssistedRecoveryRequiredError(`SiteModel assisté non démontré : ${issues.join(" ")}`);
   }
   return model;
 }
