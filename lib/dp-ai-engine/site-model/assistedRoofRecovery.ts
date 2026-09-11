@@ -19,6 +19,18 @@ function normalized(point: Point2D) {
     && point.y >= 0 && point.y <= 1;
 }
 
+function orderQuadAroundCentroid(quad: AssistedRoofQuad): AssistedRoofQuad {
+  const centroid = {
+    x: quad.reduce((sum, point) => sum + point.x, 0) / 4,
+    y: quad.reduce((sum, point) => sum + point.y, 0) / 4,
+  };
+  const ordered = [...quad].sort((a, b) => (
+    Math.atan2(a.y - centroid.y, a.x - centroid.x)
+    - Math.atan2(b.y - centroid.y, b.x - centroid.x)
+  ));
+  return ordered as AssistedRoofQuad;
+}
+
 export function normalizedPointToLonLat(point: Point2D, frame: MetricFrame): LonLat {
   if (!normalized(point)) throw new Error("Assisted Recovery : coin hors de l'image métrique.");
   const x = frame.minX + point.x * (frame.maxX - frame.minX);
@@ -31,8 +43,9 @@ export function assistedQuadToLonLat(quad: AssistedRoofQuad, frame: MetricFrame)
   if (quad.length !== 4 || !quad.every(normalized)) {
     throw new Error("Assisted Recovery : exactement quatre coins normalisés sont requis.");
   }
-  assertValidProjectiveQuad(quad);
-  return quad.map((point) => normalizedPointToLonLat(point, frame)) as [LonLat, LonLat, LonLat, LonLat];
+  const ordered = orderQuadAroundCentroid(quad);
+  assertValidProjectiveQuad(ordered);
+  return ordered.map((point) => normalizedPointToLonLat(point, frame)) as [LonLat, LonLat, LonLat, LonLat];
 }
 
 function polygonAreaM2(polygon: LonLat[]) {
@@ -65,6 +78,7 @@ export async function recoverRoofFromFourClicks(args: {
   faceId?: string;
 }): Promise<{
   roof: SiteRoofModel;
+  support: BuildingFootprint;
   selectedPlaneId: string;
   polygonLonLat: [LonLat, LonLat, LonLat, LonLat];
   evidence: string[];
@@ -104,6 +118,7 @@ export async function recoverRoofFromFourClicks(args: {
     .map((obstacle) => ({ ...obstacle, roofPlaneId: selectedPlaneId }));
   return {
     roof: { ...roof, planes: [primary], obstacles: reassignedObstacles },
+    support: syntheticSupport,
     selectedPlaneId,
     polygonLonLat,
     evidence: [
