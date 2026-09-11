@@ -98,11 +98,6 @@ function orientedBoxFromPolygon(points:Point2D[],baseLine?:[Point2D,Point2D]):[P
   return [from(lsMin,baseT),from(lsMax,baseT),from(usMax,farT),from(usMin,farT)];
 }
 
-/**
- * Normalize a roof-face observation into the four ordered anchors required by the
- * metric/layout engine. This is deliberately generic: it accepts exact quads,
- * gutter+ridge line evidence, or a richer polygon that can be reduced safely.
- */
 export function canonicalizeRoofFaceQuad(view:Pick<RoofViewObservation,"roofPolygonNormalized"|"gutterLineNormalized"|"ridgeLineNormalized">):[Point2D,Point2D,Point2D,Point2D]|undefined{
   const polygon=(view.roofPolygonNormalized??[]).filter(validPoint);
   const gutter=validLine(view.gutterLineNormalized)?view.gutterLineNormalized:undefined;
@@ -160,13 +155,6 @@ function projectiveCoordinatesInQuad(q:[Point2D,Point2D,Point2D,Point2D],point:P
   return Number.isFinite(u)&&Number.isFinite(v)?{u,v}:undefined;
 }
 
-/**
- * Obstacles detected on a perspective roof photo are not discarded. Once the
- * same physical roof face is known in both the photo and the metric IGN view,
- * transfer the obstacle footprint through the face homography into the metric
- * view. This keeps the layout deterministic without requiring the chimney to be
- * visually obvious in the orthophoto itself.
- */
 export function reprojectObstaclesToMetric(faces:RoofFaceObservation[]):RoofFaceObservation[]{
   return faces.map(face=>{
     const metricView=face.views.find(view=>view.role==="satellite_mass"&&view.selectedFaceVisible);
@@ -318,6 +306,12 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const userPhotos=photos.filter(p=>!["satellite","satellite_mass"].includes(p.role));
     if(userPhotos.length<this.minUserPhotos) throw new Error(`At least ${this.minUserPhotos} independent user photograph(s) are required.`);
 
+    const activeEvidencePolicy:SurfaceEvidencePolicy|undefined=this.evidencePolicy??(
+      this.minUserPhotos===1&&userPhotos.length===1&&userPhotos[0]?.role==="roof"
+        ? {requiredRealRoles:["roof"],minimumRealPhotoObservations:1,requireMetricObstacleFootprints:true}
+        : undefined
+    );
+
     let raw=await this.inspect(form,photos,false);
     let faces=canonicalizeFaceEvidence(rawFaces(raw));
     if(!faces.length)throw new Error("No usable roof/support plane could be demonstrated from the supplied evidence.");
@@ -341,7 +335,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     if(!metricFaces.length)throw new Error("PilotPaper lost the metric roof geometry while reconciling photo evidence with the IGN plan.");
 
     const topology=form.support?.topology??"unknown";
-    const eligibility=selectLayoutEligibleSurfaces(faces,topology,0.72,this.evidencePolicy);
+    const eligibility=selectLayoutEligibleSurfaces(faces,topology,0.72,activeEvidencePolicy);
     const eligibleMetricFaces=metricFaces.filter((face)=>eligibility.eligibleFaceIds.includes(face.id));
     if(form.roofSelection?.mode==="priority"&&form.roofSelection.priorityFaceId&&eligibility.rejected[form.roofSelection.priorityFaceId]){
       throw new Error(`Priority surface ${form.roofSelection.priorityFaceId} failed the V1 understanding gate: ${eligibility.rejected[form.roofSelection.priorityFaceId]!.join(" ")}`);
@@ -358,7 +352,7 @@ export class OpenAIVisionAnalyzer implements VisionAnalyzer {
     const primaryView=primaryFace.views.find(v=>v.selectedFaceVisible&&v.roofPolygonNormalized.length>=3);
     if(!primaryView)throw new Error(`Allocated face ${primaryPlacement.faceId} is not visibly demonstrated in the supplied photographs.`);
 
-    const understandingGate=gateAllocatedSurfaces(faces,topology,layout.placements.map((placement)=>placement.faceId),0.72,this.evidencePolicy);
+    const understandingGate=gateAllocatedSurfaces(faces,topology,layout.placements.map((placement)=>placement.faceId),0.72,activeEvidencePolicy);
     const primaryMetric=eligibleMetricFaces.find(f=>f.id===primaryPlacement.faceId)??form.roofGeometry;
     const resolvedPlacement=resolvedPhysicalPlacement(primaryPlacement,primaryMetric);
     const flattened=faces.flatMap(f=>f.views);
