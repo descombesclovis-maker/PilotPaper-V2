@@ -27,11 +27,6 @@ function labelFor(measure: AltimetryMeasure) {
   return `${measure.source_name ?? ""} ${measure.source_measure ?? ""} ${measure.title ?? ""}`.toLowerCase();
 }
 
-/**
- * Decode the MNX resource without assuming response order. The API can expose
- * MNT, MNS and MNH as separate measures; labels are preferred, then a
- * difference-consistency fallback is used.
- */
 export function extractMnxValues(elevation: AltimetryElevation) {
   const measures = (elevation.measures ?? []).filter((measure) => finite(measure.z));
   let surface = measures.find((measure) => /\bmns\b|surface|sursol/.test(labelFor(measure)))?.z;
@@ -82,8 +77,9 @@ function projectedBounds(polygon: LonLat[]) {
   };
 }
 
-export function buildBuildingSamplingGrid(building: BuildingFootprint, requestedStepM = 0.8) {
-  const bounds = projectedBounds(building.polygon);
+export function buildPolygonSamplingGrid(polygon: LonLat[], requestedStepM = 0.8) {
+  if (polygon.length < 3) throw new Error("LiDAR HD : polygone d'échantillonnage incomplet.");
+  const bounds = projectedBounds(polygon);
   const width = Math.max(1, bounds.maxX - bounds.minX);
   const height = Math.max(1, bounds.maxY - bounds.minY);
   const minimumStepForLimit = Math.sqrt((width * height) / MAX_POINTS);
@@ -93,11 +89,15 @@ export function buildBuildingSamplingGrid(building: BuildingFootprint, requested
     for (let x = bounds.minX + stepM / 2; x <= bounds.maxX; x += stepM) {
       const geo = fromWebMercator(x, y);
       const point: LonLat = [geo.longitude, geo.latitude];
-      if (pointInLonLatPolygon(point, building.polygon)) points.push(point);
+      if (pointInLonLatPolygon(point, polygon)) points.push(point);
       if (points.length >= MAX_POINTS) return { points, stepM };
     }
   }
   return { points, stepM };
+}
+
+export function buildBuildingSamplingGrid(building: BuildingFootprint, requestedStepM = 0.8) {
+  return buildPolygonSamplingGrid(building.polygon, requestedStepM);
 }
 
 async function requestAltimetry(points: LonLat[]) {
@@ -121,22 +121,17 @@ async function requestAltimetry(points: LonLat[]) {
   return response.json() as Promise<{ elevations?: AltimetryElevation[] }>;
 }
 
-/**
- * Sample the official LiDAR HD MNX resource directly over the selected BD TOPO
- * building. This avoids downloading 150–500 MB COPC tiles for a residential roof.
- */
-export async function sampleBuildingLidarHeights(building: BuildingFootprint, stepM = 0.8) {
-  const grid = buildBuildingSamplingGrid(building, stepM);
-  if (grid.points.length < 12) throw new Error("LiDAR HD : empreinte bâtiment trop petite pour un échantillonnage fiable.");
-  const payload = await requestAltimetry(grid.points);
+async function sampleGrid(points: LonLat[], stepM: number, minimumSamples: number) {
+  if (points.length < minimumSamples) throw new Error("LiDAR HD : zone trop petite pour un échantillonnage fiable.");
+  const payload = await requestAltimetry(points);
   const elevations = payload.elevations ?? [];
-  if (elevations.length !== grid.points.length) {
-    throw new Error(`LiDAR HD : ${elevations.length} altitude(s) reçue(s) pour ${grid.points.length} point(s) demandés.`);
+  if (elevations.length !== points.length) {
+    throw new Error(`LiDAR HD : ${elevations.length} altitude(s) reçue(s) pour ${points.length} point(s) demandés.`);
   }
   const samples: LidarHeightSample[] = [];
   for (let index = 0; index < elevations.length; index++) {
     const source = elevations[index]!;
-    const expected = grid.points[index]!;
+    const expected = points[index]!;
     const values = extractMnxValues(source);
     if (!finite(values.surfaceZ) || Number(values.surfaceZ) <= -90_000) continue;
     samples.push({
@@ -147,15 +142,30 @@ export async function sampleBuildingLidarHeights(building: BuildingFootprint, st
       heightM: finite(values.heightM) ? Number(values.heightM) : undefined,
     });
   }
-  const coverage = samples.length / grid.points.length;
-  if (samples.length < 18 || coverage < 0.55) {
-    throw new Error(`LiDAR HD : couverture insuffisante sur le bâtiment (${Math.round(coverage * 100)} %).`);
+  const coverage = samples.length / points.length;
+  if (samples.length < minimumSamples || coverage < 0.55) {
+    throw new Error(`LiDAR HD : couverture insuffisante (${Math.round(coverage * 100)} %).`);
   }
   return {
     resource: LIDAR_RESOURCE,
-    stepM: grid.stepM,
-    requestedPointCount: grid.points.length,
+    stepM,
+    requestedPointCount: points.length,
     coverage,
     samples,
   };
+}
+
+/** Sample arbitrary validated roof/support polygon, used by Assisted Recovery. */
+export async function samplePolygonLidarHeights(polygon: LonLat[], stepM = 0.65) {
+  const grid = buildPolygonSamplingGrid(polygon, stepM);
+  return sampleGrid(grid.points, grid.stepM, 10);
+}
+
+/**
+ * Sample the official LiDAR HD MNX resource directly over the selected BD TOPO
+ * building. This avoids downloading 150–500 MB COPC tiles for a residential roof.
+ */
+export async function sampleBuildingLidarHeights(building: BuildingFootprint, stepM = 0.8) {
+  const grid = buildBuildingSamplingGrid(building, stepM);
+  return sampleGrid(grid.points, grid.stepM, 18);
 }
