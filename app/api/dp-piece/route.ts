@@ -1,3 +1,4 @@
+import { generateDp1Piece } from "@/lib/dp1-engine";
 import { generateDpPiece, type DpPieceInput } from "@/lib/dp-piece-engine";
 
 export const dynamic = "force-dynamic";
@@ -5,7 +6,10 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const input = await request.json() as DpPieceInput;
-    const result = await generateDpPiece(input);
+    const result = input.dp === 1
+      ? await generateDp1Piece(input)
+      : await generateDpPiece(input);
+
     return Response.json(result, {
       headers: {
         "Cache-Control": "no-store",
