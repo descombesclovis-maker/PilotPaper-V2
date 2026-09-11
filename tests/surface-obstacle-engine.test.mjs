@@ -118,15 +118,17 @@ test("duplicate detections are collapsed before the Layout Engine sees them", as
   assert.equal(finalizeSurfaceObstacleCandidates(candidates, identity).length, 1);
 });
 
-test("DP2 replaces identity-pass obstacles with the independently audited inventory before layout", () => {
-  const generateStart = dp2Source.indexOf("export async function generateDp2Piece");
-  const generate = dp2Source.slice(generateStart);
-  const identityAt = generate.indexOf("resolveCrossViewSurfaceIdentity");
-  const obstacleAt = generate.indexOf("resolveSurfaceObstacleInventory");
-  const replacementAt = generate.indexOf("obstacles: obstacleInventory.obstacles");
-  const layoutAt = generate.indexOf("buildProjectContext");
+test("legacy DP2 fallback replaces identity-pass obstacles with the independently audited inventory before layout", () => {
+  const fallbackStart = dp2Source.indexOf("async function generateWithLegacyVision");
+  const generatorStart = dp2Source.indexOf("export async function generateDp2Piece");
+  assert.ok(fallbackStart >= 0 && generatorStart > fallbackStart);
+  const fallback = dp2Source.slice(fallbackStart, generatorStart);
+  const identityAt = fallback.indexOf("resolveCrossViewSurfaceIdentity");
+  const obstacleAt = fallback.indexOf("resolveSurfaceObstacleInventory");
+  const replacementAt = fallback.indexOf("obstacles: obstacleInventory.obstacles");
+  const layoutAt = fallback.indexOf("buildLegacyProjectContext");
   assert.ok(identityAt >= 0 && obstacleAt > identityAt);
   assert.ok(replacementAt > obstacleAt);
   assert.ok(layoutAt > replacementAt);
-  assert.match(generate, /Surface Obstacle Census \+ Independent Audit/);
+  assert.match(fallback, /fallback Cross-View \+ obstacle audit/);
 });
