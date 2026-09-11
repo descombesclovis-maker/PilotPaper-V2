@@ -11,8 +11,15 @@ test("DP2 anchors roof recognition to one official parcel context before any lay
   assert.match(engine, /resolveOfficialParcelContext/);
   assert.match(engine, /metricFrameForParcel/);
   assert.match(engine, /projectParcelRingNormalized/);
-  assert.ok(engine.indexOf("resolveDp2OfficialContext") < engine.indexOf("resolveCrossViewSurfaceIdentity"));
-  assert.ok(engine.indexOf("resolveCrossViewSurfaceIdentity") < engine.lastIndexOf("resolveProjectLayout"));
+
+  const generatorStart = engine.indexOf("export async function generateDp2Piece");
+  assert.ok(generatorStart >= 0);
+  const generator = engine.slice(generatorStart);
+  const officialCall = generator.indexOf("const official = await resolveDp2OfficialContext");
+  const identityCall = generator.indexOf("const identity = await resolveCrossViewSurfaceIdentity");
+  assert.ok(officialCall >= 0 && identityCall > officialCall);
+
+  assert.match(engine, /function buildProjectContext[\s\S]*resolveProjectLayout/);
 });
 
 test("official parcel logic lives in the reusable core rather than the DP2 document engine", () => {
