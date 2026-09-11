@@ -1,0 +1,171 @@
+name: Build PilotPaper V1 K-par-K Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v1-k-par-k-local
+    paths:
+      - "desktop/**"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "public/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/build-v1-k-par-k-windows.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-v1:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout V1 branch
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Build web application
+        shell: pwsh
+        run: npm run build
+
+      - name: Run regressions
+        shell: pwsh
+        run: npm test
+
+      - name: Build Windows icon from PilotPaper monogram
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pillow
+          @'
+          from PIL import Image
+          from pathlib import Path
+          source = Path("public/pilotpaper-monogram.png")
+          target = Path("desktop/pilotpaper.ico")
+          image = Image.open(source).convert("RGBA")
+          image.thumbnail((256, 256), Image.Resampling.LANCZOS)
+          canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+          canvas.alpha_composite(image, ((256-image.width)//2, (256-image.height)//2))
+          canvas.save(target, format="ICO", sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          '@ | Set-Content -Path make_icon.py -Encoding utf8
+          python make_icon.py
+          if (-not (Test-Path desktop/pilotpaper.ico)) { throw "PilotPaper icon was not created" }
+
+      - name: Use .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Compile single-instance WebView2 launcher
+        shell: pwsh
+        run: >-
+          dotnet publish desktop/PilotPaperLauncher/PilotPaperLauncher.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+
+      - name: Assemble fixed V1 local payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $PWD "desktop-stage"
+          $current = Join-Path $stage "app/current"
+          New-Item -ItemType Directory -Force -Path $current | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $current "runtime") | Out-Null
+
+          $launcher = "desktop/PilotPaperLauncher/bin/Release/net8.0-windows/win-x64/publish/PilotPaper-V1.exe"
+          if (-not (Test-Path $launcher)) { throw "PilotPaper-V1.exe missing" }
+          Copy-Item $launcher (Join-Path $stage "PilotPaper-V1.exe") -Force
+          Copy-Item "desktop/pilotpaper.ico" (Join-Path $stage "pilotpaper.ico") -Force
+          Copy-Item (Get-Command node.exe).Source (Join-Path $current "runtime/node.exe") -Force
+
+          $tracked = git ls-files
+          foreach ($file in $tracked) {
+            if ($file -like ".github/*" -or $file -like "desktop/*" -or $file -like "tests/*") { continue }
+            if ($file -like "DEMARRER-PILOTPAPER.cmd" -or $file -like "INSTALLER-PILOTPAPER.cmd" -or $file -like "INSTALLATION-WINDOWS.txt") { continue }
+            $target = Join-Path $current $file
+            $parent = Split-Path -Parent $target
+            if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+            Copy-Item $file $target -Force
+          }
+
+          robocopy node_modules (Join-Path $current "node_modules") /E /NFL /NDL /NJH /NJS /NP
+          $code = $LASTEXITCODE
+          if ($code -ge 8) { throw "robocopy node_modules failed with code $code" }
+          $global:LASTEXITCODE = 0
+
+          Set-Content -Path (Join-Path $stage "V1-README.txt") -Encoding utf8 -Value @"
+          PilotPaper V1 — Atelier K-par-K
+          =================================
+          - Application locale Windows, une seule fenêtre.
+          - DP1 à DP8 testées séparément.
+          - Mode TEST / NON VALIDÉ verrouillé.
+          - Double-clic répété : aucune seconde instance n'est créée.
+          - Les sorties de cette V1 de validation ne doivent pas être déposées en mairie.
+          "@
+
+          foreach ($required in @(
+            (Join-Path $current "runtime/node.exe"),
+            (Join-Path $current "node_modules/vite/bin/vite.js"),
+            (Join-Path $current "vite.config.ts"),
+            (Join-Path $stage "PilotPaper-V1.exe")
+          )) { if (-not (Test-Path $required)) { throw "V1 payload missing: $required" } }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build V1 installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "desktop\PilotPaperInstaller.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Build portable V1 folder archive
+        shell: pwsh
+        run: |
+          $root = Join-Path $PWD "V1"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          Copy-Item "desktop-stage" $root -Recurse
+          Compress-Archive -Path $root -DestinationPath "PilotPaper-V1.zip" -CompressionLevel Optimal
+          if (-not (Test-Path "PilotPaper-V1.zip")) { throw "Portable V1 archive missing" }
+
+      - name: Publish isolated V1 test release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "pilotpaper-v1-test-latest"
+          gh release delete $tag --repo $env:GITHUB_REPOSITORY -y --cleanup-tag 2>$null
+          $global:LASTEXITCODE = 0
+          Copy-Item "desktop-output/PilotPaper-V1-Setup.exe" "PilotPaper-V1-Setup.exe" -Force
+          gh release create $tag "PilotPaper-V1-Setup.exe" "PilotPaper-V1.zip" --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper V1 — K-par-K local test" --notes "Snapshot local de validation DP1 à DP8. Mode TEST / NON VALIDÉ. Pas d'auto-mise-à-jour." --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "Unable to publish PilotPaper V1 test release" }
+
+      - name: Upload V1 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotPaper-V1-Windows
+          path: |
+            PilotPaper-V1-Setup.exe
+            PilotPaper-V1.zip
+          if-no-files-found: error
+          retention-days: 14
