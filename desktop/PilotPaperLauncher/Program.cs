@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -76,22 +78,28 @@ internal static class Program
 internal sealed class PilotPaperWindow : Form
 {
     private const string AppUrl = "http://127.0.0.1:5174/";
+    private const string ReleaseApiUrl = "https://api.github.com/repos/descombesclovis-maker/PilotPaper-V2/releases/tags/pilotpaper-v1-test-latest";
+    private const string SetupAssetName = "PilotPaper-V1-Setup.exe";
+
     private readonly string _installRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     private readonly string _currentAppDir;
     private readonly string _runtimeDir;
     private readonly string _logPath;
+    private readonly string _buildMarkerPath;
     private readonly WebView2 _webView;
     private readonly Panel _startupPanel;
     private readonly Label _startupTitle;
     private readonly Label _startupDetail;
     private Process? _server;
     private bool _closing;
+    private bool _updateInProgress;
 
     public PilotPaperWindow()
     {
         _currentAppDir = Path.Combine(_installRoot, "app", "current");
         _runtimeDir = Path.Combine(_installRoot, ".pilotpaper-runtime");
         _logPath = Path.Combine(_runtimeDir, "pilotpaper-v1.log");
+        _buildMarkerPath = Path.Combine(_installRoot, "PILOTPAPER-BUILD.txt");
         Directory.CreateDirectory(_runtimeDir);
 
         Text = "PilotPaper V1 — Validation K-par-K";
@@ -156,6 +164,7 @@ internal sealed class PilotPaperWindow : Form
             CenterStartupLabels();
             EnsureInstalledPayload();
             EnsureOpenAiKey();
+            SyncDevVarsToWorkerProject();
             _startupDetail.Text = "Démarrage du moteur local V1…";
             StartServer();
             if (!await WaitUntilReadyAsync(TimeSpan.FromMinutes(2)))
@@ -168,10 +177,9 @@ internal sealed class PilotPaperWindow : Form
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
             _webView.CoreWebView2.NewWindowRequested += (_, args) =>
             {
-                // V1 is a single-window application. External links use the user's browser,
-                // but PilotPaper itself can never clone its application window.
                 args.Handled = true;
                 if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri) && uri.Host != "127.0.0.1")
                     Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
@@ -241,6 +249,14 @@ internal sealed class PilotPaperWindow : Form
         File.WriteAllText(varsPath, $"OPENAI_API_KEY={key}{Environment.NewLine}", new UTF8Encoding(false));
     }
 
+    private void SyncDevVarsToWorkerProject()
+    {
+        var persistentVars = Path.Combine(_installRoot, ".dev.vars");
+        var workerVars = Path.Combine(_currentAppDir, ".dev.vars");
+        if (!File.Exists(persistentVars)) throw new InvalidOperationException("Configuration OpenAI locale introuvable.");
+        File.Copy(persistentVars, workerVars, overwrite: true);
+    }
+
     private void StartServer()
     {
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
@@ -262,8 +278,6 @@ internal sealed class PilotPaperWindow : Form
         startInfo.ArgumentList.Add("5174");
         startInfo.ArgumentList.Add("--strictPort");
 
-        // V1 K-par-K exercises the complete quality chain but is never allowed
-        // to claim production validation.
         startInfo.Environment["DP_TEST_EXPORT"] = "true";
         startInfo.Environment["DP_TEST_FAST"] = "false";
         startInfo.Environment["DP_MAX_RETRIES"] = "5";
@@ -287,6 +301,127 @@ internal sealed class PilotPaperWindow : Form
         if (!_server.Start()) throw new InvalidOperationException("Impossible de lancer le moteur local PilotPaper.");
         _server.BeginOutputReadLine();
         _server.BeginErrorReadLine();
+    }
+
+    private async void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        try
+        {
+            var message = args.TryGetWebMessageAsString();
+            if (message == "CHECK_UPDATE") await CheckForUpdateAsync();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"WEB MESSAGE ERROR: {ex}");
+        }
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        if (_updateInProgress) return;
+        _updateInProgress = true;
+        PostUpdateStatus("checking", "Vérification de la dernière V1…");
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("PilotPaper-V1-Updater/1.0");
+            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+
+            using var releaseResponse = await client.GetAsync(ReleaseApiUrl);
+            releaseResponse.EnsureSuccessStatusCode();
+            var releaseJson = await releaseResponse.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(releaseJson);
+            var root = document.RootElement;
+            var targetCommit = root.GetProperty("target_commitish").GetString()?.Trim() ?? "";
+
+            string? downloadUrl = null;
+            string? expectedDigest = null;
+            foreach (var asset in root.GetProperty("assets").EnumerateArray())
+            {
+                if (!string.Equals(asset.GetProperty("name").GetString(), SetupAssetName, StringComparison.Ordinal)) continue;
+                downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                if (asset.TryGetProperty("digest", out var digestElement)) expectedDigest = digestElement.GetString();
+                break;
+            }
+            if (string.IsNullOrWhiteSpace(downloadUrl)) throw new InvalidOperationException("La release V1 ne contient pas l'installeur attendu.");
+
+            var installedCommit = File.Exists(_buildMarkerPath) ? File.ReadAllText(_buildMarkerPath).Trim() : "";
+            if (!string.IsNullOrWhiteSpace(installedCommit) && string.Equals(installedCommit, targetCommit, StringComparison.OrdinalIgnoreCase))
+            {
+                PostUpdateStatus("current", "PilotPaper V1 est à jour.");
+                return;
+            }
+
+            PostUpdateStatus("available", "Une nouvelle V1 est disponible.");
+            var choice = MessageBox.Show(
+                this,
+                "Une mise à jour PilotPaper V1 est disponible.\n\nElle ne sera installée que maintenant, à votre demande.\n\nTélécharger et installer ?",
+                "Mise à jour PilotPaper",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (choice != DialogResult.Yes)
+            {
+                PostUpdateStatus("idle", "Mise à jour laissée en attente.");
+                return;
+            }
+
+            PostUpdateStatus("downloading", "Téléchargement de la mise à jour…");
+            var updatePath = Path.Combine(_runtimeDir, "PilotPaper-V1-Update.exe");
+            if (File.Exists(updatePath)) File.Delete(updatePath);
+            using (var downloadResponse = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            {
+                downloadResponse.EnsureSuccessStatusCode();
+                await using var input = await downloadResponse.Content.ReadAsStreamAsync();
+                await using var output = File.Create(updatePath);
+                await input.CopyToAsync(output);
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedDigest) && expectedDigest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            {
+                var expectedHex = expectedDigest[7..].Trim();
+                await using var stream = File.OpenRead(updatePath);
+                var actualHex = Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
+                if (!string.Equals(actualHex, expectedHex, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(updatePath);
+                    throw new InvalidOperationException("La signature SHA-256 de la mise à jour ne correspond pas à la release publiée.");
+                }
+            }
+
+            PostUpdateStatus("installing", "Mise à jour vérifiée. Lancement de l'installeur…");
+            AppendLog($"UPDATE installing target={targetCommit}");
+            Process.Start(new ProcessStartInfo(updatePath) { UseShellExecute = true });
+            BeginInvoke(Close);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"UPDATE ERROR: {ex}");
+            PostUpdateStatus("error", "La mise à jour n'a pas pu être vérifiée.");
+            MessageBox.Show(
+                this,
+                $"La mise à jour n'a pas pu être effectuée.\n\n{ex.Message}\n\nPilotPaper reste sur la version actuelle.",
+                "Mise à jour PilotPaper",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _updateInProgress = false;
+        }
+    }
+
+    private void PostUpdateStatus(string status, string message)
+    {
+        if (_webView.CoreWebView2 is null) return;
+        try
+        {
+            var payload = JsonSerializer.Serialize(new { type = "pilotpaper-update-status", status, message });
+            _webView.CoreWebView2.PostWebMessageAsJson(payload);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"UPDATE STATUS ERROR: {ex.Message}");
+        }
     }
 
     private static async Task<bool> IsReadyAsync()
