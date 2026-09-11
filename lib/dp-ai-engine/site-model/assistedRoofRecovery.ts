@@ -80,7 +80,7 @@ export async function recoverRoofFromFourClicks(args: {
     polygon: [...polygonLonLat, polygonLonLat[0]],
     centroid: polygonCentroid(polygonLonLat),
     areaM2,
-    source: "BDTOPO_V3:batiment",
+    source: "assisted-selection",
   };
   const roof = buildRoofModelFromLidar({
     building: syntheticSupport,
@@ -90,21 +90,20 @@ export async function recoverRoofFromFourClicks(args: {
   });
   if (!roof.planes.length) throw new Error("Assisted Recovery : aucun plan fiable dans la zone sélectionnée.");
   const primary = [...roof.planes].sort((a, b) => b.sampleCount - a.sampleCount || b.confidence - a.confidence)[0]!;
-  const selectedPlaneId = args.faceId?.trim() || primary.id;
+  const originalPlaneId = primary.id;
+  const selectedPlaneId = args.faceId?.trim() || originalPlaneId;
   if (primary.rmsErrorM > 0.30 || primary.confidence < 0.60) {
     throw new Error(
       `Assisted Recovery : le pan sélectionné reste géométriquement insuffisant `
       + `(RMS ${primary.rmsErrorM.toFixed(2)} m, confiance ${Math.round(primary.confidence * 100)} %).`,
     );
   }
-  if (primary.id !== selectedPlaneId) primary.id = selectedPlaneId;
-  for (const obstacle of roof.obstacles) {
-    if (obstacle.roofPlaneId === primary.id || obstacle.roofPlaneId === roof.planes[0]?.id) {
-      obstacle.roofPlaneId = selectedPlaneId;
-    }
-  }
+  primary.id = selectedPlaneId;
+  const reassignedObstacles = roof.obstacles
+    .filter((obstacle) => obstacle.roofPlaneId === originalPlaneId)
+    .map((obstacle) => ({ ...obstacle, roofPlaneId: selectedPlaneId }));
   return {
-    roof: { ...roof, planes: [primary], obstacles: roof.obstacles.filter((o) => o.roofPlaneId === selectedPlaneId) },
+    roof: { ...roof, planes: [primary], obstacles: reassignedObstacles },
     selectedPlaneId,
     polygonLonLat,
     evidence: [
