@@ -5,9 +5,33 @@ const LOCAL_DATABASE_ID = "00000000-0000-4000-8000-000000000000";
 
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
+const workerEnvironmentKeys = [
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "DP_ANALYSIS_MODEL",
+  "DP_JUDGE_MODEL",
+  "DP_IMAGE_MODEL",
+  "DP_IMAGE_PROVIDER",
+  "DP_MAX_RETRIES",
+  "DP_QA_PASS_SCORE",
+  "DP_REALISM_PASS_SCORE",
+  "DP_TEST_EXPORT",
+  "DP_TEST_FAST",
+  "PILOTPAPER_DEV_EMAIL",
+  "PILOTPAPER_DEV_NAME",
+  "PILOTPAPER_ADMIN_EMAILS",
+] as const;
+
+const runtimeVars = Object.fromEntries(
+  workerEnvironmentKeys
+    .map((key) => [key, process.env[key]] as const)
+    .filter((entry): entry is readonly [string, string] => typeof entry[1] === "string" && entry[1].length > 0),
+);
+
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  vars: runtimeVars,
   d1_databases: [
     {
       binding: "DB",
