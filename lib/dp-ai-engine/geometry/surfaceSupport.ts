@@ -75,6 +75,36 @@ export interface SurfaceLayoutEligibilityResult {
   audits: Record<string, SurfaceUnderstandingAudit>;
 }
 
+/**
+ * Evidence requirements depend on the document being generated.
+ * The complete dossier keeps the historical strict policy (near + roof), while
+ * isolated pieces such as DP2 may prove the same geometry with one roof photo
+ * plus authoritative metric IGN evidence.
+ */
+export interface SurfaceEvidencePolicy {
+  requiredRealRoles?: PhotoRole[];
+  minimumRealPhotoObservations?: number;
+  requireMetricObstacleFootprints?: boolean;
+}
+
+const DEFAULT_SURFACE_EVIDENCE_POLICY: Required<SurfaceEvidencePolicy> = {
+  requiredRealRoles: ["near", "roof"],
+  minimumRealPhotoObservations: 2,
+  requireMetricObstacleFootprints: true,
+};
+
+function resolvedEvidencePolicy(policy?: SurfaceEvidencePolicy): Required<SurfaceEvidencePolicy> {
+  return {
+    requiredRealRoles: policy?.requiredRealRoles ?? DEFAULT_SURFACE_EVIDENCE_POLICY.requiredRealRoles,
+    minimumRealPhotoObservations: Math.max(
+      1,
+      policy?.minimumRealPhotoObservations ?? DEFAULT_SURFACE_EVIDENCE_POLICY.minimumRealPhotoObservations,
+    ),
+    requireMetricObstacleFootprints:
+      policy?.requireMetricObstacleFootprints ?? DEFAULT_SURFACE_EVIDENCE_POLICY.requireMetricObstacleFootprints,
+  };
+}
+
 function finitePoint(point: Point2D) {
   return Number.isFinite(point.x) && Number.isFinite(point.y);
 }
@@ -126,9 +156,9 @@ function highBoundaryKind(topology: RoofTopology): SurfaceBoundaryKind {
 function hasValidPolygon(polygon: Point2D[] | undefined) {
   return Boolean(
     polygon &&
-    polygon.length >= 3 &&
-    polygon.every(normalizedPoint) &&
-    normalizedPolygonArea(polygon) >= 0.00001,
+      polygon.length >= 3 &&
+      polygon.every(normalizedPoint) &&
+      normalizedPolygonArea(polygon) >= 0.00001,
   );
 }
 
@@ -271,18 +301,22 @@ function surfaceBlockingErrors(
   surface: SurfaceSupport,
   audit: SurfaceUnderstandingAudit,
   minimumConfidence: number,
+  policy?: SurfaceEvidencePolicy,
 ): string[] {
+  const evidence = resolvedEvidencePolicy(policy);
   const visible = surface.views.filter((view) => view.selectedFaceVisible);
   const errors = [...audit.errors];
   const hasOrthographic = visible.some(
-    (view) => view.role === "satellite_mass" &&
+    (view) =>
+      view.role === "satellite_mass" &&
       view.polygonNormalized.length === 4 &&
       hasValidPolygon(view.polygonNormalized) &&
       isStrictlyConvexQuad(view.polygonNormalized) &&
       normalizedConfidence(view.confidence) >= minimumConfidence,
   );
-  const hasRealPhoto = visible.some(
-    (view) => !["satellite", "satellite_mass"].includes(view.role) &&
+  const usableRealViews = visible.filter(
+    (view) =>
+      !["satellite", "satellite_mass"].includes(view.role) &&
       view.polygonNormalized.length === 4 &&
       hasValidPolygon(view.polygonNormalized) &&
       isStrictlyConvexQuad(view.polygonNormalized) &&
@@ -292,22 +326,16 @@ function surfaceBlockingErrors(
   if (!hasOrthographic) {
     errors.push(`Surface ${surface.id} is not demonstrated on the metric IGN close view.`);
   }
-  if (!hasRealPhoto) {
-    errors.push(`Surface ${surface.id} is not demonstrated in a usable real project photograph.`);
+  if (usableRealViews.length < evidence.minimumRealPhotoObservations) {
+    errors.push(
+      `Surface ${surface.id} has only ${usableRealViews.length} reliable real-photo observation(s); ${evidence.minimumRealPhotoObservations} required by this document policy.`,
+    );
   }
 
-  for (const role of ["near", "roof"] as const) {
-    const demonstrated = visible.some(
-      (view) => view.role === role &&
-        view.polygonNormalized.length === 4 &&
-        hasValidPolygon(view.polygonNormalized) &&
-        isStrictlyConvexQuad(view.polygonNormalized) &&
-        normalizedConfidence(view.confidence) >= minimumConfidence,
-    );
+  for (const role of evidence.requiredRealRoles) {
+    const demonstrated = usableRealViews.some((view) => view.role === role);
     if (!demonstrated) {
-      errors.push(
-        `Surface ${surface.id} has no reliable ${role} observation of the same selected roof face.`,
-      );
+      errors.push(`Surface ${surface.id} has no reliable ${role} observation required by this document policy.`);
     }
   }
 
@@ -318,7 +346,7 @@ function surfaceBlockingErrors(
       );
       continue;
     }
-    if (!isMetricRole(obstacle.viewRole)) {
+    if (evidence.requireMetricObstacleFootprints && !isMetricRole(obstacle.viewRole)) {
       errors.push(
         `Obstacle ${obstacle.type} on surface ${surface.id} is only localized in ${obstacle.viewRole} evidence and has no metric IGN footprint.`,
       );
@@ -332,6 +360,7 @@ export function selectLayoutEligibleSurfaces(
   faces: RoofFaceObservation[],
   topology: RoofTopology,
   minimumConfidence = 0.72,
+  policy?: SurfaceEvidencePolicy,
 ): SurfaceLayoutEligibilityResult {
   const eligibleFaceIds: string[] = [];
   const rejected: Record<string, string[]> = {};
@@ -342,7 +371,7 @@ export function selectLayoutEligibleSurfaces(
     const surface = surfaceSupportFromRoofFace(face, topology);
     const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
     audits[face.id] = audit;
-    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence);
+    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence, policy);
     if (errors.length) {
       rejected[face.id] = errors;
       continue;
@@ -364,6 +393,7 @@ export function gateAllocatedSurfaces(
   topology: RoofTopology,
   allocatedFaceIds: string[],
   minimumConfidence = 0.72,
+  policy?: SurfaceEvidencePolicy,
 ): AllocatedSurfaceGateResult {
   const uniqueIds = [...new Set(allocatedFaceIds)];
   if (!uniqueIds.length) throw new Error("No allocated surface was supplied to the V1 understanding gate.");
@@ -379,7 +409,7 @@ export function gateAllocatedSurfaces(
     const surface = surfaceSupportFromRoofFace(face, topology);
     const audit = auditSurfaceUnderstanding(surface, minimumConfidence);
     audits[faceId] = audit;
-    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence);
+    const errors = surfaceBlockingErrors(surface, audit, minimumConfidence, policy);
 
     if (errors.length) {
       throw new Error(`Surface understanding rejected ${faceId}: ${errors.join(" ")}`);
