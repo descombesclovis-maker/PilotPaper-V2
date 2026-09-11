@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
+  Crosshair,
   Download,
   FileImage,
   LoaderCircle,
@@ -27,6 +28,16 @@ type PieceResult = {
   sourceSummary: string[];
   inspector: { passed: boolean; score: number; checks: string[]; issues: string[] };
 };
+type RecoveryPoint = { x: number; y: number };
+type RoofQuadRecovery = {
+  type: "roof_quad";
+  reason: string;
+  imageMimeType: "image/png";
+  imageBase64: string;
+  widthPx: number;
+  heightPx: number;
+};
+type ApiFailure = { error?: string; recovery?: RoofQuadRecovery; validationStatus?: "test_unverified" };
 
 type Draft = {
   address: string;
@@ -115,6 +126,8 @@ export function DpPieceWorkbench() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<PieceResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [recovery, setRecovery] = useState<RoofQuadRecovery | null>(null);
+  const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPoint[]>([]);
   const [history, setHistory] = useState<Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>>({});
 
   const contract = useMemo(() => DP_PIECE_CONTRACTS.find((piece) => piece.dp === selectedDp) ?? null, [selectedDp]);
@@ -148,10 +161,16 @@ export function DpPieceWorkbench() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  function clearRecovery() {
+    setRecovery(null);
+    setRecoveryPoints([]);
+  }
+
   function openPiece(dp: DPNumber) {
     setSelectedDp(dp);
     setResult(null);
     setError("");
+    clearRecovery();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -159,6 +178,7 @@ export function DpPieceWorkbench() {
     setResult(null);
     setError("");
     setPhotos({});
+    clearRecovery();
   }
 
   async function setPhoto(role: PhotoValue["role"], file?: File) {
@@ -172,11 +192,12 @@ export function DpPieceWorkbench() {
     }
   }
 
-  async function generate() {
+  async function generate(assistedRoofQuad?: RecoveryPoint[]) {
     if (!contract) return;
     setBusy(true);
     setError("");
     setResult(null);
+    if (!assistedRoofQuad) clearRecovery();
     try {
       const payload = {
         dp: contract.dp,
@@ -194,14 +215,24 @@ export function DpPieceWorkbench() {
         gutterClearanceMm: numeric(draft.gutterClearanceMm),
         interPanelGapMm: numeric(draft.interPanelGapMm),
         photos: Object.values(photos),
+        ...(assistedRoofQuad ? { assistedRoofQuad } : {}),
       };
       const response = await fetch("/api/dp-piece", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const body = await response.json().catch(() => null) as PieceResult | { error?: string } | null;
-      if (!response.ok || !body || !("dp" in body)) throw new Error((body && "error" in body && body.error) || `Génération impossible (${response.status}).`);
+      const body = await response.json().catch(() => null) as PieceResult | ApiFailure | null;
+      if (!response.ok || !body || !("dp" in body)) {
+        const failure = body && !("dp" in body) ? body : null;
+        if (response.status === 409 && failure?.recovery?.type === "roof_quad") {
+          setRecovery(failure.recovery);
+          setRecoveryPoints([]);
+          return;
+        }
+        throw new Error(failure?.error || `Génération impossible (${response.status}).`);
+      }
+      clearRecovery();
       setResult(body);
       setHistory((current) => {
         const previous = current[contract.dp];
@@ -214,6 +245,17 @@ export function DpPieceWorkbench() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function addRecoveryPoint(event: MouseEvent<HTMLDivElement>) {
+    if (!recovery || busy || recoveryPoints.length >= 4) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const point = {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    };
+    setRecoveryPoints((current) => [...current, point].slice(0, 4));
   }
 
   function downloadResult() {
@@ -336,9 +378,35 @@ export function DpPieceWorkbench() {
           <div className={styles.panelHeading}><div><span>FORMULAIRE DP{contract.dp}</span><h2>Uniquement les données nécessaires</h2></div><MapPinned size={24} /></div>
           <div className={styles.formGrid}>{contract.fields.map(inputField)}</div>
           {error ? <div className={styles.error}><TriangleAlert size={19} /><span>{error}</span></div> : null}
-          <button className={styles.generate} disabled={busy} onClick={() => void generate()}>
-            {busy ? <><LoaderCircle className={styles.spin} size={19} /> PilotPaper travaille…</> : <>Générer DP{contract.dp} <span>TEST</span></>}
-          </button>
+
+          {recovery ? (
+            <div className={styles.recoveryCard}>
+              <div className={styles.recoveryHeading}>
+                <Crosshair size={20} />
+                <div><strong>Sélection assistée du pan</strong><span>{recoveryPoints.length}/4 coins sélectionnés</span></div>
+              </div>
+              <p>PilotPaper n'a pas validé le pan automatiquement. Clique simplement les quatre coins du pan à équiper sur la vue aérienne. Aucune mesure ne t'est demandée.</p>
+              <div className={styles.recoveryReason}><strong>Pourquoi l'automatique s'est arrêté :</strong> {recovery.reason}</div>
+              <div className={styles.recoveryImageWrap} onClick={addRecoveryPoint} role="button" tabIndex={0} aria-label="Sélectionner les quatre coins du pan">
+                <img src={`data:${recovery.imageMimeType};base64,${recovery.imageBase64}`} alt="Vue aérienne métrique IGN pour sélectionner le pan" />
+                <svg className={styles.recoveryOverlay} viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+                  {recoveryPoints.length >= 2 ? <polyline points={recoveryPoints.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="none" stroke="white" strokeWidth="5" strokeDasharray="12 8" /> : null}
+                  {recoveryPoints.length === 4 ? <polygon points={recoveryPoints.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="rgba(23,59,103,.20)" stroke="#ffffff" strokeWidth="5" /> : null}
+                  {recoveryPoints.map((point, index) => <g key={`${point.x}-${point.y}-${index}`}><circle cx={point.x * 1000} cy={point.y * 1000} r="16" fill="#d66b3e" stroke="#fff" strokeWidth="6" /><text x={point.x * 1000} y={point.y * 1000 + 6} textAnchor="middle" fontSize="18" fontWeight="900" fill="#fff">{index + 1}</text></g>)}
+                </svg>
+              </div>
+              <div className={styles.recoveryActions}>
+                <button type="button" onClick={() => setRecoveryPoints([])} disabled={busy || recoveryPoints.length === 0}>Recommencer les points</button>
+                <button type="button" className={styles.recoveryConfirm} onClick={() => void generate(recoveryPoints)} disabled={busy || recoveryPoints.length !== 4}>
+                  {busy ? <><LoaderCircle className={styles.spin} size={17} /> Analyse LiDAR…</> : <>Analyser ce pan avec LiDAR</>}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className={styles.generate} disabled={busy} onClick={() => void generate()}>
+              {busy ? <><LoaderCircle className={styles.spin} size={19} /> PilotPaper travaille…</> : <>Générer DP{contract.dp} <span>TEST</span></>}
+            </button>
+          )}
           <p className={styles.modeNote}>Cette V1 ne peut produire qu'un résultat <strong>test_unverified</strong>. Aucun clic ne peut le transformer en document de production.</p>
         </section>
 
@@ -348,7 +416,7 @@ export function DpPieceWorkbench() {
             {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
           {!result ? (
-            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>DP{contract.dp} en attente</strong><span>Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre.</span></div>
+            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "PilotPaper attend les 4 coins du pan" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Le LiDAR reprendra automatiquement après ta sélection." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
           ) : (
             <>
               <div className={styles.previewCanvas}>{previewUrl ? <img src={previewUrl} alt={`Résultat DP${contract.dp}`} /> : null}</div>
