@@ -18,6 +18,13 @@ export type BuildingFootprint = {
   areaM2?: number;
   heightM?: number;
   source: "BDTOPO_V3:batiment" | "assisted-selection";
+  /**
+   * BD TOPO can split one physical house into several touching volumes. The
+   * anchor footprint keeps those members so document engines can resolve the
+   * exact volume carrying a selected roof face instead of treating a compound
+   * house as one arbitrary polygon.
+   */
+  components?: BuildingFootprint[];
 };
 
 export type LidarHeightSample = {
