@@ -38,11 +38,6 @@ function segmentArea(segment: GoogleSolarRoofSegment) {
   return Number.isFinite(slope) && slope > 0 ? slope : 0;
 }
 
-/**
- * Stable inventory of every physical Google Solar roof segment.
- * A/B/C are geometry identities, not "best available layout" aliases.
- * The ordering never depends on requested panel count, orientation or energy.
- */
 export function listGoogleSolarFaces(
   insights: GoogleSolarBuildingInsights,
 ): GoogleSolarFaceDescriptor[] {
@@ -70,32 +65,10 @@ export function listGoogleSolarFaces(
     }));
 }
 
-/**
- * Restricts Google Solar to the exact physical faces explicitly authorised by
- * the user. Segment indices are remapped because downstream engines expect a
- * compact 0..N-1 list. No unselected face can silently re-enter the layout.
- */
-export function selectGoogleSolarFaces(
+function compactInsightsForSegments(
   insights: GoogleSolarBuildingInsights,
-  faceIds: string[],
-): SelectedGoogleSolarFaces {
-  const requested = [...new Set(faceIds.map((id) => String(id ?? "").trim().toUpperCase()).filter(Boolean))];
-  if (!requested.length) {
-    throw new Error("Google Solar : sélectionnez au moins un pan de toiture.");
-  }
-
-  const ranked = listGoogleSolarFaces(insights);
-  const selected = requested.map((faceId) => {
-    const rank = requestedFaceRank(faceId);
-    const face = ranked[rank];
-    if (!face) {
-      throw new Error(
-        `Google Solar : le pan ${faceId} n'existe pas sur ce bâtiment (${ranked.length} pan(s) détecté(s)).`,
-      );
-    }
-    return face;
-  });
-
+  selected: GoogleSolarFaceDescriptor[],
+) {
   const compactIndexByOriginal = new Map<number, number>();
   selected.forEach((face, compactIndex) => compactIndexByOriginal.set(face.originalSegmentIndex, compactIndex));
 
@@ -109,22 +82,67 @@ export function selectGoogleSolarFaces(
   for (const face of selected) {
     if (!selectedPanels.some((panel) => panel.segmentIndex === compactIndexByOriginal.get(face.originalSegmentIndex))) {
       throw new Error(
-        `Google Solar : le pan ${face.faceId} est bien distinct mais Google ne fournit aucune cellule photovoltaïque exploitable dessus.`,
+        `Google Solar : le segment physique ${face.originalSegmentIndex + 1} existe mais ne fournit aucune cellule photovoltaïque exploitable.`,
       );
     }
   }
 
   return {
+    ...insights,
+    solarPotential: {
+      ...insights.solarPotential,
+      roofSegmentStats: selected.map((face) => face.segment),
+      solarPanels: selectedPanels,
+    },
+  };
+}
+
+export function selectGoogleSolarFaces(
+  insights: GoogleSolarBuildingInsights,
+  faceIds: string[],
+): SelectedGoogleSolarFaces {
+  const requested = [...new Set(faceIds.map((id) => String(id ?? "").trim().toUpperCase()).filter(Boolean))];
+  if (!requested.length) throw new Error("Google Solar : sélectionnez au moins un pan de toiture.");
+
+  const ranked = listGoogleSolarFaces(insights);
+  const selected = requested.map((faceId) => {
+    const rank = requestedFaceRank(faceId);
+    const face = ranked[rank];
+    if (!face) {
+      throw new Error(
+        `Google Solar : le pan ${faceId} n'existe pas sur ce bâtiment (${ranked.length} pan(s) détecté(s)).`,
+      );
+    }
+    return face;
+  });
+
+  return {
     faceIds: selected.map((face) => face.faceId),
     faces: selected,
-    insights: {
-      ...insights,
-      solarPotential: {
-        ...insights.solarPotential,
-        roofSegmentStats: selected.map((face) => face.segment),
-        solarPanels: selectedPanels,
-      },
-    },
+    insights: compactInsightsForSegments(insights, selected),
+  };
+}
+
+/**
+ * Physical selector used after a user clicked a roof marker. Unlike A/B/C,
+ * originalSegmentIndex never changes when irrelevant neighbour faces are
+ * filtered or when the display list is re-lettered.
+ */
+export function selectGoogleSolarFaceBySegmentIndex(
+  insights: GoogleSolarBuildingInsights,
+  originalSegmentIndex: number,
+): SelectedGoogleSolarFace {
+  if (!Number.isInteger(originalSegmentIndex) || originalSegmentIndex < 0) {
+    throw new Error("Google Solar : identité physique du pan invalide.");
+  }
+  const face = listGoogleSolarFaces(insights)
+    .find((candidate) => candidate.originalSegmentIndex === originalSegmentIndex);
+  if (!face) {
+    throw new Error(`Google Solar : le segment physique ${originalSegmentIndex + 1} n'existe pas sur le bâtiment verrouillé.`);
+  }
+  return {
+    ...face,
+    insights: compactInsightsForSegments(insights, [face]),
   };
 }
 
@@ -134,8 +152,5 @@ export function selectGoogleSolarFace(
 ): SelectedGoogleSolarFace {
   const selection = selectGoogleSolarFaces(insights, [faceId]);
   const face = selection.faces[0]!;
-  return {
-    ...face,
-    insights: selection.insights,
-  };
+  return { ...face, insights: selection.insights };
 }
