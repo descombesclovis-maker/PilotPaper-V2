@@ -56,7 +56,7 @@ function resizeRgba(src:DecodedPng,targetWidth:number,targetHeight:number):Uint8
       for(let c=0;c<4;c++){
         const top=src.rgba[i00+c]!*(1-wx)+src.rgba[i10+c]!*wx;
         const bottom=src.rgba[i01+c]!*(1-wx)+src.rgba[i11+c]!*wx;
-        out[di+c]=Math.max(0,Math.min(255,Math.round(top*(1-wy)+bottom*wy)));
+        out[di+c]=Math.max(0,Math.min(255,Math.round(top*(1-wy)+bottom*wy));
       }
     }
   }
@@ -89,4 +89,25 @@ export function cropPngAroundPolygons(base64:string,polygons:Point2D[][],marginN
   const w=x1-x0,h=y1-y0,out=new Uint8Array(w*h*4);
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){const si=((y0+y)*src.width+(x0+x))*4,di=(y*w+x)*4;out[di]=src.rgba[si]!;out[di+1]=src.rgba[si+1]!;out[di+2]=src.rgba[si+2]!;out[di+3]=src.rgba[si+3]!;}
   return encodePng(w,h,out);
+}
+
+/**
+ * Deterministic QA overlay: paints panel polygons over the immutable satellite
+ * PNG so a second vision model can judge the chosen building/roof without
+ * being allowed to change geometry.
+ */
+export function annotatePngWithPanelPolygons(base64:string,polygons:Point2D[][]):string{
+  const src=decodePng(base64);
+  if(!polygons.length)throw new Error("Cannot annotate satellite image without panel polygons.");
+  const out=new Uint8Array(src.rgba);
+  for(let y=0;y<src.height;y++)for(let x=0;x<src.width;x++){
+    const nx=(x+.5)/src.width,ny=(y+.5)/src.height;
+    if(!polygons.some(poly=>inside(nx,ny,poly)))continue;
+    const i=(y*src.width+x)*4;
+    out[i]=Math.round(out[i]!*0.28+18*0.72);
+    out[i+1]=Math.round(out[i+1]!*0.28+63*0.72);
+    out[i+2]=Math.round(out[i+2]!*0.28+105*0.72);
+    out[i+3]=255;
+  }
+  return encodePng(src.width,src.height,out);
 }
