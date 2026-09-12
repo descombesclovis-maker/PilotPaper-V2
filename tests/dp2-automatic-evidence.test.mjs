@@ -51,12 +51,13 @@ test("automatic layout consumes only contiguous Google candidate cells and exact
   assert.match(safeCells, /googleCandidateOrientation/);
 });
 
-test("physical building center re-resolves the official parcel instead of trusting the roadside address point", () => {
+test("physical building center can recenter work inside the official parcel but can never switch cadastral parcel", () => {
   assert.match(autoEngine, /resolveTargetParcelFromBuildingCenter/);
-  assert.match(targetResolver, /geocodage\/reverse/);
-  assert.match(targetResolver, /index.*parcel/);
   assert.match(targetResolver, /buildingCenter/);
-  assert.match(targetResolver, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
+  assert.match(targetResolver, /insideOriginalParcel/);
+  assert.match(targetResolver, /return args\.addressContext/);
+  assert.doesNotMatch(targetResolver, /geocodage\/reverse/);
+  assert.doesNotMatch(targetResolver, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
 });
 
 test("OpenAI is an independent visual veto after geometry, never a geometry source", () => {
