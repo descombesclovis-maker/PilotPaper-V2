@@ -97,6 +97,24 @@ test("Google Solar candidate cells can automatically host an exact manufacturer 
   assert.ok(result.design.quadNormalized.every((point) => point.x > 0 && point.x < 1 && point.y > 0 && point.y < 1));
 });
 
+test("requested landscape can use a portrait Google grid purely as a geometric safe area", () => {
+  const result = module.automaticRoofDesignFromGoogleSolar({
+    insights: fakeInsights(),
+    frame: frame(),
+    requestedRows: 1,
+    requestedColumns: 2,
+    requestedOrientation: "landscape",
+    moduleWidthMeters: 1.134,
+    moduleHeightMeters: 1.762,
+    interPanelGapMeters: 0.020,
+    placement: "centered",
+  });
+
+  assert.equal(result.googleCandidateOrientation, "PORTRAIT");
+  assert.ok(result.safeAreaWidthMeters >= result.requestedArrayWidthMeters);
+  assert.ok(result.safeAreaSlopeLengthMeters >= result.requestedArraySlopeLengthMeters);
+});
+
 test("automatic Google Solar layout fails closed when the real module field is larger than every safe cell block", () => {
   assert.throws(() => module.automaticRoofDesignFromGoogleSolar({
     insights: fakeInsights(),
