@@ -42,11 +42,22 @@ function exteriorRings(feature: GeoJsonFeature): LonLat[][] {
 }
 
 function pointOnSegment(point: LonLat, a: LonLat, b: LonLat, epsilon = 1e-10) {
-  const cross = (point[1] - a[1]) * (b[0] - a[0]) - (point[0] - a[0]) * (b[1] - a[1]);
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSq = dx ** 2 + dy ** 2;
+
+  // GeoJSON rings are commonly closed by repeating their first point at the
+  // end. That creates a zero-length last->first segment. Such a segment must
+  // only contain its own coordinate; otherwise every point would appear to be
+  // "on" the degenerate segment and neighbouring roofs could be accepted.
+  if (lengthSq <= epsilon ** 2) {
+    return Math.hypot(point[0] - a[0], point[1] - a[1]) <= epsilon;
+  }
+
+  const cross = (point[1] - a[1]) * dx - (point[0] - a[0]) * dy;
   if (Math.abs(cross) > epsilon) return false;
-  const dot = (point[0] - a[0]) * (b[0] - a[0]) + (point[1] - a[1]) * (b[1] - a[1]);
+  const dot = (point[0] - a[0]) * dx + (point[1] - a[1]) * dy;
   if (dot < -epsilon) return false;
-  const lengthSq = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2;
   return dot <= lengthSq + epsilon;
 }
 
@@ -67,7 +78,7 @@ export function pointInLonLatPolygon(point: LonLat, polygon: LonLat[]) {
 function polygonAreaM2(polygon: LonLat[]) {
   const projected = polygon.map(([lon, lat]) => toWebMercator(lon, lat));
   let area2 = 0;
-  for (let i = 0; i < projected.length; i++) {
+  for (let i = 0; i < projected.length; i += 1) {
     const a = projected[i]!;
     const b = projected[(i + 1) % projected.length]!;
     area2 += a.x * b.y - b.x * a.y;
@@ -80,7 +91,7 @@ function polygonCentroid(polygon: LonLat[]): LonLat {
   let area2 = 0;
   let cx = 0;
   let cy = 0;
-  for (let i = 0; i < projected.length; i++) {
+  for (let i = 0; i < projected.length; i += 1) {
     const a = projected[i]!;
     const b = projected[(i + 1) % projected.length]!;
     const cross = a.x * b.y - b.x * a.y;
