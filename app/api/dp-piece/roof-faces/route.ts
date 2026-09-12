@@ -4,7 +4,7 @@ import { buildArchitecturalSectionGeometry } from "@/lib/dp-ai-engine/geometry/a
 import { googleSolarConfigured, type GoogleSolarBuildingInsights } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
 import { listGoogleSolarFaces, selectGoogleSolarFace } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
-import { pointBelongsToTargetProperty, resolveTargetRoofContext } from "@/lib/dp-ai-engine/site-model/targetRoofContext";
+import { buildingForGoogleSolarFace, resolveTargetRoofContext } from "@/lib/dp-ai-engine/site-model/targetRoofContext";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 
 export const dynamic = "force-dynamic";
@@ -94,6 +94,7 @@ export async function POST(request: Request) {
       id: string;
       label: string;
       originalSegmentIndex: number;
+      buildingId: string;
       centerNormalized: { x: number; y: number };
       areaMeters2: number;
       panelCellCount: number;
@@ -102,7 +103,8 @@ export async function POST(request: Request) {
     }>;
 
     for (const face of listGoogleSolarFaces(target.solar)) {
-      if (!pointBelongsToTargetProperty(face.segment.center, target)) continue;
+      const faceBuilding = buildingForGoogleSolarFace(target.solar, face.originalSegmentIndex, target);
+      if (!faceBuilding) continue;
       try {
         const selected = selectGoogleSolarFace(target.solar, face.faceId);
         const automatic = automaticRoofDesignFromGoogleSolar({
@@ -117,10 +119,10 @@ export async function POST(request: Request) {
           placement,
         });
 
-        // A face shown in the selector must also be capable of producing DP3.
-        // This avoids offering a pan that later fails in the architectural cut.
+        // Prevalidation uses the exact BD TOPO sub-volume that carries this
+        // Google Solar face, not one arbitrary polygon for the whole address.
         buildArchitecturalSectionGeometry({
-          building: target.building,
+          building: faceBuilding,
           insights: target.solar,
           selectedSegmentIndex: face.originalSegmentIndex,
         });
@@ -129,6 +131,7 @@ export async function POST(request: Request) {
           id: face.faceId,
           label: `Pan ${face.faceId}`,
           originalSegmentIndex: face.originalSegmentIndex,
+          buildingId: faceBuilding.id,
           centerNormalized: averageNormalized(automatic.design.quadNormalized),
           areaMeters2: face.areaMeters2,
           panelCellCount: face.panelCount,
@@ -154,6 +157,7 @@ export async function POST(request: Request) {
       normalizedAddress: target.parcel.normalizedAddress,
       parcelReference: target.parcel.parcelReference,
       buildingId: target.building.id,
+      buildingIds: target.buildings.map((building) => building.id),
       configuration: {
         moduleReference: moduleSpec.canonicalReference,
         panelCount,
