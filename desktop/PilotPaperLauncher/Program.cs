@@ -164,6 +164,7 @@ internal sealed class PilotPaperWindow : Form
             CenterStartupLabels();
             EnsureInstalledPayload();
             EnsureOpenAiKey();
+            EnsureGoogleSolarKey();
             SyncDevVarsToWorkerProject();
             _startupDetail.Text = "Démarrage du moteur local V1…";
             StartServer();
@@ -211,21 +212,34 @@ internal sealed class PilotPaperWindow : Form
             throw new InvalidOperationException("Le dossier V1 installé est incomplet. Réinstallez PilotPaper V1.");
     }
 
-    private void EnsureOpenAiKey()
-    {
-        var varsPath = Path.Combine(_installRoot, ".dev.vars");
-        if (File.Exists(varsPath))
-        {
-            var existing = File.ReadAllLines(varsPath)
-                .FirstOrDefault(line => line.StartsWith("OPENAI_API_KEY=", StringComparison.Ordinal));
-            if (!string.IsNullOrWhiteSpace(existing?.Split('=', 2).ElementAtOrDefault(1))) return;
-        }
+    private string VarsPath => Path.Combine(_installRoot, ".dev.vars");
 
+    private string? ReadLocalVar(string name)
+    {
+        if (!File.Exists(VarsPath)) return null;
+        var prefix = name + "=";
+        var line = File.ReadAllLines(VarsPath)
+            .FirstOrDefault(candidate => candidate.StartsWith(prefix, StringComparison.Ordinal));
+        return line?.Split('=', 2).ElementAtOrDefault(1)?.Trim();
+    }
+
+    private void WriteLocalVar(string name, string value)
+    {
+        var prefix = name + "=";
+        var lines = File.Exists(VarsPath)
+            ? File.ReadAllLines(VarsPath).Where(line => !line.StartsWith(prefix, StringComparison.Ordinal)).ToList()
+            : new List<string>();
+        lines.Add($"{name}={value}");
+        File.WriteAllLines(VarsPath, lines, new UTF8Encoding(false));
+    }
+
+    private string? PromptForLocalSecret(string title, string description, string saveLabel, string cancelLabel)
+    {
         using var form = new Form
         {
-            Text = "PilotPaper V1 — Configuration locale",
-            Width = 560,
-            Height = 235,
+            Text = title,
+            Width = 590,
+            Height = 250,
             StartPosition = FormStartPosition.CenterParent,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
@@ -234,26 +248,54 @@ internal sealed class PilotPaperWindow : Form
         };
         var label = new Label
         {
-            Left = 22, Top = 20, Width = 500, Height = 48,
-            Text = "Clé API OpenAI du poste de test. Elle est enregistrée uniquement dans le dossier local PilotPaper V1."
+            Left = 22, Top = 20, Width = 535, Height = 62,
+            Text = description,
         };
-        var input = new TextBox { Left = 22, Top = 78, Width = 500, UseSystemPasswordChar = true };
-        var save = new Button { Text = "Enregistrer", Left = 382, Top = 124, Width = 140, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Annuler", Left = 270, Top = 124, Width = 100, DialogResult = DialogResult.Cancel };
+        var input = new TextBox { Left = 22, Top = 88, Width = 535, UseSystemPasswordChar = true };
+        var save = new Button { Text = saveLabel, Left = 405, Top = 136, Width = 152, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = cancelLabel, Left = 285, Top = 136, Width = 108, DialogResult = DialogResult.Cancel };
         form.Controls.AddRange([label, input, save, cancel]);
         form.AcceptButton = save;
         form.CancelButton = cancel;
-        if (form.ShowDialog(this) != DialogResult.OK) throw new OperationCanceledException("Configuration OpenAI annulée.");
-        var key = input.Text.Trim();
+        if (form.ShowDialog(this) != DialogResult.OK) return null;
+        return input.Text.Trim();
+    }
+
+    private void EnsureOpenAiKey()
+    {
+        if (!string.IsNullOrWhiteSpace(ReadLocalVar("OPENAI_API_KEY"))) return;
+        var key = PromptForLocalSecret(
+            "PilotPaper V1 — Configuration OpenAI",
+            "Clé API OpenAI du poste de test. Elle est enregistrée uniquement dans le dossier local PilotPaper V1 et n'est jamais envoyée dans GitHub.",
+            "Enregistrer",
+            "Annuler");
+        if (string.IsNullOrWhiteSpace(key)) throw new OperationCanceledException("Configuration OpenAI annulée.");
         if (key.Length < 20 || key.Contains('\n') || key.Contains('\r')) throw new InvalidOperationException("La clé OpenAI saisie n'est pas valide.");
-        File.WriteAllText(varsPath, $"OPENAI_API_KEY={key}{Environment.NewLine}", new UTF8Encoding(false));
+        WriteLocalVar("OPENAI_API_KEY", key);
+    }
+
+    private void EnsureGoogleSolarKey()
+    {
+        if (!string.IsNullOrWhiteSpace(ReadLocalVar("GOOGLE_SOLAR_API_KEY"))) return;
+        var key = PromptForLocalSecret(
+            "PilotPaper V1 — Google Solar API",
+            "Clé Google Cloud avec Solar API activée et facturation associée. Elle permet le placement automatique des panneaux. La clé reste uniquement sur ce poste. Vous pouvez choisir Plus tard : le Roof Designer restera disponible.",
+            "Activer l'AUTO",
+            "Plus tard");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            AppendLog("Google Solar API key not configured; DP2 automatic provider will use reviewed fallback.");
+            return;
+        }
+        if (key.Length < 20 || key.Contains('\n') || key.Contains('\r')) throw new InvalidOperationException("La clé Google Solar API saisie n'est pas valide.");
+        WriteLocalVar("GOOGLE_SOLAR_API_KEY", key);
     }
 
     private void SyncDevVarsToWorkerProject()
     {
         var persistentVars = Path.Combine(_installRoot, ".dev.vars");
         var workerVars = Path.Combine(_currentAppDir, ".dev.vars");
-        if (!File.Exists(persistentVars)) throw new InvalidOperationException("Configuration OpenAI locale introuvable.");
+        if (!File.Exists(persistentVars)) throw new InvalidOperationException("Configuration locale PilotPaper introuvable.");
         File.Copy(persistentVars, workerVars, overwrite: true);
     }
 
