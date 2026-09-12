@@ -1,4 +1,5 @@
 OPENAI_API_KEY=sk-proj-remplacez-moi
+GOOGLE_SOLAR_API_KEY=AIza-remplacez-moi
 PILOTPAPER_ADMIN_EMAILS=admin@exemple.fr
 DP_ANALYSIS_MODEL=gpt-5.6-sol
 DP_JUDGE_MODEL=gpt-5.6-sol
