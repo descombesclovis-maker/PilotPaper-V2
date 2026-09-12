@@ -31,10 +31,17 @@ function polygonArea(points: Point2D[]) {
   return Math.abs(sum) / 2;
 }
 
+function webMercatorGroundScale(frame: MetricFrame) {
+  // EPSG:3857 distances are enlarged by sec(latitude). Convert them back to
+  // local ground metres before deriving physical roof dimensions.
+  return Math.max(0.1, Math.cos(frame.latitude * Math.PI / 180));
+}
+
 function normalizedToGround(point: Point2D, frame: MetricFrame): GroundPointM {
+  const scale = webMercatorGroundScale(frame);
   return {
-    x: point.x * frame.widthMeters,
-    y: (1 - point.y) * frame.heightMeters,
+    x: point.x * frame.widthMeters * scale,
+    y: (1 - point.y) * frame.heightMeters * scale,
   };
 }
 
@@ -139,8 +146,8 @@ export function metricSurfaceFromManualRoofDesign(args: {
     gutterLineNormalized: [gutterLeftN, gutterRightN],
     ridgeLineNormalized: [ridgeLeftN, ridgeRightN],
     perspectiveNotes: [
-      "Pan tracé et validé par l'utilisateur sur orthophoto IGN métrée.",
-      `Pente déclarée : ${args.design.slopeDeg.toFixed(1)}°; dimensions planimétriques dérivées du repère IGN.`,
+      "Pan tracé et validé sur orthophoto géoréférencée.",
+      `Pente : ${args.design.slopeDeg.toFixed(1)}°; dimensions planimétriques corrigées de l'échelle Web Mercator à la latitude locale.`,
     ],
   };
 
