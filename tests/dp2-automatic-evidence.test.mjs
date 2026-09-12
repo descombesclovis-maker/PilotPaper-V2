@@ -32,7 +32,8 @@ test("DP2 no longer depends on LiDAR vision or automatic roof guessing", () => {
   assert.doesNotMatch(engine, /buildAssistedSiteModelFromParcel/);
   assert.doesNotMatch(engine, /resolveCrossViewSurfaceIdentity/);
   assert.doesNotMatch(engine, /resolveSurfaceObstacleInventory/);
-  assert.doesNotMatch(engine, /lidar/i);
+  assert.doesNotMatch(engine, /lidarAltimetry|buildRoofModelFromLidar|samplePolygonLidarHeights|recoverRoofFromFourClicks/);
+  assert.match(engine, /LiDAR n'est pas requis/);
   assert.match(engine, /Dp2RoofDesignerRequiredError/);
   assert.match(engine, /manualRoofDesign/);
 });
