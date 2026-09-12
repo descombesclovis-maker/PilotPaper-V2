@@ -10,6 +10,7 @@ after(async () => { await vite.close(); });
 
 const targetRoof = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/targetRoofContext.ts");
 const faceSelection = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/googleSolarFaceSelection.ts");
+const targetRoofSource = await readFile(new URL("../lib/dp-ai-engine/site-model/targetRoofContext.ts", import.meta.url), "utf8");
 const route = await readFile(new URL("../app/api/dp-piece/roof-faces/route.ts", import.meta.url), "utf8");
 const pieceRoute = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
 const workbench = await readFile(new URL("../components/dp-piece-workbench.tsx", import.meta.url), "utf8");
@@ -119,7 +120,7 @@ test("addressed property resolution starts from the exact address building and f
   assert.match(addressProperty, /parcelForBuilding/);
   assert.match(addressProperty, /distanceBetweenBuildingsM\(building, candidate\) <= 0\.45/);
   assert.doesNotMatch(addressProperty, /while \(changed\)/);
-  assert.match(targetRoof.toString(), /resolveAddressPropertyContext/);
+  assert.match(targetRoofSource, /resolveAddressPropertyContext/);
 });
 
 test("DP3 geometry can still resolve the selected face on a compound BD TOPO building", () => {
