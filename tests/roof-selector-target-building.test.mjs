@@ -9,8 +9,11 @@ const vite = await createServer({ appType: "custom", configFile: false, root, se
 after(async () => { await vite.close(); });
 
 const targetRoof = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/targetRoofContext.ts");
+const faceSelection = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/googleSolarFaceSelection.ts");
 const route = await readFile(new URL("../app/api/dp-piece/roof-faces/route.ts", import.meta.url), "utf8");
+const pieceRoute = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
 const workbench = await readFile(new URL("../components/dp-piece-workbench.tsx", import.meta.url), "utf8");
+const addressProperty = await readFile(new URL("../lib/dp-ai-engine/site-model/addressPropertyResolver.ts", import.meta.url), "utf8");
 const targetPropertyResolver = await readFile(new URL("../lib/dp-ai-engine/site-model/targetPropertyResolver.ts", import.meta.url), "utf8");
 const architecturalSection = await readFile(new URL("../lib/dp-ai-engine/geometry/architecturalSection.ts", import.meta.url), "utf8");
 
@@ -73,35 +76,59 @@ test("roof evidence must remain on the cadastral target building cluster", () =>
   assert.equal(targetRoof.pointBelongsToTargetProperty({ longitude: 4.70032, latitude: 46.4 }, { parcel, building, buildings: [building, wing] }), false);
 });
 
-test("a displaced Google Solar building center is accepted when roof evidence still matches the cadastral cluster", () => {
+test("a displaced Google Solar building center is accepted when roof evidence still matches the target house", () => {
   const solar = solarFixture({ centerLongitude: 4.70027, segmentLongitude: 4.70013, panelLongitude: 4.70013 });
   assert.equal(targetRoof.googleSolarMatchesTargetBuilding(solar, { parcel, building, buildings: [building, wing] }), true);
   assert.equal(targetRoof.buildingForGoogleSolarFace(solar, 0, { parcel, building, buildings: [building, wing] }).id, "target-wing");
 });
 
-test("a neighbouring Google Solar building remains rejected when roof evidence is outside the target cluster", () => {
+test("a neighbouring Google Solar building remains rejected", () => {
   const solar = solarFixture({ centerLongitude: 4.70032, segmentLongitude: 4.70032, panelLongitude: 4.70032 });
   assert.equal(targetRoof.googleSolarMatchesTargetBuilding(solar, { parcel, building, buildings: [building, wing] }), false);
 });
 
-test("roof selector is filtered by exact PV configuration and uses the matching BD TOPO volume for DP3", () => {
+test("roof selector filters by the requested PV configuration without using DP3 as an eligibility gate", () => {
   assert.match(route, /moduleReference/);
   assert.match(route, /panelCount/);
   assert.match(route, /requestedRows: rows/);
   assert.match(route, /requestedColumns: columns/);
   assert.match(route, /buildingForGoogleSolarFace/);
-  assert.match(route, /building: faceBuilding/);
-  assert.match(route, /frameAroundTarget/);
-  assert.match(route, /averageNormalized\(automatic\.design\.quadNormalized\)/);
+  assert.match(route, /normalizedGeoPoint\(face\.segment\.center, frame\)/);
+  assert.match(route, /encodeRoofFaceSelectionToken/);
+  assert.doesNotMatch(route, /buildArchitecturalSectionGeometry/);
 });
 
-test("DP3 resolves the selected face on a contiguous BD TOPO component", () => {
+test("physical roof-face tokens survive display re-lettering", () => {
+  const token = faceSelection.encodeRoofFaceSelectionToken({
+    displayFaceId: "C",
+    originalSegmentIndex: 9,
+    buildingId: "target-wing",
+  });
+  assert.deepEqual(faceSelection.decodeRoofFaceSelectionToken(token), {
+    displayFaceId: "C",
+    originalSegmentIndex: 9,
+    buildingId: "target-wing",
+  });
+  assert.match(pieceRoute, /decodeRoofFaceSelectionToken/);
+  assert.match(pieceRoute, /roofSegmentIndex: token\.originalSegmentIndex/);
+  assert.match(pieceRoute, /roofBuildingId: token\.buildingId/);
+});
+
+test("addressed property resolution starts from the exact address building and forbids recursive neighbour absorption", () => {
+  assert.match(addressProperty, /selectAddressBuilding/);
+  assert.match(addressProperty, /parcelForBuilding/);
+  assert.match(addressProperty, /distanceBetweenBuildingsM\(building, candidate\) <= 0\.45/);
+  assert.doesNotMatch(addressProperty, /while \(changed\)/);
+  assert.match(targetRoof.toString(), /resolveAddressPropertyContext/);
+});
+
+test("DP3 geometry can still resolve the selected face on a compound BD TOPO building", () => {
   assert.match(architecturalSection, /args\.building\.components/);
   assert.match(architecturalSection, /closestBuildingToPoint/);
   assert.match(architecturalSection, /const gutterHeightM = Number\(building\.heightM\)/);
 });
 
-test("Google Solar can never replace the parcel fixed by the user's address", () => {
+test("Google Solar can never replace the parcel fixed by the project property", () => {
   assert.match(targetPropertyResolver, /insideOriginalParcel/);
   assert.match(targetPropertyResolver, /return args\.addressContext/);
   assert.doesNotMatch(targetPropertyResolver, /geocodage\/reverse/);
@@ -115,5 +142,4 @@ test("K-par-K workbench reanalyses roof faces when PV configuration changes", ()
   assert.match(workbench, /rows,/);
   assert.match(workbench, /columns,/);
   assert.match(workbench, /orientation: snapshot\.orientation/);
-  assert.match(workbench, /Seuls les pans capables d'accueillir cette configuration sont affichés/);
 });
