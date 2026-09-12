@@ -50,7 +50,8 @@ test("V1 updater is manual, build-aware, visible and verifies the downloaded ins
 
 test("local OpenAI key is bridged into the Cloudflare worker runtime", () => {
   assert.match(launcher, /SyncDevVarsToWorkerProject/);
-  assert.match(launcher, /OPENAI_API_KEY=/);
+  assert.match(launcher, /ReadLocalVar\("OPENAI_API_KEY"\)/);
+  assert.match(launcher, /WriteLocalVar\("OPENAI_API_KEY", key\)/);
   assert.match(viteConfig, /OPENAI_API_KEY: process\.env\.OPENAI_API_KEY/);
   assert.match(worker, /OPENAI_API_KEY\?: string/);
   assert.match(worker, /process\.env\[key\] = value/);
