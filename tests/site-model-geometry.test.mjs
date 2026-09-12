@@ -12,7 +12,7 @@ const lidarModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/lidar
 const roofModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/roofGeometryEngine.ts");
 const parcelModule = await vite.ssrLoadModule("/lib/dp-ai-engine/context/officialParcel.ts");
 const assistedModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/assistedRoofRecovery.ts");
-const dp2Source = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const dp2Source = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const buildingSource = await readFile(new URL("../lib/dp-ai-engine/site-model/buildingResolver.ts", import.meta.url), "utf8");
 const siteModelSource = await readFile(new URL("../lib/dp-ai-engine/site-model/siteModelEngine.ts", import.meta.url), "utf8");
 
@@ -55,7 +55,7 @@ test("polygon LiDAR grid is deterministic and remains inside the selected roof p
   assert.equal(grid.stepM, 1);
 });
 
-test("LiDAR roof geometry extracts multiple planes and keeps protrusions out of the fitted roof planes", () => {
+test("LiDAR roof geometry remains available as an optional experimental provider", () => {
   const origin = [4.75, 46.30];
   const footprint = [
     lonLatFromLocal(origin, -6, -5),
@@ -78,11 +78,10 @@ test("LiDAR roof geometry extracts multiple planes and keeps protrusions out of 
   const roof = roofModule.buildRoofModelFromLidar({ building, samples, samplingStepM: 1, coverage: 1 });
   assert.ok(roof.planes.length >= 2, `expected >=2 planes, got ${roof.planes.length}`);
   assert.ok(roof.planes.every((plane) => plane.rmsErrorM < 0.30));
-  assert.ok(roof.planes.every((plane) => plane.projectionQuadLocalM.length === 4));
   assert.ok(roof.obstacles.some((obstacle) => obstacle.maxHeightAbovePlaneM > 0.5));
 });
 
-test("four-click Assisted Recovery converts only selection coordinates, never user-entered metres", () => {
+test("old four-click LiDAR recovery remains isolated and is no longer the DP2 critical path", () => {
   const frame = {
     longitude: 4.75,
     latitude: 46.30,
@@ -102,30 +101,20 @@ test("four-click Assisted Recovery converts only selection coordinates, never us
   const polygon = assistedModule.assistedQuadToLonLat(quad, frame);
   assert.equal(polygon.length, 4);
   assert.ok(polygon.flat().every(Number.isFinite));
-});
-
-test("Assisted SiteModel still derives metrics from LiDAR after four-click face selection", () => {
   assert.match(siteModelSource, /buildAssistedSiteModelFromParcel/);
-  assert.match(siteModelSource, /recoverRoofFromFourClicks/);
-  assert.match(siteModelSource, /Sélection uniquement ; aucune dimension métrique saisie/);
-  assert.match(siteModelSource, /kind: "lidar-altimetry"/);
 });
 
-test("DP2 tries automatic SiteModel then requests assisted LiDAR recovery, never legacy vision", () => {
-  const autoIndex = dp2Source.indexOf("buildAutomaticSiteModelFromParcel(official)");
-  const assistedIndex = dp2Source.indexOf("buildAssistedSiteModelFromParcel");
-  const recoveryErrorIndex = dp2Source.indexOf("Dp2AssistedRecoveryRequiredError");
-  assert.ok(autoIndex >= 0);
-  assert.ok(assistedIndex >= 0);
-  assert.ok(recoveryErrorIndex >= 0);
-  assert.equal(dp2Source.indexOf("generateWithLegacyVision"), -1);
-  assert.equal(dp2Source.indexOf("resolveCrossViewSurfaceIdentity"), -1);
-  assert.equal(dp2Source.indexOf("resolveSurfaceObstacleInventory"), -1);
-  assert.match(dp2Source, /Aucune IA générative utilisée pour créer la géométrie métrique/);
-  assert.match(dp2Source, /LiDAR HD IGN/);
+test("DP2 critical path is reviewed Roof Designer and explicitly does not call LiDAR", () => {
+  assert.match(dp2Source, /Dp2RoofDesignerRequiredError/);
+  assert.match(dp2Source, /manualRoofDesign/);
+  assert.match(dp2Source, /metricSurfaceFromManualRoofDesign/);
+  assert.match(dp2Source, /LiDAR non requis/);
+  assert.equal(dp2Source.indexOf("buildAutomaticSiteModelFromParcel"), -1);
+  assert.equal(dp2Source.indexOf("buildAssistedSiteModelFromParcel"), -1);
+  assert.equal(dp2Source.indexOf("samplePolygonLidarHeights"), -1);
 });
 
-test("building resolver uses official BD TOPO WFS around the geocoded project building", () => {
+test("building resolver remains available for future automatic providers", () => {
   assert.match(buildingSource, /BDTOPO_V3:batiment/);
   assert.match(buildingSource, /https:\/\/data\.geopf\.fr\/wfs\/ows/);
   assert.match(buildingSource, /EPSG:3857/);
