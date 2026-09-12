@@ -22,6 +22,40 @@ export type SelectedGoogleSolarFaces = {
   insights: GoogleSolarBuildingInsights;
 };
 
+export type RoofFaceSelectionToken = {
+  displayFaceId: string;
+  originalSegmentIndex: number;
+  buildingId: string;
+};
+
+const TOKEN_PREFIX = "PPF1";
+
+export function encodeRoofFaceSelectionToken(args: RoofFaceSelectionToken) {
+  const displayFaceId = String(args.displayFaceId ?? "").trim().toUpperCase();
+  if (!/^[A-Z]$/.test(displayFaceId)) throw new Error("PilotPaper : identifiant visuel du pan invalide.");
+  if (!Number.isInteger(args.originalSegmentIndex) || args.originalSegmentIndex < 0) {
+    throw new Error("PilotPaper : index physique du pan invalide.");
+  }
+  const buildingId = encodeURIComponent(String(args.buildingId ?? "").trim());
+  if (!buildingId) throw new Error("PilotPaper : bâtiment physique du pan absent.");
+  return `${TOKEN_PREFIX}|${displayFaceId}|${args.originalSegmentIndex}|${buildingId}`;
+}
+
+export function decodeRoofFaceSelectionToken(value: unknown): RoofFaceSelectionToken | undefined {
+  const raw = String(value ?? "").trim();
+  if (!raw.startsWith(`${TOKEN_PREFIX}|`)) return undefined;
+  const parts = raw.split("|");
+  if (parts.length !== 4) return undefined;
+  const displayFaceId = String(parts[1] ?? "").trim().toUpperCase();
+  const originalSegmentIndex = Number(parts[2]);
+  let buildingId = "";
+  try { buildingId = decodeURIComponent(parts[3] ?? ""); } catch { return undefined; }
+  if (!/^[A-Z]$/.test(displayFaceId) || !Number.isInteger(originalSegmentIndex) || originalSegmentIndex < 0 || !buildingId) {
+    return undefined;
+  }
+  return { displayFaceId, originalSegmentIndex, buildingId };
+}
+
 function requestedFaceRank(faceId: string) {
   const normalized = String(faceId ?? "").trim().toUpperCase();
   const match = normalized.match(/^(?:PAN\s*)?([A-Z])$/);
@@ -123,11 +157,6 @@ export function selectGoogleSolarFaces(
   };
 }
 
-/**
- * Physical selector used after a user clicked a roof marker. Unlike A/B/C,
- * originalSegmentIndex never changes when irrelevant neighbour faces are
- * filtered or when the display list is re-lettered.
- */
 export function selectGoogleSolarFaceBySegmentIndex(
   insights: GoogleSolarBuildingInsights,
   originalSegmentIndex: number,
@@ -148,9 +177,11 @@ export function selectGoogleSolarFaceBySegmentIndex(
 
 export function selectGoogleSolarFace(
   insights: GoogleSolarBuildingInsights,
-  faceId: string,
+  faceIdOrToken: string,
 ): SelectedGoogleSolarFace {
-  const selection = selectGoogleSolarFaces(insights, [faceId]);
+  const token = decodeRoofFaceSelectionToken(faceIdOrToken);
+  if (token) return selectGoogleSolarFaceBySegmentIndex(insights, token.originalSegmentIndex);
+  const selection = selectGoogleSolarFaces(insights, [faceIdOrToken]);
   const face = selection.faces[0]!;
   return { ...face, insights: selection.insights };
 }
