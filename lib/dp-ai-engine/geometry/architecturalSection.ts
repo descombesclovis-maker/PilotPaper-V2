@@ -1,4 +1,5 @@
 import type { GoogleSolarBuildingInsights, GoogleSolarRoofSegment } from "../providers/googleSolar";
+import { closestBuildingToPoint } from "../site-model/buildingResolver";
 import type { BuildingFootprint } from "../site-model/types";
 
 const EARTH_RADIUS_M = 6_378_137;
@@ -283,7 +284,14 @@ export function buildArchitecturalSectionGeometry(args: {
     throw new Error("DP3 : la pente Google Solar du pan sélectionné n'est pas exploitable pour une coupe architecturale.");
   }
 
-  const robust = robustSectionInterval({ building: args.building, selected });
+  const components = args.building.components?.length ? args.building.components : [args.building];
+  const building = closestBuildingToPoint(
+    components,
+    [selected.center.longitude, selected.center.latitude],
+    8,
+  ) ?? args.building;
+
+  const robust = robustSectionInterval({ building, selected });
   const sectionCenter = robust.sectionCenter;
   const interval = robust.interval;
 
@@ -336,7 +344,7 @@ export function buildArchitecturalSectionGeometry(args: {
     ...rawProfile.slice(0, edgeCount).map((point) => point.zAbs),
     ...rawProfile.slice(-edgeCount).map((point) => point.zAbs),
   ]);
-  const gutterHeightM = Number(args.building.heightM);
+  const gutterHeightM = Number(building.heightM);
   if (!Number.isFinite(gutterHeightM) || gutterHeightM <= 1.5 || gutterHeightM > 25) {
     throw new Error("DP3 : la hauteur de gouttière BD TOPO du bâtiment est absente ou incohérente.");
   }
