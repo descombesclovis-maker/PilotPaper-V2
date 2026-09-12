@@ -1,7 +1,6 @@
 import {
   parcelRings,
   toWebMercator,
-  resolveOfficialParcelContext,
   type LonLat,
   type OfficialParcelContext,
 } from "../context/officialParcel";
@@ -9,10 +8,10 @@ import {
   fetchGoogleSolarBuildingInsights,
   type GoogleSolarBuildingInsights,
 } from "../providers/googleSolar";
+import { resolveAddressPropertyContext } from "./addressPropertyResolver";
 import {
   closestBuildingToPoint,
   pointInLonLatPolygon,
-  resolveTargetBuildingCluster,
 } from "./buildingResolver";
 import type { BuildingFootprint } from "./types";
 
@@ -86,12 +85,6 @@ function faceEvidencePoints(solar: GoogleSolarBuildingInsights, segmentIndex: nu
   return points;
 }
 
-/**
- * Returns the exact BD TOPO volume of the target-building cluster carrying a
- * Google Solar face. This is the bridge used by both the selector and DP3: a
- * selectable face and the architectural section therefore refer to the same
- * physical volume.
- */
 export function buildingForGoogleSolarFace(
   solar: GoogleSolarBuildingInsights,
   segmentIndex: number,
@@ -143,33 +136,27 @@ function googleSolarTargetScore(
   const matchingPanels = solar.solarPotential.solarPanels.filter((panel) => (
     pointBelongsToTargetProperty(panel.center, context)
   )).length;
-  const centerInsideParcel = pointInsideParcel(
+  const centerNearAddressedBuilding = Boolean(closestBuildingToPoint(
+    contextBuildings(context),
     [solar.center.longitude, solar.center.latitude],
-    context.parcel,
-  );
-  return matchingFaces * 100 + matchingPanels * 2 + (centerInsideParcel ? 10 : 0);
+    8,
+  ));
+  return matchingFaces * 100 + matchingPanels * 2 + (centerNearAddressedBuilding ? 15 : 0);
 }
 
 /**
- * Single source of truth for automatic roof workflows.
- *
- * Address -> official parcel -> contiguous BD TOPO building cluster -> Google
- * Solar. Google is NEVER allowed to redefine the cadastral parcel. Its payload
- * is selected by how many individual roof faces/cells can be attached back to
- * that cadastral building cluster. A displaced building-level Google center is
- * therefore harmless, while neighbour faces remain rejected individually.
+ * Single automatic roof context for every DP piece.
+ * Address number -> addressed BD TOPO building -> cadastral parcel containing
+ * that building -> Google Solar payload whose physical roof evidence belongs
+ * to that same building. Google Solar never chooses or changes the property.
  */
 export async function resolveTargetRoofContext(address: string): Promise<TargetRoofContext> {
-  const parcel = await resolveOfficialParcelContext(address);
-  const buildings = await resolveTargetBuildingCluster(parcel);
-  const building = buildings[0];
-  if (!building) throw new Error("BD TOPO : aucun volume du bâtiment cible n'a été résolu.");
+  const property = await resolveAddressPropertyContext(address);
+  const { parcel, building, buildings } = property;
 
-  const queryBuildings = buildings.slice(0, 6);
   const solarCandidates: GoogleSolarBuildingInsights[] = [];
   const seenCenters = new Set<string>();
-
-  for (const candidate of queryBuildings) {
+  for (const candidate of buildings.slice(0, 5)) {
     try {
       const [longitude, latitude] = candidate.centroid;
       const solar = await fetchGoogleSolarBuildingInsights({ latitude, longitude });
@@ -178,23 +165,26 @@ export async function resolveTargetRoofContext(address: string): Promise<TargetR
         seenCenters.add(key);
         solarCandidates.push(solar);
       }
-      if (googleSolarTargetScore(solar, { parcel, building, buildings }) >= 110) break;
     } catch {
-      // Another contiguous BD TOPO volume can still lead Google to the right
-      // compound building. Automatic analysis only fails after all candidates.
+      // A second component of the same addressed house can still lead Google
+      // Solar to the correct physical building.
     }
   }
 
   if (!solarCandidates.length) {
-    throw new Error("Google Solar API : aucun bâtiment solaire exploitable n'a été trouvé autour du bâtiment cadastral cible.");
+    throw new Error("Google Solar API : aucune toiture exploitable n'a été trouvée sur le bâtiment correspondant au numéro d'adresse.");
   }
 
-  const solar = solarCandidates
+  const ranked = solarCandidates
     .map((candidate) => ({
       candidate,
       score: googleSolarTargetScore(candidate, { parcel, building, buildings }),
     }))
-    .sort((a, b) => b.score - a.score)[0]!.candidate;
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0];
+  if (!best || best.score < 100) {
+    throw new Error("Google Solar : aucun pan n'a pu être rattaché avec certitude au bâtiment correspondant à l'adresse.");
+  }
 
-  return { parcel, building, buildings, solar };
+  return { parcel, building, buildings, solar: best.candidate };
 }
