@@ -9,12 +9,17 @@ import {
   fetchGoogleSolarBuildingInsights,
   type GoogleSolarBuildingInsights,
 } from "../providers/googleSolar";
-import { pointInLonLatPolygon, resolveTargetBuilding } from "./buildingResolver";
+import {
+  closestBuildingToPoint,
+  pointInLonLatPolygon,
+  resolveTargetBuildingCluster,
+} from "./buildingResolver";
 import type { BuildingFootprint } from "./types";
 
 export type TargetRoofContext = {
   parcel: OfficialParcelContext;
   building: BuildingFootprint;
+  buildings: BuildingFootprint[];
   solar: GoogleSolarBuildingInsights;
 };
 
@@ -45,107 +50,151 @@ export function distanceToBuildingFootprintM(point: LonLat, building: BuildingFo
   return best;
 }
 
+function contextBuildings(context: Pick<TargetRoofContext, "building"> & Partial<Pick<TargetRoofContext, "buildings">>) {
+  return context.buildings?.length ? context.buildings : [context.building];
+}
+
 export function pointBelongsToTargetProperty(
   point: { longitude: number; latitude: number },
-  context: Pick<TargetRoofContext, "parcel" | "building">,
+  context: Pick<TargetRoofContext, "parcel" | "building"> & Partial<Pick<TargetRoofContext, "buildings">>,
 ) {
   const lonLat: LonLat = [point.longitude, point.latitude];
   if (!pointInsideParcel(lonLat, context.parcel)) return false;
-  return distanceToBuildingFootprintM(lonLat, context.building) <= 1.75;
+  return Boolean(closestBuildingToPoint(contextBuildings(context), lonLat, 3.5));
 }
 
-function evidenceRatio<T>(
-  items: T[],
-  predicate: (item: T) => boolean,
-) {
-  if (!items.length) return 0;
-  return items.filter(predicate).length / items.length;
-}
+function faceEvidencePoints(solar: GoogleSolarBuildingInsights, segmentIndex: number) {
+  const segment = solar.solarPotential.roofSegmentStats[segmentIndex];
+  if (!segment) return [] as LonLat[];
+  const points: LonLat[] = [[segment.center.longitude, segment.center.latitude]];
 
-/**
- * Google Solar's building-level `center` is useful, but it is not precise enough
- * to be the only identity proof. Some valid houses have a center displaced by
- * several metres while their roof segments and panel cells still overlap the
- * exact BD TOPO footprint.
- *
- * We therefore accept Solar only when at least one independent geometric signal
- * strongly matches BOTH the official parcel and the target building. Individual
- * roof faces are still filtered more strictly afterwards by
- * pointBelongsToTargetProperty(), so accepting a compound Solar payload cannot
- * make a neighbouring face selectable.
- */
-export function googleSolarMatchesTargetBuilding(
-  solar: GoogleSolarBuildingInsights,
-  context: Pick<TargetRoofContext, "parcel" | "building">,
-) {
-  const center: LonLat = [solar.center.longitude, solar.center.latitude];
-  const centerInsideParcel = pointInsideParcel(center, context.parcel);
-  const centerDistance = distanceToBuildingFootprintM(center, context.building);
-
-  const segments = solar.solarPotential.roofSegmentStats ?? [];
-  const panels = solar.solarPotential.solarPanels ?? [];
-
-  const segmentInsideParcelRatio = evidenceRatio(segments, (segment) => (
-    pointInsideParcel([segment.center.longitude, segment.center.latitude], context.parcel)
-  ));
-  const segmentNearBuildingRatio = evidenceRatio(segments, (segment) => (
-    distanceToBuildingFootprintM(
-      [segment.center.longitude, segment.center.latitude],
-      context.building,
-    ) <= 3.5
-  ));
-  const matchingSegmentCount = segments.filter((segment) => {
-    const point: LonLat = [segment.center.longitude, segment.center.latitude];
-    return pointInsideParcel(point, context.parcel)
-      && distanceToBuildingFootprintM(point, context.building) <= 3.5;
-  }).length;
-
-  const panelInsideParcelRatio = evidenceRatio(panels, (panel) => (
-    pointInsideParcel([panel.center.longitude, panel.center.latitude], context.parcel)
-  ));
-  const panelNearBuildingRatio = evidenceRatio(panels, (panel) => (
-    distanceToBuildingFootprintM(
-      [panel.center.longitude, panel.center.latitude],
-      context.building,
-    ) <= 2.75
-  ));
-  const matchingPanelCount = panels.filter((panel) => {
-    const point: LonLat = [panel.center.longitude, panel.center.latitude];
-    return pointInsideParcel(point, context.parcel)
-      && distanceToBuildingFootprintM(point, context.building) <= 2.75;
-  }).length;
-
-  const centerEvidence = centerInsideParcel && centerDistance <= 6;
-  const segmentEvidence = matchingSegmentCount >= 1
-    && segmentInsideParcelRatio >= 0.5
-    && segmentNearBuildingRatio >= 0.35;
-  const panelEvidence = matchingPanelCount >= 3
-    && panelInsideParcelRatio >= 0.5
-    && panelNearBuildingRatio >= 0.35;
-
-  return centerEvidence || segmentEvidence || panelEvidence;
-}
-
-/**
- * Single source of truth for every automatic roof workflow.
- * Address -> official parcel -> exact BD TOPO building -> Google Solar on that
- * building. We never let the nearest neighbour returned around the address
- * silently become the project roof.
- */
-export async function resolveTargetRoofContext(address: string): Promise<TargetRoofContext> {
-  const parcel = await resolveOfficialParcelContext(address);
-  const building = await resolveTargetBuilding(parcel);
-  const [buildingLongitude, buildingLatitude] = building.centroid;
-  const solar = await fetchGoogleSolarBuildingInsights({
-    latitude: buildingLatitude,
-    longitude: buildingLongitude,
-  });
-
-  if (!googleSolarMatchesTargetBuilding(solar, { parcel, building })) {
-    throw new Error(
-      "Google Solar n'a pas pu démontrer avec suffisamment de certitude qu'il s'agit du bâtiment cadastral de l'adresse.",
+  if (segment.boundingBox) {
+    const { sw, ne } = segment.boundingBox;
+    points.push(
+      [sw.longitude, sw.latitude],
+      [ne.longitude, ne.latitude],
+      [sw.longitude, ne.latitude],
+      [ne.longitude, sw.latitude],
+      [(sw.longitude + ne.longitude) / 2, (sw.latitude + ne.latitude) / 2],
     );
   }
 
-  return { parcel, building, solar };
+  for (const panel of solar.solarPotential.solarPanels) {
+    if (panel.segmentIndex !== segmentIndex) continue;
+    points.push([panel.center.longitude, panel.center.latitude]);
+  }
+  return points;
+}
+
+/**
+ * Returns the exact BD TOPO volume of the target-building cluster carrying a
+ * Google Solar face. This is the bridge used by both the selector and DP3: a
+ * selectable face and the architectural section therefore refer to the same
+ * physical volume.
+ */
+export function buildingForGoogleSolarFace(
+  solar: GoogleSolarBuildingInsights,
+  segmentIndex: number,
+  context: Pick<TargetRoofContext, "parcel" | "building"> & Partial<Pick<TargetRoofContext, "buildings">>,
+) {
+  const buildings = contextBuildings(context);
+  const points = faceEvidencePoints(solar, segmentIndex)
+    .filter((point) => pointInsideParcel(point, context.parcel));
+  if (!points.length) return undefined;
+
+  const ranked = buildings.map((building) => {
+    const distances = points.map((point) => distanceToBuildingFootprintM(point, building));
+    const nearCount = distances.filter((distance) => distance <= 3.5).length;
+    const veryNearCount = distances.filter((distance) => distance <= 1.75).length;
+    const minDistance = Math.min(...distances);
+    const meanDistance = distances.reduce((sum, distance) => sum + distance, 0) / distances.length;
+    return {
+      building,
+      nearCount,
+      veryNearCount,
+      minDistance,
+      meanDistance,
+      score: veryNearCount * 20 + nearCount * 8 - minDistance * 4 - meanDistance,
+    };
+  }).sort((a, b) => b.score - a.score);
+
+  const best = ranked[0];
+  if (!best || best.nearCount < 1 || best.minDistance > 3.5) return undefined;
+  return best.building;
+}
+
+export function googleSolarMatchesTargetBuilding(
+  solar: GoogleSolarBuildingInsights,
+  context: Pick<TargetRoofContext, "parcel" | "building"> & Partial<Pick<TargetRoofContext, "buildings">>,
+) {
+  return solar.solarPotential.roofSegmentStats.some((_, index) => (
+    Boolean(buildingForGoogleSolarFace(solar, index, context))
+  ));
+}
+
+function googleSolarTargetScore(
+  solar: GoogleSolarBuildingInsights,
+  context: Pick<TargetRoofContext, "parcel" | "building"> & Partial<Pick<TargetRoofContext, "buildings">>,
+) {
+  let matchingFaces = 0;
+  for (let index = 0; index < solar.solarPotential.roofSegmentStats.length; index += 1) {
+    if (buildingForGoogleSolarFace(solar, index, context)) matchingFaces += 1;
+  }
+  const matchingPanels = solar.solarPotential.solarPanels.filter((panel) => (
+    pointBelongsToTargetProperty(panel.center, context)
+  )).length;
+  const centerInsideParcel = pointInsideParcel(
+    [solar.center.longitude, solar.center.latitude],
+    context.parcel,
+  );
+  return matchingFaces * 100 + matchingPanels * 2 + (centerInsideParcel ? 10 : 0);
+}
+
+/**
+ * Single source of truth for automatic roof workflows.
+ *
+ * Address -> official parcel -> contiguous BD TOPO building cluster -> Google
+ * Solar. Google is NEVER allowed to redefine the cadastral parcel. Its payload
+ * is selected by how many individual roof faces/cells can be attached back to
+ * that cadastral building cluster. A displaced building-level Google center is
+ * therefore harmless, while neighbour faces remain rejected individually.
+ */
+export async function resolveTargetRoofContext(address: string): Promise<TargetRoofContext> {
+  const parcel = await resolveOfficialParcelContext(address);
+  const buildings = await resolveTargetBuildingCluster(parcel);
+  const building = buildings[0];
+  if (!building) throw new Error("BD TOPO : aucun volume du bâtiment cible n'a été résolu.");
+
+  const queryBuildings = buildings.slice(0, 6);
+  const solarCandidates: GoogleSolarBuildingInsights[] = [];
+  const seenCenters = new Set<string>();
+
+  for (const candidate of queryBuildings) {
+    try {
+      const [longitude, latitude] = candidate.centroid;
+      const solar = await fetchGoogleSolarBuildingInsights({ latitude, longitude });
+      const key = `${solar.center.latitude.toFixed(7)}:${solar.center.longitude.toFixed(7)}`;
+      if (!seenCenters.has(key)) {
+        seenCenters.add(key);
+        solarCandidates.push(solar);
+      }
+      if (googleSolarTargetScore(solar, { parcel, building, buildings }) >= 110) break;
+    } catch {
+      // Another contiguous BD TOPO volume can still lead Google to the right
+      // compound building. Automatic analysis only fails after all candidates.
+    }
+  }
+
+  if (!solarCandidates.length) {
+    throw new Error("Google Solar API : aucun bâtiment solaire exploitable n'a été trouvé autour du bâtiment cadastral cible.");
+  }
+
+  const solar = solarCandidates
+    .map((candidate) => ({
+      candidate,
+      score: googleSolarTargetScore(candidate, { parcel, building, buildings }),
+    }))
+    .sort((a, b) => b.score - a.score)[0]!.candidate;
+
+  return { parcel, building, buildings, solar };
 }
