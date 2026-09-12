@@ -14,17 +14,11 @@ import {
 import { allPanelPolygonsForRoleProjective } from "@/lib/dp-ai-engine/geometry/panelProjection";
 import { resolveProjectLayout } from "@/lib/dp-ai-engine/geometry/projectLayout";
 import {
-  choosePrimaryRoofPlane,
-  localPointToLonLat,
-  metricSurfaceFromSitePlane,
-  sitePlaneProjectionQuadLonLat,
-} from "@/lib/dp-ai-engine/site-model/metricSurfaceFromSiteModel";
-import {
-  buildAssistedSiteModelFromParcel,
-  buildAutomaticSiteModelFromParcel,
-} from "@/lib/dp-ai-engine/site-model/siteModelEngine";
-import type { AssistedRoofQuad } from "@/lib/dp-ai-engine/site-model/assistedRoofRecovery";
-import type { SiteModel } from "@/lib/dp-ai-engine/site-model/types";
+  metricSurfaceFromManualRoofDesign,
+  type ManualRoofDesign,
+  type ManualRoofKeepout,
+  type ManualRoofQuad,
+} from "@/lib/dp-ai-engine/site-model/manualRoofDesigner";
 import type { InputPhoto, Point2D, ProjectContext, ProjectForm } from "@/lib/dp-ai-engine/types";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/dp-piece-engine";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
@@ -46,20 +40,21 @@ type Dp2OfficialContext = OfficialParcelContext & {
   cadastreSource: string;
 };
 
-type Dp2Input = DpPieceInput & { assistedRoofQuad?: unknown };
+type ReviewedRoofDesign = ManualRoofDesign & { obstaclesConfirmed: true };
+type Dp2Input = DpPieceInput & { manualRoofDesign?: unknown };
 
-export class Dp2AssistedRecoveryRequiredError extends Error {
-  readonly code = "DP2_ASSISTED_RECOVERY_REQUIRED";
+export class Dp2RoofDesignerRequiredError extends Error {
+  readonly code = "DP2_ROOF_DESIGNER_REQUIRED";
   readonly reason: string;
   readonly imageBase64: string;
   readonly imageMimeType = "image/png" as const;
   readonly widthPx: number;
   readonly heightPx: number;
 
-  constructor(reason: string, official: Dp2OfficialContext) {
-    super("PilotPaper a besoin de 4 clics pour identifier avec certitude le pan à équiper.");
-    this.name = "Dp2AssistedRecoveryRequiredError";
-    this.reason = reason;
+  constructor(official: Dp2OfficialContext) {
+    super("PilotPaper a besoin que le pan soit validé dans le Roof Designer avant de générer la DP2.");
+    this.name = "Dp2RoofDesignerRequiredError";
+    this.reason = "Mode fiable : le pan et les obstacles sont validés sur l'orthophoto IGN métrée. Le LiDAR n'est pas requis.";
     this.imageBase64 = official.mass.base64;
     this.widthPx = official.mass.widthPx ?? IMAGE_WIDTH;
     this.heightPx = official.mass.heightPx ?? IMAGE_HEIGHT;
@@ -87,6 +82,49 @@ function positiveInteger(value: unknown, label: string) {
   return parsed;
 }
 
+function normalizedPoint(value: unknown, label: string): Point2D {
+  if (!value || typeof value !== "object") throw new Error(`Roof Designer : ${label} invalide.`);
+  const record = value as Record<string, unknown>;
+  const x = Number(record.x);
+  const y = Number(record.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+    throw new Error(`Roof Designer : ${label} doit rester dans la vue aérienne.`);
+  }
+  return { x, y };
+}
+
+function asReviewedRoofDesign(value: unknown): ReviewedRoofDesign | undefined {
+  if (value == null) return undefined;
+  if (!value || typeof value !== "object") throw new Error("Roof Designer : données invalides.");
+  const record = value as Record<string, unknown>;
+  if (record.obstaclesConfirmed !== true) {
+    throw new Error("Roof Designer : confirme les obstacles présents, ou confirme explicitement qu'il n'y en a aucun.");
+  }
+  if (!Array.isArray(record.quadNormalized) || record.quadNormalized.length !== 4) {
+    throw new Error("Roof Designer : 4 coins sont requis dans l'ordre gouttière gauche → gouttière droite → faîtage droite → faîtage gauche.");
+  }
+  const quad = record.quadNormalized.map((point, index) => normalizedPoint(point, `coin ${index + 1}`)) as ManualRoofQuad;
+  const slopeDeg = Number(record.slopeDeg);
+  if (!Number.isFinite(slopeDeg) || slopeDeg < 0 || slopeDeg > 75) {
+    throw new Error("Roof Designer : indique une pente comprise entre 0° et 75°.");
+  }
+  const keepouts: ManualRoofKeepout[] = Array.isArray(record.keepouts)
+    ? record.keepouts.map((candidate, index) => {
+        if (!candidate || typeof candidate !== "object") throw new Error(`Roof Designer : obstacle ${index + 1} invalide.`);
+        const obstacle = candidate as Record<string, unknown>;
+        if (!Array.isArray(obstacle.polygonNormalized) || obstacle.polygonNormalized.length < 3) {
+          throw new Error(`Roof Designer : obstacle ${index + 1} incomplet.`);
+        }
+        return {
+          id: String(obstacle.id ?? `K${index + 1}`),
+          type: String(obstacle.type ?? "manual_keepout"),
+          polygonNormalized: obstacle.polygonNormalized.map((point, pointIndex) => normalizedPoint(point, `obstacle ${index + 1} point ${pointIndex + 1}`)),
+        };
+      })
+    : [];
+  return { quadNormalized: quad, slopeDeg, keepouts, obstaclesConfirmed: true };
+}
+
 function normalizedPointInFrame(longitude: number, latitude: number, frame: MetricFrame): Point2D {
   const point = toWebMercator(longitude, latitude);
   return {
@@ -102,24 +140,6 @@ function reframePoint(point: Point2D, source: MetricFrame, target: MetricFrame):
     x: (x - target.minX) / (target.maxX - target.minX),
     y: (target.maxY - y) / (target.maxY - target.minY),
   };
-}
-
-function asAssistedRoofQuad(value: unknown): AssistedRoofQuad | undefined {
-  if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length !== 4) {
-    throw new Error("Assisted Recovery : exactement 4 points sont requis.");
-  }
-  const points = value.map((candidate) => {
-    if (!candidate || typeof candidate !== "object") throw new Error("Assisted Recovery : point invalide.");
-    const point = candidate as Record<string, unknown>;
-    const x = Number(point.x);
-    const y = Number(point.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) {
-      throw new Error("Assisted Recovery : les 4 points doivent rester dans la vue aérienne.");
-    }
-    return { x, y };
-  });
-  return points as AssistedRoofQuad;
 }
 
 async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialContext> {
@@ -142,7 +162,7 @@ async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialCo
   const [massRaster, presentationRaster, cadastralRaster] = await Promise.all([
     fetchIgnRaster(
       orthophotoCandidates({ frame: metricFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "DP2 : vue métrique IGN serrée pour le moteur", minBytes: 2_000, required: true },
+      { purpose: "DP2 : orthophoto métrée pour Roof Designer", minBytes: 2_000, required: true },
     ),
     fetchIgnRaster(
       orthophotoCandidates({ frame: presentationFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
@@ -163,7 +183,7 @@ async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialCo
       role: "satellite_mass",
       mimeType: "image/png",
       base64: massRaster.base64,
-      filename: `ign-dp2-metric-${site.parcelReference.replace(/\s+/g, "-")}.png`,
+      filename: `ign-dp2-designer-${site.parcelReference.replace(/\s+/g, "-")}.png`,
       widthPx: IMAGE_WIDTH,
       heightPx: IMAGE_HEIGHT,
       metersPerPixel: metricFrame.widthMeters / IMAGE_WIDTH,
@@ -230,7 +250,7 @@ function resolveLayoutContext(
   };
   const layout = resolveProjectLayout(layoutForm);
   if (layout.placements.length !== 1 || layout.placements[0]?.faceId !== metricFace.id) {
-    throw new Error("DP2 : le Layout Engine a quitté le pan physiquement identifié.");
+    throw new Error("DP2 : le Layout Engine a quitté le pan validé dans le Roof Designer.");
   }
   const placement = layout.placements[0]!;
   return {
@@ -273,62 +293,28 @@ function resolveLayoutContext(
   };
 }
 
-function buildProjectContextFromSiteModel(
-  form: ProjectForm,
-  context: Dp2OfficialContext,
-  siteModel: SiteModel,
-): { project: ProjectContext; planeId: string; confidence: number; obstacleCount: number } {
-  const plane = choosePrimaryRoofPlane(siteModel.roof, form.array.roofFace);
-  const face = metricSurfaceFromSitePlane({
-    plane,
-    roof: siteModel.roof,
+function buildProjectFromRoofDesigner(form: ProjectForm, official: Dp2OfficialContext, design: ReviewedRoofDesign) {
+  const designed = metricSurfaceFromManualRoofDesign({
+    frame: official.metricFrame,
+    design,
     faceId: form.array.roofFace,
     label: `Pan ${form.array.roofFace}`,
   });
-  const quadLonLat = sitePlaneProjectionQuadLonLat(siteModel.roof.origin, plane);
-  const quad = quadLonLat.map(([lon, lat]) => normalizedPointInFrame(lon, lat, context.metricFrame)) as [Point2D, Point2D, Point2D, Point2D];
-  const obstacles = siteModel.roof.obstacles
-    .filter((obstacle) => obstacle.roofPlaneId === plane.id)
-    .map((obstacle) => ({
-      type: obstacle.type,
-      description: `LiDAR ${obstacle.id} · relief +${obstacle.maxHeightAbovePlaneM.toFixed(2)} m`,
-      polygonNormalized: obstacle.polygonLocalM.map((point) => {
-        const [lon, lat] = localPointToLonLat(siteModel.roof.origin, point);
-        return normalizedPointInFrame(lon, lat, context.metricFrame);
-      }),
-      viewRole: "satellite_mass" as const,
-    }));
-  const confidence = Math.min(siteModel.roof.coverageConfidence, plane.confidence);
-  const metricView = {
-    role: "satellite_mass" as const,
-    faceId: face.metricGeometry.id,
-    selectedFaceVisible: true,
-    confidence,
-    roofPolygonNormalized: quad,
-    gutterLineNormalized: [quad[0], quad[1]] as [Point2D, Point2D],
-    ridgeLineNormalized: [quad[3], quad[2]] as [Point2D, Point2D],
-    perspectiveNotes: [
-      siteModel.mode === "assisted"
-        ? "Pan sélectionné par 4 clics ; géométrie métrique dérivée du LiDAR IGN."
-        : "Géométrie métrique dérivée de BD TOPO + LiDAR HD IGN, sans géométrie générative.",
-    ],
-  };
   const project = resolveLayoutContext(
     form,
-    face.metricGeometry,
-    metricView,
-    confidence,
-    obstacles,
+    designed.metricGeometry,
+    designed.view,
+    1,
+    designed.obstacles,
     [
-      `SiteModel ${siteModel.version} · mode ${siteModel.mode}.`,
-      `Support ${siteModel.building.id} · source ${siteModel.building.source}.`,
-      `LiDAR roof plane ${plane.id}: slope ${plane.slopeDeg.toFixed(1)}°, azimuth ${plane.azimuthDeg.toFixed(1)}°.` ,
-      `${siteModel.roof.obstacles.length} LiDAR relief candidate(s) in SiteModel.`,
-      `${form.requestedPanelCount} modules must remain on the selected physical plane.`,
+      "Roof Designer : pan explicitement validé par l'utilisateur sur orthophoto IGN métrée.",
+      `Pente validée : ${design.slopeDeg.toFixed(1)}°.\`,
+      `${design.keepouts?.length ?? 0} keepout(s) validé(s) par l'utilisateur.`,
+      `${form.requestedPanelCount} modules doivent rester sur ce pan et hors keepouts.`,
     ],
-    siteModel.warnings,
+    designed.view.perspectiveNotes,
   );
-  return { project, planeId: plane.id, confidence, obstacleCount: obstacles.length };
+  return { project, obstacleCount: design.keepouts?.length ?? 0 };
 }
 
 function panelSvg(polygons: Point2D[][], x: number, y: number, width: number, height: number) {
@@ -341,7 +327,7 @@ function panelSvg(polygons: Point2D[][], x: number, y: number, width: number, he
 function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
   const metricPolygons = allPanelPolygonsForRoleProjective(project, "satellite_mass");
   if (!metricPolygons || metricPolygons.length !== project.exactPanelCount) {
-    throw new Error("DP2 bloquée : la projection homographique ne démontre pas exactement tous les modules sur la vue métrique IGN.");
+    throw new Error("DP2 bloquée : la projection ne démontre pas exactement tous les modules sur le pan validé.");
   }
   const displayPolygons = metricPolygons.map((polygon) => polygon.map((point) => (
     reframePoint(point, context.metricFrame, context.presentationFrame)
@@ -380,19 +366,12 @@ function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
   </svg>`;
 }
 
-function buildSiteModelOutput(
+function buildRoofDesignerOutput(
   official: Dp2OfficialContext,
   form: ProjectForm,
-  siteModel: SiteModel,
+  design: ReviewedRoofDesign,
 ): DpPieceOutput {
-  const resolved = buildProjectContextFromSiteModel(form, official, siteModel);
-  const project = resolved.project;
-  const lidarEvidence = siteModel.evidence
-    .filter((item) => item.kind === "lidar-altimetry")
-    .map((item) => `LiDAR HD IGN — ${item.source}`);
-  const supportEvidence = siteModel.evidence
-    .filter((item) => item.kind === "bdtopo" || item.kind === "manual")
-    .map((item) => `${item.kind === "bdtopo" ? "BD TOPO" : "Sélection assistée"} — ${item.source}`);
+  const { project, obstacleCount } = buildProjectFromRoofDesigner(form, official, design);
   return {
     dp: 2,
     title: "Plan de masse",
@@ -402,29 +381,25 @@ function buildSiteModelOutput(
     sourceSummary: [
       `IGN Géoplateforme — adresse : ${official.normalizedAddress}`,
       `APICARTO Cadastre — parcelle ${official.parcelReference} (${Math.round(official.parcelAreaM2)} m²)`,
-      ...supportEvidence,
-      ...lidarEvidence,
-      `Roof Geometry Engine — pan ${resolved.planeId}, géométrie 3D déterministe`,
-      `Keepout Engine — ${resolved.obstacleCount} obstacle(s) géométrique(s)`,
-      "PV Layout Engine — placement déterministe sur SiteModel",
-      "Projection Engine — homographie métrique puis reprojection dans le cadrage DP2 élargi",
+      `Roof Designer — pan ${form.array.roofFace} tracé et validé sur orthophoto IGN métrée`,
+      `Pente déclarée/validée — ${design.slopeDeg.toFixed(1)}°`,
+      `Keepout Designer — ${obstacleCount} zone(s) interdite(s) validée(s)`,
+      "PV Layout Engine — placement déterministe hors bords et keepouts",
+      "Projection Engine — projection du même calepinage dans le cadrage DP2 élargi",
     ],
     inspector: {
       passed: true,
-      score: resolved.confidence,
+      score: 1,
       checks: [
-        `SiteModel geometry-first utilisé en mode ${siteModel.mode}`,
-        siteModel.mode === "assisted"
-          ? "4 clics utilisés uniquement pour sélectionner le pan ; aucune cote utilisateur"
-          : "Bâtiment cible résolu automatiquement avant l'analyse LiDAR",
-        `LiDAR HD : ${siteModel.roof.lidarSamples.length} échantillons utiles`,
-        `${siteModel.roof.planes.length} pan(s) retenu(s) mathématiquement`,
-        `Pan ${resolved.planeId} : pente ${choosePrimaryRoofPlane(siteModel.roof, form.array.roofFace).slopeDeg.toFixed(1)}°`,
-        `${resolved.obstacleCount} keepout(s) LiDAR sur le pan sélectionné`,
-        "Aucune IA générative utilisée pour créer la géométrie métrique",
-        `${project.exactPanelCount} modules projetés sur le même SiteModel`,
+        "Pan sélectionné explicitement par l'utilisateur ; aucune détection de pan ambiguë",
+        "Échelle planimétrique issue directement du repère métrique IGN",
+        `Pente utilisée : ${design.slopeDeg.toFixed(1)}°`,
+        `${obstacleCount} keepout(s) explicitement revu(s)`,
+        "LiDAR non requis pour générer cette DP2",
+        "Aucune IA générative utilisée pour la géométrie",
+        `${project.exactPanelCount} modules projetés sur le pan validé`,
       ],
-      issues: siteModel.warnings,
+      issues: [],
     },
   };
 }
@@ -435,24 +410,8 @@ export async function generateDp2Piece(input: DpPieceInput): Promise<DpPieceOutp
 
   const form = buildBaseForm(input);
   const official = await resolveDp2OfficialContext(input.address);
-  const assistedRoofQuad = asAssistedRoofQuad((input as Dp2Input).assistedRoofQuad);
+  const design = asReviewedRoofDesign((input as Dp2Input).manualRoofDesign);
 
-  if (assistedRoofQuad) {
-    const siteModel = await buildAssistedSiteModelFromParcel({
-      parcel: official,
-      frame: official.metricFrame,
-      quadNormalized: assistedRoofQuad,
-      faceId: form.array.roofFace,
-    });
-    return buildSiteModelOutput(official, form, siteModel);
-  }
-
-  try {
-    const siteModel = await buildAutomaticSiteModelFromParcel(official);
-    return buildSiteModelOutput(official, form, siteModel);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "échec SiteModel inconnu";
-    console.warn(`[PilotPaper][SiteModel] assisted recovery required: ${reason}`);
-    throw new Dp2AssistedRecoveryRequiredError(reason, official);
-  }
+  if (!design) throw new Dp2RoofDesignerRequiredError(official);
+  return buildRoofDesignerOutput(official, form, design);
 }
