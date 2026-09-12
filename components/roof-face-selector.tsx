@@ -33,7 +33,7 @@ export function RoofFaceSelector({
   const selectedFace = selectedFaceIds.length ? faces.find((face) => selected.has(face.id)) : undefined;
 
   function visibleFaceId(face: RoofFaceChoice) {
-    return face.displayFaceId ?? face.label.replace(/^Pan\s+/i, "").trim() || "?";
+    return (face.displayFaceId ?? face.label.replace(/^Pan\s+/i, "").trim()) || "?";
   }
 
   function select(faceId: string) {
