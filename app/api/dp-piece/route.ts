@@ -2,7 +2,7 @@ import { generateDp1Piece } from "@/lib/dp1-engine";
 import { Dp2RoofDesignerRequiredError, generateDp2Piece } from "@/lib/dp2-v1-engine";
 import { generateDp3Piece } from "@/lib/dp3-architectural-section-engine";
 import { decodeRoofFaceSelectionToken } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
-import { generateDpPiece, type DpPieceInput } from "@/lib/dp-piece-engine";
+import { generateDpPiece, type DpPieceInput, type DpPieceOutput } from "@/lib/dp-piece-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +17,8 @@ function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
   if (!token) return raw;
 
   // DP2/DP3 consume the token directly through the Google Solar physical
-  // selector. Image pieces still receive the human A/B/C label while keeping
-  // the physical identity alongside it for the shared roof context.
+  // selector. Image pieces receive the human A/B/C label while the physical
+  // identity remains available alongside it for future shared roof context.
   const keepTokenAsRoofFace = raw.dp === 2 || raw.dp === 3;
   return {
     ...raw,
@@ -29,17 +29,35 @@ function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
   };
 }
 
+function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | undefined) {
+  const token = decodeRoofFaceSelectionToken(rawRoofFace);
+  if (!token || !rawRoofFace) return result;
+  const visible = token.displayFaceId;
+  const clean = (value: string) => value.split(rawRoofFace).join(visible).split(rawRoofFace.toUpperCase()).join(visible);
+  return {
+    ...result,
+    text: result.text ? clean(result.text) : result.text,
+    sourceSummary: result.sourceSummary.map(clean),
+    inspector: {
+      ...result.inspector,
+      checks: result.inspector.checks.map(clean),
+      issues: result.inspector.issues.map(clean),
+    },
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const rawInput = await request.json() as DpPieceInput;
     const input = normalizeRoofSelection(rawInput);
-    const result = input.dp === 1
+    const generated = input.dp === 1
       ? await generateDp1Piece(input)
       : input.dp === 2
         ? await generateDp2Piece(input)
         : input.dp === 3
           ? await generateDp3Piece(input)
           : await generateDpPiece(input);
+    const result = hideInternalRoofToken(generated, rawInput.roofFace);
 
     return Response.json(result, {
       headers: {
