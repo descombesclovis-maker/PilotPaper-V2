@@ -29,15 +29,21 @@ type PieceResult = {
   inspector: { passed: boolean; score: number; checks: string[]; issues: string[] };
 };
 type RecoveryPoint = { x: number; y: number };
-type RoofQuadRecovery = {
-  type: "roof_quad";
+type RoofDesignerRecovery = {
+  type: "roof_designer";
   reason: string;
   imageMimeType: "image/png";
   imageBase64: string;
   widthPx: number;
   heightPx: number;
 };
-type ApiFailure = { error?: string; recovery?: RoofQuadRecovery; validationStatus?: "test_unverified" };
+type ManualRoofPayload = {
+  quadNormalized: RecoveryPoint[];
+  slopeDeg: number;
+  keepouts: Array<{ id: string; type: string; polygonNormalized: RecoveryPoint[] }>;
+  obstaclesConfirmed: true;
+};
+type ApiFailure = { error?: string; recovery?: RoofDesignerRecovery; validationStatus?: "test_unverified" };
 
 type Draft = {
   address: string;
@@ -126,8 +132,12 @@ export function DpPieceWorkbench() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<PieceResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
-  const [recovery, setRecovery] = useState<RoofQuadRecovery | null>(null);
+  const [recovery, setRecovery] = useState<RoofDesignerRecovery | null>(null);
   const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPoint[]>([]);
+  const [designerMode, setDesignerMode] = useState<"roof" | "obstacle">("roof");
+  const [obstacleDraftPoints, setObstacleDraftPoints] = useState<RecoveryPoint[]>([]);
+  const [keepoutPolygons, setKeepoutPolygons] = useState<RecoveryPoint[][]>([]);
+  const [noObstaclesConfirmed, setNoObstaclesConfirmed] = useState(false);
   const [history, setHistory] = useState<Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>>({});
 
   const contract = useMemo(() => DP_PIECE_CONTRACTS.find((piece) => piece.dp === selectedDp) ?? null, [selectedDp]);
@@ -164,6 +174,10 @@ export function DpPieceWorkbench() {
   function clearRecovery() {
     setRecovery(null);
     setRecoveryPoints([]);
+    setDesignerMode("roof");
+    setObstacleDraftPoints([]);
+    setKeepoutPolygons([]);
+    setNoObstaclesConfirmed(false);
   }
 
   function openPiece(dp: DPNumber) {
@@ -192,12 +206,12 @@ export function DpPieceWorkbench() {
     }
   }
 
-  async function generate(assistedRoofQuad?: RecoveryPoint[]) {
+  async function generate(manualRoofDesign?: ManualRoofPayload) {
     if (!contract) return;
     setBusy(true);
     setError("");
     setResult(null);
-    if (!assistedRoofQuad) clearRecovery();
+    if (!manualRoofDesign) clearRecovery();
     try {
       const payload = {
         dp: contract.dp,
@@ -215,7 +229,7 @@ export function DpPieceWorkbench() {
         gutterClearanceMm: numeric(draft.gutterClearanceMm),
         interPanelGapMm: numeric(draft.interPanelGapMm),
         photos: Object.values(photos),
-        ...(assistedRoofQuad ? { assistedRoofQuad } : {}),
+        ...(manualRoofDesign ? { manualRoofDesign } : {}),
       };
       const response = await fetch("/api/dp-piece", {
         method: "POST",
@@ -225,9 +239,13 @@ export function DpPieceWorkbench() {
       const body = await response.json().catch(() => null) as PieceResult | ApiFailure | null;
       if (!response.ok || !body || !("dp" in body)) {
         const failure = body && !("dp" in body) ? body : null;
-        if (response.status === 409 && failure?.recovery?.type === "roof_quad") {
+        if (response.status === 409 && failure?.recovery?.type === "roof_designer") {
           setRecovery(failure.recovery);
           setRecoveryPoints([]);
+          setDesignerMode("roof");
+          setObstacleDraftPoints([]);
+          setKeepoutPolygons([]);
+          setNoObstaclesConfirmed(false);
           return;
         }
         throw new Error(failure?.error || `Génération impossible (${response.status}).`);
@@ -248,14 +266,44 @@ export function DpPieceWorkbench() {
   }
 
   function addRecoveryPoint(event: MouseEvent<HTMLDivElement>) {
-    if (!recovery || busy || recoveryPoints.length >= 4) return;
+    if (!recovery || busy) return;
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const point = {
       x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
       y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
     };
-    setRecoveryPoints((current) => [...current, point].slice(0, 4));
+    if (designerMode === "roof") {
+      if (recoveryPoints.length >= 4) return;
+      setRecoveryPoints((current) => [...current, point].slice(0, 4));
+      return;
+    }
+    const next = [...obstacleDraftPoints, point].slice(0, 4);
+    if (next.length === 4) {
+      setKeepoutPolygons((current) => [...current, next]);
+      setObstacleDraftPoints([]);
+      setDesignerMode("roof");
+      setNoObstaclesConfirmed(false);
+    } else {
+      setObstacleDraftPoints(next);
+    }
+  }
+
+  function submitRoofDesigner() {
+    const slopeDeg = numeric(draft.roofSlopeDeg);
+    if (recoveryPoints.length !== 4 || slopeDeg == null || slopeDeg < 0 || slopeDeg > 75) return;
+    if (!noObstaclesConfirmed && keepoutPolygons.length === 0) return;
+    const manualRoofDesign: ManualRoofPayload = {
+      quadNormalized: recoveryPoints,
+      slopeDeg,
+      keepouts: keepoutPolygons.map((polygonNormalized, index) => ({
+        id: `K${index + 1}`,
+        type: "manual_keepout",
+        polygonNormalized,
+      })),
+      obstaclesConfirmed: true,
+    };
+    void generate(manualRoofDesign);
   }
 
   function downloadResult() {
@@ -331,8 +379,8 @@ export function DpPieceWorkbench() {
           </div>
           <div className={styles.heroStatus}>
             <ShieldCheck size={28} />
-            <strong>Architecture V1 verrouillée</strong>
-            <span>Roof Understanding → Layout → Projection → Render → Inspector → Régression</span>
+            <strong>Architecture V1 contrôlée</strong>
+            <span>Official Context → Roof Designer → Layout → Projection → Inspector</span>
           </div>
         </section>
         <section className={styles.grid}>
@@ -359,6 +407,9 @@ export function DpPieceWorkbench() {
     );
   }
 
+  const slopeReady = numeric(draft.roofSlopeDeg) != null && Number(draft.roofSlopeDeg) >= 0 && Number(draft.roofSlopeDeg) <= 75;
+  const obstacleReviewReady = noObstaclesConfirmed || keepoutPolygons.length > 0;
+
   return (
     <main className={styles.app}>
       <header className={styles.topbar}>
@@ -383,28 +434,43 @@ export function DpPieceWorkbench() {
             <div className={styles.recoveryCard}>
               <div className={styles.recoveryHeading}>
                 <Crosshair size={20} />
-                <div><strong>Sélection assistée du pan</strong><span>{recoveryPoints.length}/4 coins sélectionnés</span></div>
+                <div><strong>Roof Designer · validation du pan</strong><span>{recoveryPoints.length}/4 coins du pan · {keepoutPolygons.length} keepout(s)</span></div>
               </div>
-              <p>PilotPaper n'a pas validé le pan automatiquement. Clique simplement les quatre coins du pan à équiper sur la vue aérienne. Aucune mesure ne t'est demandée.</p>
-              <div className={styles.recoveryReason}><strong>Pourquoi l'automatique s'est arrêté :</strong> {recovery.reason}</div>
-              <div className={styles.recoveryImageWrap} onClick={addRecoveryPoint} role="button" tabIndex={0} aria-label="Sélectionner les quatre coins du pan">
-                <img src={`data:${recovery.imageMimeType};base64,${recovery.imageBase64}`} alt="Vue aérienne métrique IGN pour sélectionner le pan" />
+              <p>Cette étape remplace la détection LiDAR incertaine. Tu définis seulement la géométrie visible ; PilotPaper conserve l'échelle réelle de l'orthophoto IGN et calcule ensuite le calepinage.</p>
+              <div className={styles.recoveryReason}>{recovery.reason}</div>
+              <div className={styles.designerGuide}>
+                <span>1 · Gouttière gauche</span><span>2 · Gouttière droite</span><span>3 · Faîtage droite</span><span>4 · Faîtage gauche</span>
+              </div>
+              <div className={styles.recoveryImageWrap} onClick={addRecoveryPoint} role="button" tabIndex={0} aria-label="Roof Designer">
+                <img src={`data:${recovery.imageMimeType};base64,${recovery.imageBase64}`} alt="Orthophoto IGN métrée pour Roof Designer" />
                 <svg className={styles.recoveryOverlay} viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
                   {recoveryPoints.length >= 2 ? <polyline points={recoveryPoints.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="none" stroke="white" strokeWidth="5" strokeDasharray="12 8" /> : null}
                   {recoveryPoints.length === 4 ? <polygon points={recoveryPoints.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="rgba(23,59,103,.20)" stroke="#ffffff" strokeWidth="5" /> : null}
-                  {recoveryPoints.map((point, index) => <g key={`${point.x}-${point.y}-${index}`}><circle cx={point.x * 1000} cy={point.y * 1000} r="16" fill="#d66b3e" stroke="#fff" strokeWidth="6" /><text x={point.x * 1000} y={point.y * 1000 + 6} textAnchor="middle" fontSize="18" fontWeight="900" fill="#fff">{index + 1}</text></g>)}
+                  {keepoutPolygons.map((polygon, polygonIndex) => <polygon key={`keepout-${polygonIndex}`} points={polygon.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="rgba(214,107,62,.30)" stroke="#d66b3e" strokeWidth="6" />)}
+                  {designerMode === "obstacle" && obstacleDraftPoints.length >= 2 ? <polyline points={obstacleDraftPoints.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ")} fill="none" stroke="#d66b3e" strokeWidth="6" strokeDasharray="12 8" /> : null}
+                  {recoveryPoints.map((point, index) => <g key={`${point.x}-${point.y}-${index}`}><circle cx={point.x * 1000} cy={point.y * 1000} r="16" fill="#173b67" stroke="#fff" strokeWidth="6" /><text x={point.x * 1000} y={point.y * 1000 + 6} textAnchor="middle" fontSize="18" fontWeight="900" fill="#fff">{index + 1}</text></g>)}
+                  {obstacleDraftPoints.map((point, index) => <circle key={`obstacle-draft-${index}`} cx={point.x * 1000} cy={point.y * 1000} r="13" fill="#d66b3e" stroke="#fff" strokeWidth="5" />)}
                 </svg>
               </div>
-              <div className={styles.recoveryActions}>
-                <button type="button" onClick={() => setRecoveryPoints([])} disabled={busy || recoveryPoints.length === 0}>Recommencer les points</button>
-                <button type="button" className={styles.recoveryConfirm} onClick={() => void generate(recoveryPoints)} disabled={busy || recoveryPoints.length !== 4}>
-                  {busy ? <><LoaderCircle className={styles.spin} size={17} /> Analyse LiDAR…</> : <>Analyser ce pan avec LiDAR</>}
-                </button>
+
+              <div className={styles.designerControls}>
+                <label><span>Pente du pan (°)</span><input type="number" min="0" max="75" step="0.5" value={draft.roofSlopeDeg} onChange={(event) => update("roofSlopeDeg", event.target.value)} /></label>
+                <div className={styles.keepoutControls}>
+                  <button type="button" onClick={() => { setRecoveryPoints([]); setDesignerMode("roof"); setObstacleDraftPoints([]); }} disabled={busy}>Refaire le pan</button>
+                  <button type="button" onClick={() => { setDesignerMode("obstacle"); setObstacleDraftPoints([]); setNoObstaclesConfirmed(false); }} disabled={busy || recoveryPoints.length !== 4}>{designerMode === "obstacle" ? "Clique 4 coins de l'obstacle…" : "Ajouter un obstacle"}</button>
+                  <button type="button" onClick={() => { setKeepoutPolygons((current) => current.slice(0, -1)); setNoObstaclesConfirmed(false); }} disabled={busy || keepoutPolygons.length === 0}>Retirer dernier obstacle</button>
+                </div>
+                <label className={styles.noObstacleCheck}><input type="checkbox" checked={noObstaclesConfirmed} disabled={keepoutPolygons.length > 0} onChange={(event) => setNoObstaclesConfirmed(event.target.checked)} /><span>Je confirme qu'il n'y a aucun obstacle/zone interdite sur ce pan.</span></label>
+                {keepoutPolygons.length > 0 ? <div className={styles.keepoutStatus}>✓ {keepoutPolygons.length} obstacle(s) / keepout(s) tracé(s). Ils seront interdits au Layout Engine.</div> : null}
               </div>
+
+              <button type="button" className={styles.recoveryConfirmWide} onClick={submitRoofDesigner} disabled={busy || recoveryPoints.length !== 4 || !slopeReady || !obstacleReviewReady || designerMode === "obstacle"}>
+                {busy ? <><LoaderCircle className={styles.spin} size={17} /> Calcul du calepinage…</> : <>Valider le toit et générer DP2</>}
+              </button>
             </div>
           ) : (
             <button className={styles.generate} disabled={busy} onClick={() => void generate()}>
-              {busy ? <><LoaderCircle className={styles.spin} size={19} /> PilotPaper travaille…</> : <>Générer DP{contract.dp} <span>TEST</span></>}
+              {busy ? <><LoaderCircle className={styles.spin} size={19} /> PilotPaper prépare le Roof Designer…</> : <>Préparer DP{contract.dp} <span>TEST</span></>}
             </button>
           )}
           <p className={styles.modeNote}>Cette V1 ne peut produire qu'un résultat <strong>test_unverified</strong>. Aucun clic ne peut le transformer en document de production.</p>
@@ -416,7 +482,7 @@ export function DpPieceWorkbench() {
             {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
           {!result ? (
-            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "PilotPaper attend les 4 coins du pan" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Le LiDAR reprendra automatiquement après ta sélection." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
+            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "Roof Designer attend ta validation" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Une fois le pan, la pente et les obstacles confirmés, le Layout Engine prend le relais." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
           ) : (
             <>
               <div className={styles.previewCanvas}>{previewUrl ? <img src={previewUrl} alt={`Résultat DP${contract.dp}`} /> : null}</div>
