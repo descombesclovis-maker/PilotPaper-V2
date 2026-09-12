@@ -3,6 +3,7 @@ import { fromWebMercator, toWebMercator, type MetricFrame } from "@/lib/dp-ai-en
 import { googleSolarConfigured } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
 import {
+  encodeRoofFaceSelectionToken,
   listGoogleSolarFaces,
   selectGoogleSolarFaceBySegmentIndex,
 } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
@@ -162,11 +163,17 @@ export async function POST(request: Request) {
     const faces = compatible
       .sort((a, b) => b.areaMeters2 - a.areaMeters2 || a.originalSegmentIndex - b.originalSegmentIndex)
       .map((face, index) => {
-        const id = String.fromCharCode(65 + index);
+        const displayFaceId = String.fromCharCode(65 + index);
+        const id = encodeRoofFaceSelectionToken({
+          displayFaceId,
+          originalSegmentIndex: face.originalSegmentIndex,
+          buildingId: face.buildingId,
+        });
         return {
           ...face,
           id,
-          label: `Pan ${id}`,
+          displayFaceId,
+          label: `Pan ${displayFaceId}`,
           stableKey: `${face.buildingId}:${face.originalSegmentIndex}`,
         };
       });
