@@ -47,6 +47,17 @@ function localEastNorth(
   };
 }
 
+function latLngFromLocal(
+  point: EastNorth,
+  origin: { latitude: number; longitude: number },
+) {
+  const lat0 = radians(origin.latitude);
+  return {
+    latitude: origin.latitude + (point.north / EARTH_RADIUS_M) * (180 / Math.PI),
+    longitude: origin.longitude + (point.east / (EARTH_RADIUS_M * Math.cos(lat0))) * (180 / Math.PI),
+  };
+}
+
 function axes(azimuthDeg: number) {
   const azimuth = radians(azimuthDeg);
   const down = { east: Math.sin(azimuth), north: Math.cos(azimuth) };
@@ -128,6 +139,75 @@ export function sectionIntervalForFootprint(args: {
   return { leftX: selected.min, rightX: selected.max, widthM: selected.max - selected.min };
 }
 
+function sectionCandidates(args: {
+  building: BuildingFootprint;
+  selected: GoogleSolarRoofSegment;
+}) {
+  const origin = args.selected.center;
+  const basis = axes(args.selected.azimuthDegrees);
+  const buildingLocal = localEastNorth(
+    { longitude: args.building.centroid[0], latitude: args.building.centroid[1] },
+    origin,
+  );
+  const buildingAlong = buildingLocal.east * basis.along.east + buildingLocal.north * basis.along.north;
+
+  let maxAlongShift = 6;
+  if (args.selected.boundingBox) {
+    const corners = [
+      args.selected.boundingBox.sw,
+      { latitude: args.selected.boundingBox.sw.latitude, longitude: args.selected.boundingBox.ne.longitude },
+      args.selected.boundingBox.ne,
+      { latitude: args.selected.boundingBox.ne.latitude, longitude: args.selected.boundingBox.sw.longitude },
+    ].map((point) => toAxis(point, origin, args.selected.azimuthDegrees));
+    maxAlongShift = Math.max(0.75, Math.min(10, Math.max(...corners.map((point) => Math.abs(point.y))) * 0.85));
+  }
+
+  const offsets = [
+    0,
+    buildingAlong * 0.35,
+    buildingAlong * 0.65,
+    buildingAlong,
+    -1,
+    1,
+    -2,
+    2,
+    -3.5,
+    3.5,
+  ];
+  const uniqueOffsets: number[] = [];
+  for (const raw of offsets) {
+    const offset = Math.max(-maxAlongShift, Math.min(maxAlongShift, raw));
+    if (!uniqueOffsets.some((existing) => Math.abs(existing - offset) < 0.2)) uniqueOffsets.push(offset);
+  }
+
+  return uniqueOffsets.map((offset) => latLngFromLocal({
+    east: basis.along.east * offset,
+    north: basis.along.north * offset,
+  }, origin));
+}
+
+function robustSectionInterval(args: {
+  building: BuildingFootprint;
+  selected: GoogleSolarRoofSegment;
+}) {
+  const attempts = sectionCandidates(args).flatMap((sectionCenter) => {
+    try {
+      const interval = sectionIntervalForFootprint({
+        polygon: args.building.polygon,
+        sectionCenter,
+        azimuthDeg: args.selected.azimuthDegrees,
+      });
+      return interval.widthM >= 2 ? [{ sectionCenter, interval }] : [];
+    } catch {
+      return [];
+    }
+  });
+  if (!attempts.length) {
+    throw new Error("DP3 : aucun axe automatique ne traverse suffisamment le bâtiment sous le pan sélectionné.");
+  }
+  return attempts.sort((a, b) => b.interval.widthM - a.interval.widthM)[0]!;
+}
+
 function segmentDescriptor(
   segment: GoogleSolarRoofSegment,
   index: number,
@@ -202,13 +282,10 @@ export function buildArchitecturalSectionGeometry(args: {
   if (!Number.isFinite(selected.pitchDegrees) || selected.pitchDegrees <= 0 || selected.pitchDegrees >= 75) {
     throw new Error("DP3 : la pente Google Solar du pan sélectionné n'est pas exploitable pour une coupe architecturale.");
   }
-  const sectionCenter = selected.center;
-  const interval = sectionIntervalForFootprint({
-    polygon: args.building.polygon,
-    sectionCenter,
-    azimuthDeg: selected.azimuthDegrees,
-  });
-  if (interval.widthM < 2) throw new Error("DP3 : la largeur de bâtiment traversée par la coupe est trop faible.");
+
+  const robust = robustSectionInterval({ building: args.building, selected });
+  const sectionCenter = robust.sectionCenter;
+  const interval = robust.interval;
 
   const descriptors = args.insights.solarPotential.roofSegmentStats
     .map((segment, index) => segmentDescriptor(segment, index, sectionCenter, selected.azimuthDegrees))
