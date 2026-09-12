@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const devStarter = readFileSync(`${root}/scripts/start-web.ps1`, "utf8");
 const validationStarter = readFileSync(`${root}/scripts/start-web-validation.ps1`, "utf8");
 const restart = readFileSync(`${root}/scripts/restart-pilotpaper.ps1`, "utf8");
+const launcher = readFileSync(`${root}/desktop/PilotPaperLauncher/Program.cs`, "utf8");
 const packageJson = JSON.parse(readFileSync(`${root}/package.json`, "utf8"));
 
 test("ordinary local development remains explicitly fast and unverified", () => {
@@ -28,4 +29,13 @@ test("Windows restart routes ProductionValidation to the strict starter", () => 
   assert.match(restart, /\[switch\]\$ProductionValidation/);
   assert.match(restart, /start-web-validation\.ps1/);
   assert.match(packageJson.scripts["pilotpaper:validate:windows"], /start-pilotpaper-validation\.ps1/);
+});
+
+test("Windows launcher provisions Google Solar once without overwriting the OpenAI key", () => {
+  assert.match(launcher, /EnsureOpenAiKey\(\);\s*EnsureGoogleSolarKey\(\);/s);
+  assert.match(launcher, /GOOGLE_SOLAR_API_KEY/);
+  assert.match(launcher, /Activer l'AUTO/);
+  assert.match(launcher, /WriteLocalVar/);
+  assert.match(launcher, /Where\(line => !line\.StartsWith\(prefix/);
+  assert.match(launcher, /startInfo\.Environment\[split\[0\]\.Trim\(\)\] = split\[1\]/);
 });
