@@ -79,7 +79,7 @@ export async function normalizeEvidencePhoto(file: File): Promise<NormalizedEvid
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-    const mimeType: "image/jpeg" = "image/jpeg";
+    const mimeType = "image/jpeg" as const;
     const normalized = await canvasBlob(canvas, mimeType);
     const bytes = new Uint8Array(await normalized.arrayBuffer());
     if (bytes.length < 1_000 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
