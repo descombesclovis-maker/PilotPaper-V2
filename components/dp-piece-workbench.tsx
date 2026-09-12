@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { DP_PIECE_CONTRACTS, type DpPieceField } from "@/lib/dp-piece-contract";
 import type { DPNumber } from "@/lib/dp-ai-engine/types";
+import { RoofFaceSelector, type RoofFaceChoice } from "@/components/roof-face-selector";
 import styles from "./dp-piece-workbench.module.css";
 
 type PhotoValue = { role: "near" | "roof" | "far"; mimeType: "image/jpeg" | "image/png" | "image/webp"; base64: string; filename: string };
@@ -44,6 +45,15 @@ type ManualRoofPayload = {
   obstaclesConfirmed: true;
 };
 type ApiFailure = { error?: string; recovery?: RoofDesignerRecovery; validationStatus?: "test_unverified" };
+type RoofFaceMap = {
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  normalizedAddress?: string;
+  parcelReference?: string;
+  imageryQuality?: string;
+  faces: RoofFaceChoice[];
+};
 
 type Draft = {
   address: string;
@@ -69,7 +79,7 @@ const defaultDraft: Draft = {
   columns: "6",
   orientation: "portrait",
   placement: "centered",
-  roofFace: "A",
+  roofFace: "",
   roofWidthMm: "7900",
   roofSlopeLengthMm: "4220",
   roofSlopeDeg: "30",
@@ -139,13 +149,17 @@ export function DpPieceWorkbench() {
   const [keepoutPolygons, setKeepoutPolygons] = useState<RecoveryPoint[][]>([]);
   const [noObstaclesConfirmed, setNoObstaclesConfirmed] = useState(false);
   const [history, setHistory] = useState<Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>>({});
+  const [roofFaceMap, setRoofFaceMap] = useState<RoofFaceMap | null>(null);
+  const [roofFaceMapState, setRoofFaceMapState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [roofFaceMapError, setRoofFaceMapError] = useState("");
 
   const contract = useMemo(() => DP_PIECE_CONTRACTS.find((piece) => piece.dp === selectedDp) ?? null, [selectedDp]);
+  const requiresRoofFace = Boolean(contract?.fields.includes("roofFace"));
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem("pilotpaper-v1-k-par-k-draft");
-      if (saved) setDraft((current) => ({ ...current, ...JSON.parse(saved) }));
+      if (saved) setDraft((current) => ({ ...current, ...JSON.parse(saved), roofFace: "" }));
       const savedHistory = localStorage.getItem("pilotpaper-v1-k-par-k-history");
       if (savedHistory) setHistory(JSON.parse(savedHistory));
     } catch { /* local draft is optional */ }
@@ -167,8 +181,53 @@ export function DpPieceWorkbench() {
     return () => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); };
   }, [result]);
 
+  useEffect(() => {
+    if (!requiresRoofFace) {
+      setRoofFaceMap(null);
+      setRoofFaceMapState("idle");
+      setRoofFaceMapError("");
+      return;
+    }
+    const address = draft.address.trim();
+    setDraft((current) => current.roofFace ? { ...current, roofFace: "" } : current);
+    setResult(null);
+    if (address.length < 8) {
+      setRoofFaceMap(null);
+      setRoofFaceMapState("idle");
+      setRoofFaceMapError("");
+      return;
+    }
+    const timer = window.setTimeout(() => { void loadRoofFaces(address); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [selectedDp, draft.address, requiresRoofFace]);
+
   function update<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  async function loadRoofFaces(address = draft.address) {
+    const cleanAddress = address.trim();
+    if (cleanAddress.length < 8) return;
+    setRoofFaceMapState("loading");
+    setRoofFaceMapError("");
+    setRoofFaceMap(null);
+    setDraft((current) => ({ ...current, roofFace: "" }));
+    try {
+      const response = await fetch("/api/dp-piece/roof-faces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: cleanAddress }),
+      });
+      const body = await response.json().catch(() => null) as (RoofFaceMap & { error?: string }) | null;
+      if (!response.ok || !body?.faces?.length || !body.imageDataUrl) {
+        throw new Error(body?.error || "Aucun pan de toiture exploitable n'a été détecté à cette adresse.");
+      }
+      setRoofFaceMap(body);
+      setRoofFaceMapState("ready");
+    } catch (mapError) {
+      setRoofFaceMapState("error");
+      setRoofFaceMapError(mapError instanceof Error ? mapError.message : "La mini-carte de toiture n'a pas pu être chargée.");
+    }
   }
 
   function clearRecovery() {
@@ -184,6 +243,10 @@ export function DpPieceWorkbench() {
     setSelectedDp(dp);
     setResult(null);
     setError("");
+    setDraft((current) => ({ ...current, roofFace: "" }));
+    setRoofFaceMap(null);
+    setRoofFaceMapState("idle");
+    setRoofFaceMapError("");
     clearRecovery();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -192,6 +255,7 @@ export function DpPieceWorkbench() {
     setResult(null);
     setError("");
     setPhotos({});
+    setDraft((current) => ({ ...current, roofFace: "" }));
     clearRecovery();
   }
 
@@ -208,6 +272,10 @@ export function DpPieceWorkbench() {
 
   async function generate(manualRoofDesign?: ManualRoofPayload) {
     if (!contract) return;
+    if (requiresRoofFace && !draft.roofFace) {
+      setError("Choisissez d'abord le pan de toiture voulu directement sur la mini-carte dans la zone RÉSULTAT.");
+      return;
+    }
     setBusy(true);
     setError("");
     setResult(null);
@@ -296,11 +364,7 @@ export function DpPieceWorkbench() {
     const manualRoofDesign: ManualRoofPayload = {
       quadNormalized: recoveryPoints,
       slopeDeg,
-      keepouts: keepoutPolygons.map((polygonNormalized, index) => ({
-        id: `K${index + 1}`,
-        type: "manual_keepout",
-        polygonNormalized,
-      })),
+      keepouts: keepoutPolygons.map((polygonNormalized, index) => ({ id: `K${index + 1}`, type: "manual_keepout", polygonNormalized })),
       obstaclesConfirmed: true,
     };
     void generate(manualRoofDesign);
@@ -318,6 +382,7 @@ export function DpPieceWorkbench() {
   }
 
   function inputField(field: DpPieceField) {
+    if (field === "roofFace") return null;
     const meta = fieldLabels[field];
     if (["nearPhoto", "roofPhoto", "farPhoto"].includes(field)) {
       const role = field === "nearPhoto" ? "near" : field === "roofPhoto" ? "roof" : "far";
@@ -327,13 +392,10 @@ export function DpPieceWorkbench() {
           <span className={styles.fieldTitle}>{meta.label}</span>
           <span className={styles.fieldHint}>{meta.hint}</span>
           <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void setPhoto(role, event.target.files?.[0])} />
-          <span className={photo ? styles.photoReady : styles.photoEmpty}>
-            <FileImage size={17} /> {photo ? photo.filename : "Choisir une photo"}
-          </span>
+          <span className={photo ? styles.photoReady : styles.photoEmpty}><FileImage size={17} /> {photo ? photo.filename : "Choisir une photo"}</span>
         </label>
       );
     }
-
     if (field === "moduleReference") {
       return (
         <label className={styles.field} key={field}>
@@ -350,7 +412,6 @@ export function DpPieceWorkbench() {
     if (field === "placement") {
       return <label className={styles.field} key={field}><span className={styles.fieldTitle}>{meta.label}</span><select value={draft.placement} onChange={(event) => update("placement", event.target.value as Draft["placement"])}><option value="centered">Centré</option><option value="left">Aligné à gauche</option><option value="right">Aligné à droite</option><option value="custom">Personnalisé</option></select></label>;
     }
-
     const draftKey = field as keyof Draft;
     const isNumber = ["panelCount", "rows", "columns", "roofWidthMm", "roofSlopeLengthMm", "roofSlopeDeg", "gutterClearanceMm", "interPanelGapMm"].includes(field);
     return (
@@ -365,23 +426,12 @@ export function DpPieceWorkbench() {
     return (
       <main className={styles.app}>
         <header className={styles.topbar}>
-          <div className={styles.brand}>
-            <img src="/pilotpaper-dp.svg" alt="dP" />
-            <div><strong>PilotPaper</strong><span>V1 · Atelier de validation</span></div>
-          </div>
+          <div className={styles.brand}><img src="/pilotpaper-dp.svg" alt="dP" /><div><strong>PilotPaper</strong><span>V1 · Atelier de validation</span></div></div>
           <div className={styles.testBadge}><span /> MODE TEST · NON VALIDÉ</div>
         </header>
         <section className={styles.hero}>
-          <div>
-            <span className={styles.eyebrow}>VALIDATION K-PAR-K</span>
-            <h1>Une pièce. Un formulaire.<br />Un résultat à contrôler.</h1>
-            <p>On fiabilise DP1 à DP8 séparément avant de reconstruire le dossier automatique complet. Chaque défaut observé devient une règle générale et un test de régression.</p>
-          </div>
-          <div className={styles.heroStatus}>
-            <ShieldCheck size={28} />
-            <strong>Architecture V1 contrôlée</strong>
-            <span>Official Context → Roof Designer → Layout → Projection → Inspector</span>
-          </div>
+          <div><span className={styles.eyebrow}>VALIDATION K-PAR-K</span><h1>Une pièce. Un formulaire.<br />Un résultat à contrôler.</h1><p>On fiabilise DP1 à DP8 séparément avant de reconstruire le dossier automatique complet. Chaque défaut observé devient une règle générale et un test de régression.</p></div>
+          <div className={styles.heroStatus}><ShieldCheck size={28} /><strong>Architecture V1 contrôlée</strong><span>Official Context → Roof Designer → Layout → Projection → Inspector</span></div>
         </section>
         <section className={styles.grid}>
           {DP_PIECE_CONTRACTS.map((piece) => {
@@ -389,15 +439,8 @@ export function DpPieceWorkbench() {
             return (
               <button className={styles.pieceCard} key={piece.dp} onClick={() => openPiece(piece.dp)}>
                 <div className={styles.cardTop}><span className={styles.dpNumber}>DP{piece.dp}</span>{state ? <span className={state.lastPassed ? styles.passDot : styles.failDot}>{state.tests} test{state.tests > 1 ? "s" : ""}</span> : <span className={styles.newDot}>À tester</span>}</div>
-                <h2>{piece.title}</h2>
-                <p>{piece.purpose}</p>
-                <div className={styles.pipelineTags}>
-                  {piece.usesRoofUnderstanding ? <span>Roof</span> : null}
-                  {piece.usesLayout ? <span>Layout</span> : null}
-                  {piece.usesProjection ? <span>Projection</span> : null}
-                  {piece.usesPhotorealisticRender ? <span>Render IA</span> : null}
-                  {piece.usesInspector ? <span>Inspector</span> : null}
-                </div>
+                <h2>{piece.title}</h2><p>{piece.purpose}</p>
+                <div className={styles.pipelineTags}>{piece.usesRoofUnderstanding ? <span>Roof</span> : null}{piece.usesLayout ? <span>Layout</span> : null}{piece.usesProjection ? <span>Projection</span> : null}{piece.usesPhotorealisticRender ? <span>Render IA</span> : null}{piece.usesInspector ? <span>Inspector</span> : null}</div>
                 <span className={styles.openLabel}>Ouvrir l'atelier →</span>
               </button>
             );
@@ -409,6 +452,7 @@ export function DpPieceWorkbench() {
 
   const slopeReady = numeric(draft.roofSlopeDeg) != null && Number(draft.roofSlopeDeg) >= 0 && Number(draft.roofSlopeDeg) <= 75;
   const obstacleReviewReady = noObstaclesConfirmed || keepoutPolygons.length > 0;
+  const faceReady = !requiresRoofFace || Boolean(draft.roofFace);
 
   return (
     <main className={styles.app}>
@@ -432,15 +476,10 @@ export function DpPieceWorkbench() {
 
           {recovery ? (
             <div className={styles.recoveryCard}>
-              <div className={styles.recoveryHeading}>
-                <Crosshair size={20} />
-                <div><strong>Roof Designer · validation du pan</strong><span>{recoveryPoints.length}/4 coins du pan · {keepoutPolygons.length} keepout(s)</span></div>
-              </div>
+              <div className={styles.recoveryHeading}><Crosshair size={20} /><div><strong>Roof Designer · validation du pan</strong><span>{recoveryPoints.length}/4 coins du pan · {keepoutPolygons.length} keepout(s)</span></div></div>
               <p>Cette étape remplace la détection LiDAR incertaine. Tu définis seulement la géométrie visible ; PilotPaper conserve l'échelle réelle de l'orthophoto IGN et calcule ensuite le calepinage.</p>
               <div className={styles.recoveryReason}>{recovery.reason}</div>
-              <div className={styles.designerGuide}>
-                <span>1 · Gouttière gauche</span><span>2 · Gouttière droite</span><span>3 · Faîtage droite</span><span>4 · Faîtage gauche</span>
-              </div>
+              <div className={styles.designerGuide}><span>1 · Gouttière gauche</span><span>2 · Gouttière droite</span><span>3 · Faîtage droite</span><span>4 · Faîtage gauche</span></div>
               <div className={styles.recoveryImageWrap} onClick={addRecoveryPoint} role="button" tabIndex={0} aria-label="Roof Designer">
                 <img src={`data:${recovery.imageMimeType};base64,${recovery.imageBase64}`} alt="Orthophoto IGN métrée pour Roof Designer" />
                 <svg className={styles.recoveryOverlay} viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
@@ -452,7 +491,6 @@ export function DpPieceWorkbench() {
                   {obstacleDraftPoints.map((point, index) => <circle key={`obstacle-draft-${index}`} cx={point.x * 1000} cy={point.y * 1000} r="13" fill="#d66b3e" stroke="#fff" strokeWidth="5" />)}
                 </svg>
               </div>
-
               <div className={styles.designerControls}>
                 <label><span>Pente du pan (°)</span><input type="number" min="0" max="75" step="0.5" value={draft.roofSlopeDeg} onChange={(event) => update("roofSlopeDeg", event.target.value)} /></label>
                 <div className={styles.keepoutControls}>
@@ -463,14 +501,13 @@ export function DpPieceWorkbench() {
                 <label className={styles.noObstacleCheck}><input type="checkbox" checked={noObstaclesConfirmed} disabled={keepoutPolygons.length > 0} onChange={(event) => setNoObstaclesConfirmed(event.target.checked)} /><span>Je confirme qu'il n'y a aucun obstacle/zone interdite sur ce pan.</span></label>
                 {keepoutPolygons.length > 0 ? <div className={styles.keepoutStatus}>✓ {keepoutPolygons.length} obstacle(s) / keepout(s) tracé(s). Ils seront interdits au Layout Engine.</div> : null}
               </div>
-
               <button type="button" className={styles.recoveryConfirmWide} onClick={submitRoofDesigner} disabled={busy || recoveryPoints.length !== 4 || !slopeReady || !obstacleReviewReady || designerMode === "obstacle"}>
                 {busy ? <><LoaderCircle className={styles.spin} size={17} /> Calcul du calepinage…</> : <>Valider le toit et générer DP2</>}
               </button>
             </div>
           ) : (
-            <button className={styles.generate} disabled={busy} onClick={() => void generate()}>
-              {busy ? <><LoaderCircle className={styles.spin} size={19} /> PilotPaper prépare le Roof Designer…</> : <>Préparer DP{contract.dp} <span>TEST</span></>}
+            <button className={styles.generate} disabled={busy || !faceReady} onClick={() => void generate()}>
+              {busy ? <><LoaderCircle className={styles.spin} size={19} /> Génération DP{contract.dp}…</> : !faceReady ? <>Choisissez un pan dans RÉSULTAT</> : <>Générer DP{contract.dp} <span>TEST</span></>}
             </button>
           )}
           <p className={styles.modeNote}>Cette V1 ne peut produire qu'un résultat <strong>test_unverified</strong>. Aucun clic ne peut le transformer en document de production.</p>
@@ -478,12 +515,11 @@ export function DpPieceWorkbench() {
 
         <section className={styles.previewPanel}>
           <div className={styles.panelHeading}>
-            <div><span>RÉSULTAT</span><h2>Contrôle visuel</h2></div>
+            <div><span>RÉSULTAT</span><h2>{requiresRoofFace && !result ? "Choix du pan de toiture" : "Contrôle visuel"}</h2></div>
             {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
-          {!result ? (
-            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "Roof Designer attend ta validation" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Une fois le pan, la pente et les obstacles confirmés, le Layout Engine prend le relais." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
-          ) : (
+
+          {result ? (
             <>
               <div className={styles.previewCanvas}>{previewUrl ? <img src={previewUrl} alt={`Résultat DP${contract.dp}`} /> : null}</div>
               <div className={result.inspector.passed ? styles.inspectorPass : styles.inspectorFail}>
@@ -493,6 +529,41 @@ export function DpPieceWorkbench() {
               </div>
               <div className={styles.sources}><strong>Sources utilisées</strong>{result.sourceSummary.map((source) => <span key={source}>{source}</span>)}</div>
             </>
+          ) : requiresRoofFace ? (
+            <div className="space-y-4 p-5">
+              {draft.address.trim().length < 8 ? (
+                <div className={styles.emptyPreview}><MapPinned size={34} /><strong>Renseignez l'adresse du projet</strong><span>La mini-carte apparaîtra ici automatiquement avec tous les pans détectés.</span></div>
+              ) : roofFaceMapState === "loading" ? (
+                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse de la toiture…</strong><span>PilotPaper charge l'orthophoto IGN et identifie tous les pans A/B/C…</span></div>
+              ) : roofFaceMapState === "error" ? (
+                <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Mini-carte indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces()}>Réessayer</button></div>
+              ) : roofFaceMap ? (
+                <>
+                  <RoofFaceSelector
+                    imageUrl={roofFaceMap.imageDataUrl}
+                    faces={roofFaceMap.faces}
+                    selectedFaceIds={draft.roofFace ? [draft.roofFace] : []}
+                    onChange={(faceIds) => {
+                      const next = faceIds.at(-1) ?? "";
+                      update("roofFace", next);
+                      setError("");
+                      setResult(null);
+                    }}
+                    disabled={busy}
+                  />
+                  {draft.roofFace ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">Pan {draft.roofFace} sélectionné. PilotPaper utilisera exactement ce pan pour DP{contract.dp}.</div>
+                  ) : (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Choisissez un pan de toiture avant de générer la DP.</div>
+                  )}
+                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces()} disabled={busy}>Réanalyser les pans</button></div>
+                </>
+              ) : (
+                <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>Détection des pans en attente</strong><span>La mini-carte s'affichera ici.</span></div>
+              )}
+            </div>
+          ) : (
+            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "Roof Designer attend ta validation" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Une fois le pan, la pente et les obstacles confirmés, le Layout Engine prend le relais." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
           )}
         </section>
       </div>
