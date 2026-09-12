@@ -56,7 +56,7 @@ function resizeRgba(src:DecodedPng,targetWidth:number,targetHeight:number):Uint8
       for(let c=0;c<4;c++){
         const top=src.rgba[i00+c]!*(1-wx)+src.rgba[i10+c]!*wx;
         const bottom=src.rgba[i01+c]!*(1-wx)+src.rgba[i11+c]!*wx;
-        out[di+c]=Math.max(0,Math.min(255,Math.round(top*(1-wy)+bottom*wy));
+        out[di+c]=Math.max(0,Math.min(255,Math.round(top*(1-wy)+bottom*wy)));
       }
     }
   }
