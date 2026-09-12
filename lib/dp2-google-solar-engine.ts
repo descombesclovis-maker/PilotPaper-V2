@@ -17,6 +17,7 @@ import {
   googleSolarConfigured,
   type GoogleSolarBuildingInsights,
 } from "@/lib/dp-ai-engine/providers/googleSolar";
+import { inspectAutomaticSatelliteLayout } from "@/lib/dp-ai-engine/quality/openaiSatelliteLayoutInspector";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
 import { metricSurfaceFromManualRoofDesign } from "@/lib/dp-ai-engine/site-model/manualRoofDesigner";
 import { resolveTargetParcelFromBuildingCenter } from "@/lib/dp-ai-engine/site-model/targetPropertyResolver";
@@ -359,8 +360,33 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
     label: `Pan ${form.array.roofFace} · Google Solar segment ${automatic.segmentIndex + 1}`,
   });
   const project = resolveLayoutContext(form, designed);
+  const metricPolygons = allPanelPolygonsForRoleProjective(project, "satellite_mass");
+  if (!metricPolygons || metricPolygons.length !== project.exactPanelCount) {
+    throw new Error("DP2 AUTO : impossible de préparer le contrôle visuel sur tous les modules.");
+  }
+
+  const visualInspection = await inspectAutomaticSatelliteLayout({
+    satellitePngBase64: context.massBase64,
+    panelPolygonsNormalized: metricPolygons,
+    expectedPanelCount: project.exactPanelCount,
+    address: context.normalizedAddress,
+    segmentPitchDeg: automatic.segment.pitchDegrees,
+    segmentAzimuthDeg: automatic.segment.azimuthDegrees,
+  });
+  if (visualInspection.status === "rejected") {
+    throw new Error(`OpenAI Inspector : incohérence visuelle du placement automatique — ${visualInspection.issues.join(" ; ") || "toiture cible non confirmée"}.`);
+  }
+
   const imageQuality = String(context.solar.imageryQuality ?? "inconnue");
-  const score = imageQuality === "HIGH" ? 0.99 : imageQuality === "MEDIUM" ? 0.97 : 0.93;
+  const baseScore = imageQuality === "HIGH" ? 0.99 : imageQuality === "MEDIUM" ? 0.97 : 0.93;
+  const score = visualInspection.status === "passed"
+    ? Math.min(0.995, baseScore + visualInspection.confidence * 0.005)
+    : Math.max(0.90, baseScore - 0.03);
+  const inspectionIssues = visualInspection.status === "unavailable" ? visualInspection.issues : [];
+  const baseIssues = imageQuality === "BASE"
+    ? ["Imagerie Google Solar BASE : validation multi-cas requise avant toute utilisation production."]
+    : [];
+
   return {
     dp: 2,
     title: "Plan de masse",
@@ -369,12 +395,15 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
     text: buildDp2Svg(context, project),
     sourceSummary: [
       `Google Solar API — bâtiment physique et segment ${automatic.segmentIndex + 1} · imagerie ${imageQuality}`,
-      `Google Solar API — ${automatic.googlePanelCountUsedAsSafeArea} cellule(s) contiguë(s) utilisées comme zone sûre`,
+      `Google Solar API — ${automatic.googlePanelCountUsedAsSafeArea} cellule(s) contiguë(s) ${automatic.googleCandidateOrientation.toLowerCase()} utilisées comme zone sûre`,
       `IGN/APICARTO — parcelle recalée depuis le centre physique du bâtiment : ${context.parcelReference}`,
       `Module fabricant — ${form.panel.model} · ${form.panel.widthMm} × ${form.panel.heightMm} mm`,
       `PV Layout Engine — ${form.array.rows} × ${form.array.columns}, dimensions fabricant exactes, jeu ${form.array.interPanelGapMm} mm`,
       `Zone sûre Google : ${automatic.safeAreaWidthMeters.toFixed(2)} × ${automatic.safeAreaSlopeLengthMeters.toFixed(2)} m sur le plan du toit`,
       `Champ demandé : ${automatic.requestedArrayWidthMeters.toFixed(2)} × ${automatic.requestedArraySlopeLengthMeters.toFixed(2)} m`,
+      visualInspection.status === "passed"
+        ? `OpenAI Inspector — contrôle satellite indépendant validé (${Math.round(visualInspection.confidence * 100)} %)`
+        : "OpenAI Inspector — contrôle satellite non conclusif ; géométrie Google/PilotPaper conservée comme source primaire",
     ],
     inspector: {
       passed: true,
@@ -388,8 +417,11 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
         "Dimensions des modules remplacées par les dimensions fabricant vérifiées avant le Layout Engine",
         `${project.exactPanelCount} modules projetés automatiquement sans clic utilisateur`,
         "Conversion EPSG:3857 corrigée à la latitude locale pour les dimensions métriques",
+        visualInspection.status === "passed"
+          ? "OpenAI a confirmé indépendamment que les modules surlignés sont visuellement cohérents avec un même pan de toiture"
+          : "Le contrôle OpenAI ne modifie jamais la géométrie et son indisponibilité est explicitement signalée",
       ],
-      issues: imageQuality === "BASE" ? ["Imagerie Google Solar BASE : validation multi-cas requise avant toute utilisation production."] : [],
+      issues: [...baseIssues, ...inspectionIssues],
     },
   };
 }
