@@ -73,6 +73,7 @@ type Payload = {
   preferredGutterClearanceMm?: number;
   roofSelectionMode?: "automatic" | "priority";
   priorityRoofFaceId?: string;
+  selectedRoofFaceIds?: string[];
   supportType?: string;
   roofTopology?: string;
   coveringType?: string;
@@ -117,6 +118,18 @@ function covering(value: string | undefined): RoofCovering {
     return value as RoofCovering;
   }
   return "unknown";
+}
+
+function uniqueFaceIds(body: Payload) {
+  const explicit = Array.isArray(body.selectedRoofFaceIds)
+    ? body.selectedRoofFaceIds
+    : [];
+  const legacySingle = body.roofSelectionMode === "priority" && body.priorityRoofFaceId
+    ? [body.priorityRoofFaceId]
+    : [];
+  return [...new Set((explicit.length ? explicit : legacySingle)
+    .map((id) => String(id ?? "").trim().toUpperCase())
+    .filter(Boolean))];
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -183,10 +196,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       gutterClearanceMm,
     },
     roofGeometry: { slopeDeg: roofPitchDeg, source: "ign-derived" },
-    roofSelection: {
-      mode: body.roofSelectionMode === "priority" ? "priority" : "automatic",
-      priorityFaceId: body.roofSelectionMode === "priority" ? body.priorityRoofFaceId : undefined,
-    },
+    // Once the user has explicitly authorised physical pans, the allocator is
+    // automatic only INSIDE that allowed set. It therefore keeps one pan when
+    // possible and opens a 2nd/3rd/4th/5th pan only when capacity requires it.
+    roofSelection: { mode: "automatic" },
     support: {
       topology: topology(body.roofTopology ?? (body.supportType === "carport" ? "carport" : undefined)),
       covering: covering(body.coveringType),
@@ -261,15 +274,38 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }, { status: 422 });
   }
 
+  const requestedFaceIds = uniqueFaceIds(body);
+  const selectedRoofFaces = requestedFaceIds.length
+    ? roofFaces.filter((face) => requestedFaceIds.includes(face.id.toUpperCase()))
+    : roofFaces;
+  const missingFaceIds = requestedFaceIds.filter((faceId) => !roofFaces.some((face) => face.id.toUpperCase() === faceId));
+  if (missingFaceIds.length) {
+    return Response.json({
+      fits: false,
+      error: `Les pans ${missingFaceIds.join(", ")} ne correspondent à aucun pan physique détecté sur ce bâtiment.`,
+      faces: roofFaces,
+      uncertainties: raw.uncertainties,
+    }, { status: 422 });
+  }
+  if (!selectedRoofFaces.length) {
+    return Response.json({
+      fits: false,
+      error: "Sélectionnez au moins un pan à équiper.",
+      faces: roofFaces,
+      uncertainties: raw.uncertainties,
+    }, { status: 422 });
+  }
+
   let layout;
   try {
-    layout = resolveProjectLayout({ ...form, roofFaces });
+    layout = resolveProjectLayout({ ...form, roofFaces: selectedRoofFaces });
   } catch (error) {
     return Response.json({
       fits: false,
-      error: error instanceof Error ? error.message : "La quantité demandée ne tient pas sur les pans détectés.",
+      error: error instanceof Error ? error.message : "La quantité demandée ne tient pas sur les pans sélectionnés.",
       faces: roofFaces,
-      roofFacesJson: JSON.stringify(roofFaces),
+      selectedFaces: selectedRoofFaces,
+      roofFacesJson: JSON.stringify(selectedRoofFaces),
       uncertainties: raw.uncertainties,
     }, { status: 422 });
   }
@@ -287,10 +323,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       verifiedAt: moduleSpec.verifiedAt,
     },
     faces: roofFaces,
+    selectedFaces: selectedRoofFaces,
+    selectedFaceIds: selectedRoofFaces.map((face) => face.id),
     placements: layout.placements,
+    usedFaceIds: layout.placements.map((placement) => placement.faceId),
     split: layout.split,
     resolvedGutterMm: Math.min(...layout.placements.map((placement) => placement.resolvedGutterMm)),
-    roofFacesJson: JSON.stringify(roofFaces),
+    // Persist ONLY the user-authorised subset. Generation can therefore never
+    // silently reuse a face that the user did not click in the form.
+    roofFacesJson: JSON.stringify(selectedRoofFaces),
     uncertainties: raw.uncertainties,
   });
 }
