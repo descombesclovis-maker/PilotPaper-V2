@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+/* eslint-disable react/no-unescaped-entities */
+
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -119,6 +121,27 @@ function numeric(value: string) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function initialDraft(): Draft {
+  if (typeof window === "undefined") return defaultDraft;
+  try {
+    const saved = localStorage.getItem("pilotpaper-v1-k-par-k-draft");
+    if (!saved) return defaultDraft;
+    return { ...defaultDraft, ...JSON.parse(saved), roofFace: "" } as Draft;
+  } catch {
+    return defaultDraft;
+  }
+}
+
+function initialHistory(): Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const saved = localStorage.getItem("pilotpaper-v1-k-par-k-history");
+    return saved ? JSON.parse(saved) as Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>> : {};
+  } catch {
+    return {};
+  }
+}
+
 async function fileToPhoto(file: File, role: PhotoValue["role"]): Promise<PhotoValue> {
   if (file.size > 18 * 1024 * 1024) throw new Error("Photo trop lourde : 18 Mo maximum pour l'atelier V1.");
   const allowed = ["image/jpeg", "image/png", "image/webp"];
@@ -136,76 +159,36 @@ async function fileToPhoto(file: File, role: PhotoValue["role"]): Promise<PhotoV
 
 export function DpPieceWorkbench() {
   const [selectedDp, setSelectedDp] = useState<DPNumber | null>(null);
-  const [draft, setDraft] = useState<Draft>(defaultDraft);
+  const [draft, setDraft] = useState<Draft>(initialDraft);
   const [photos, setPhotos] = useState<Partial<Record<PhotoValue["role"], PhotoValue>>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<PieceResult | null>(null);
-  const [previewUrl, setPreviewUrl] = useState("");
   const [recovery, setRecovery] = useState<RoofDesignerRecovery | null>(null);
   const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPoint[]>([]);
   const [designerMode, setDesignerMode] = useState<"roof" | "obstacle">("roof");
   const [obstacleDraftPoints, setObstacleDraftPoints] = useState<RecoveryPoint[]>([]);
   const [keepoutPolygons, setKeepoutPolygons] = useState<RecoveryPoint[][]>([]);
   const [noObstaclesConfirmed, setNoObstaclesConfirmed] = useState(false);
-  const [history, setHistory] = useState<Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>>({});
+  const [history, setHistory] = useState<Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>>(initialHistory);
   const [roofFaceMap, setRoofFaceMap] = useState<RoofFaceMap | null>(null);
   const [roofFaceMapState, setRoofFaceMapState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [roofFaceMapError, setRoofFaceMapError] = useState("");
 
   const contract = useMemo(() => DP_PIECE_CONTRACTS.find((piece) => piece.dp === selectedDp) ?? null, [selectedDp]);
   const requiresRoofFace = Boolean(contract?.fields.includes("roofFace"));
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("pilotpaper-v1-k-par-k-draft");
-      if (saved) setDraft((current) => ({ ...current, ...JSON.parse(saved), roofFace: "" }));
-      const savedHistory = localStorage.getItem("pilotpaper-v1-k-par-k-history");
-      if (savedHistory) setHistory(JSON.parse(savedHistory));
-    } catch { /* local draft is optional */ }
-  }, []);
+  const previewUrl = useMemo(() => {
+    if (!result) return "";
+    if (result.text) return `data:${result.mimeType};charset=utf-8,${encodeURIComponent(result.text)}`;
+    if (result.base64) return `data:${result.mimeType};base64,${result.base64}`;
+    return "";
+  }, [result]);
 
   useEffect(() => {
     try { localStorage.setItem("pilotpaper-v1-k-par-k-draft", JSON.stringify(draft)); } catch { /* ignore */ }
   }, [draft]);
 
-  useEffect(() => {
-    if (!result) { setPreviewUrl(""); return; }
-    let url = "";
-    if (result.text) {
-      url = URL.createObjectURL(new Blob([result.text], { type: result.mimeType }));
-    } else if (result.base64) {
-      url = `data:${result.mimeType};base64,${result.base64}`;
-    }
-    setPreviewUrl(url);
-    return () => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); };
-  }, [result]);
-
-  useEffect(() => {
-    if (!requiresRoofFace) {
-      setRoofFaceMap(null);
-      setRoofFaceMapState("idle");
-      setRoofFaceMapError("");
-      return;
-    }
-    const address = draft.address.trim();
-    setDraft((current) => current.roofFace ? { ...current, roofFace: "" } : current);
-    setResult(null);
-    if (address.length < 8) {
-      setRoofFaceMap(null);
-      setRoofFaceMapState("idle");
-      setRoofFaceMapError("");
-      return;
-    }
-    const timer = window.setTimeout(() => { void loadRoofFaces(address); }, 650);
-    return () => window.clearTimeout(timer);
-  }, [selectedDp, draft.address, requiresRoofFace]);
-
-  function update<K extends keyof Draft>(key: K, value: Draft[K]) {
-    setDraft((current) => ({ ...current, [key]: value }));
-  }
-
-  async function loadRoofFaces(address = draft.address) {
+  const loadRoofFaces = useCallback(async (address: string) => {
     const cleanAddress = address.trim();
     if (cleanAddress.length < 8) return;
     setRoofFaceMapState("loading");
@@ -227,6 +210,23 @@ export function DpPieceWorkbench() {
     } catch (mapError) {
       setRoofFaceMapState("error");
       setRoofFaceMapError(mapError instanceof Error ? mapError.message : "La mini-carte de toiture n'a pas pu être chargée.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!requiresRoofFace || draft.address.trim().length < 8) return;
+    const address = draft.address;
+    const timer = window.setTimeout(() => { void loadRoofFaces(address); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [draft.address, loadRoofFaces, requiresRoofFace, selectedDp]);
+
+  function update<K extends keyof Draft>(key: K, value: Draft[K]) {
+    setDraft((current) => ({ ...current, [key]: value, ...(key === "address" ? { roofFace: "" } : {}) }));
+    if (key === "address") {
+      setResult(null);
+      setRoofFaceMap(null);
+      setRoofFaceMapState("idle");
+      setRoofFaceMapError("");
     }
   }
 
@@ -536,7 +536,7 @@ export function DpPieceWorkbench() {
               ) : roofFaceMapState === "loading" ? (
                 <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse de la toiture…</strong><span>PilotPaper charge l'orthophoto IGN et identifie tous les pans A/B/C…</span></div>
               ) : roofFaceMapState === "error" ? (
-                <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Mini-carte indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces()}>Réessayer</button></div>
+                <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Mini-carte indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces(draft.address)}>Réessayer</button></div>
               ) : roofFaceMap ? (
                 <>
                   <RoofFaceSelector
@@ -556,7 +556,7 @@ export function DpPieceWorkbench() {
                   ) : (
                     <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Choisissez un pan de toiture avant de générer la DP.</div>
                   )}
-                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces()} disabled={busy}>Réanalyser les pans</button></div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces(draft.address)} disabled={busy}>Réanalyser les pans</button></div>
                 </>
               ) : (
                 <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>Détection des pans en attente</strong><span>La mini-carte s'affichera ici.</span></div>
