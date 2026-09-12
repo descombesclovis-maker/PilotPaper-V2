@@ -15,7 +15,8 @@ const vite = await createServer({
 after(async () => { await vite.close(); });
 
 const identityModulePromise = vite.ssrLoadModule("/lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts");
-const engineSource = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const entrySource = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const engineSource = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const identitySource = await readFile(new URL("../lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts", import.meta.url), "utf8");
 const metricSource = await readFile(new URL("../lib/dp-ai-engine/geometry/metricSurfaceFromIdentity.ts", import.meta.url), "utf8");
 const routeSource = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
@@ -105,20 +106,15 @@ test("cross-view engine refuses a match supported by fewer than two independent 
   assert.ok(issues.some((issue) => issue.includes("indices visuels")));
 });
 
-test("cross-view identity remains a shared QA brick but is no longer a DP2 metric source", () => {
+test("cross-view identity remains reusable QA but DP2 metric geometry now comes from reviewed Roof Designer", () => {
   assert.match(routeSource, /@\/lib\/dp2-v1-engine/);
+  assert.match(entrySource, /dp2-roof-designer-engine/);
   assert.match(identitySource, /cross_view_surface_identity/);
-  assert.match(identitySource, /cross_view_surface_identity_recovery/);
   assert.match(identitySource, /validateCrossViewSurfaceIdentity/);
   assert.match(metricSource, /metricSurfaceFromIdentity/);
-  assert.match(metricSource, /reprojectPolygonBetweenQuads/);
-
   assert.doesNotMatch(engineSource, /resolveCrossViewSurfaceIdentity/);
   assert.doesNotMatch(engineSource, /metricSurfaceFromIdentity/);
-  assert.match(engineSource, /metricSurfaceFromSitePlane/);
-  assert.match(engineSource, /buildAutomaticSiteModelFromParcel/);
-  assert.match(engineSource, /buildAssistedSiteModelFromParcel/);
+  assert.doesNotMatch(engineSource, /buildAutomaticSiteModelFromParcel/);
+  assert.match(engineSource, /metricSurfaceFromManualRoofDesign/);
   assert.match(engineSource, /resolveProjectLayout/);
-  assert.doesNotMatch(engineSource, /identitySchema\s*=/);
-  assert.doesNotMatch(engineSource, /function pointInPolygon/);
 });
