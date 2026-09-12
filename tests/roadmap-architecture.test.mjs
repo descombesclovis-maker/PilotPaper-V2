@@ -14,13 +14,16 @@ const designer = await readFile(new URL("../lib/dp-ai-engine/site-model/manualRo
 const siteModel = await readFile(new URL("../lib/dp-ai-engine/site-model/siteModelEngine.ts", import.meta.url), "utf8");
 const roadmap = await readFile(new URL("../V1-K-PAR-K.md", import.meta.url), "utf8");
 
-test("DP1 keeps reusable official parcel context while DP2 can correct target parcel from physical building center", () => {
+test("DP1 and DP2 share one official parcel truth while building providers may only recenter inside it", () => {
   assert.match(dp1, /resolveOfficialParcelContext/);
   assert.match(parcel, /resolveOfficialParcelContext/);
   assert.match(dp2, /resolveOfficialParcelContext/);
   assert.match(dp2, /resolveTargetParcelFromBuildingCenter/);
   assert.match(target, /buildingCenter/);
-  assert.match(target, /APICARTO|apicarto/i);
+  assert.match(target, /insideOriginalParcel/);
+  assert.match(target, /return args\.addressContext/);
+  assert.doesNotMatch(target, /geocodage\/reverse/);
+  assert.doesNotMatch(target, /APICARTO|apicarto/i);
   assert.doesNotMatch(dp1, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
 });
 
