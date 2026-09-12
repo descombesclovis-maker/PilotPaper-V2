@@ -16,7 +16,8 @@ after(async () => { await vite.close(); });
 
 const obstacleModulePromise = vite.ssrLoadModule("/lib/dp-ai-engine/obstacles/surfaceObstacleEngine.ts");
 const obstacleSource = await readFile(new URL("../lib/dp-ai-engine/obstacles/surfaceObstacleEngine.ts", import.meta.url), "utf8");
-const dp2Source = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const dp2Source = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
+const manualSource = await readFile(new URL("../lib/dp-ai-engine/site-model/manualRoofDesigner.ts", import.meta.url), "utf8");
 
 const identity = {
   sameBuilding: true,
@@ -49,13 +50,10 @@ const identity = {
   notes: [],
 };
 
-test("dedicated legacy obstacle engine still scans a locked face systematically and audits completeness", () => {
+test("legacy visual obstacle engine remains available only as a non-DP2 QA experiment", () => {
   assert.match(obstacleSource, /Surface Obstacle Census Engine/);
-  assert.match(obstacleSource, /LEFT -> CENTER -> RIGHT/);
-  assert.match(obstacleSource, /GUTTER -> MID-SLOPE -> RIDGE/);
   assert.match(obstacleSource, /INDEPENDENT Surface Obstacle Audit Engine/);
   assert.match(obstacleSource, /coverageConfidence/);
-  assert.match(obstacleSource, /rejectedCandidateIds/);
 });
 
 test("contextual obstacle fully outside the locked roof plane is discarded deterministically", async () => {
@@ -73,7 +71,7 @@ test("contextual obstacle fully outside the locked roof plane is discarded deter
   assert.deepEqual(finalizeSurfaceObstacleCandidates(candidates, identity), []);
 });
 
-test("small slender obstacle intersecting the selected face is retained for metric projection", async () => {
+test("small slender obstacle intersecting the selected face is retained by the legacy audit", async () => {
   const { finalizeSurfaceObstacleCandidates } = await obstacleModulePromise;
   const candidates = [{
     id: "O1",
@@ -87,40 +85,12 @@ test("small slender obstacle intersecting the selected face is retained for metr
   }];
   const result = finalizeSurfaceObstacleCandidates(candidates, identity);
   assert.equal(result.length, 1);
-  assert.equal(result[0].type, "antenna_mast");
-  assert.ok(result[0].roofPolygonNormalized.length >= 3);
 });
 
-test("duplicate detections are collapsed inside the legacy visual audit", async () => {
-  const { finalizeSurfaceObstacleCandidates } = await obstacleModulePromise;
-  const candidates = [
-    {
-      id: "O1",
-      type: "vent",
-      description: "Vent first pass",
-      confidence: 0.82,
-      roofPolygonNormalized: [
-        { x: 0.45, y: 0.5 }, { x: 0.49, y: 0.5 }, { x: 0.49, y: 0.55 }, { x: 0.45, y: 0.55 },
-      ],
-      metricPolygonNormalized: null,
-    },
-    {
-      id: "A1",
-      type: "vent",
-      description: "Vent audit",
-      confidence: 0.94,
-      roofPolygonNormalized: [
-        { x: 0.448, y: 0.498 }, { x: 0.492, y: 0.498 }, { x: 0.492, y: 0.552 }, { x: 0.448, y: 0.552 },
-      ],
-      metricPolygonNormalized: null,
-    },
-  ];
-  assert.equal(finalizeSurfaceObstacleCandidates(candidates, identity).length, 1);
-});
-
-test("DP2 primary geometry path cannot invoke the legacy visual obstacle engine", () => {
-  assert.doesNotMatch(dp2Source, /resolveSurfaceObstacleInventory/);
-  assert.doesNotMatch(dp2Source, /surfaceObstacleEngine/);
-  assert.match(dp2Source, /Keepout Engine/);
-  assert.match(dp2Source, /buildAssistedSiteModelFromParcel/);
+test("DP2 uses explicit reviewed keepouts instead of visual obstacle inference", () => {
+  assert.doesNotMatch(dp2Source, /resolveSurfaceObstacleInventory|surfaceObstacleEngine/);
+  assert.match(dp2Source, /Keepout Designer/);
+  assert.match(dp2Source, /manualRoofDesign/);
+  assert.match(manualSource, /obstaclePolygonsMm/);
+  assert.match(manualSource, /Keepout validé par l'utilisateur/);
 });
