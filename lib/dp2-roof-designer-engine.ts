@@ -13,12 +13,14 @@ import {
 } from "@/lib/dp-ai-engine/context/officialParcel";
 import { allPanelPolygonsForRoleProjective } from "@/lib/dp-ai-engine/geometry/panelProjection";
 import { resolveProjectLayout } from "@/lib/dp-ai-engine/geometry/projectLayout";
+import { resolveTargetBuilding } from "@/lib/dp-ai-engine/site-model/buildingResolver";
 import {
   metricSurfaceFromManualRoofDesign,
   type ManualRoofDesign,
   type ManualRoofKeepout,
   type ManualRoofQuad,
 } from "@/lib/dp-ai-engine/site-model/manualRoofDesigner";
+import type { BuildingFootprint } from "@/lib/dp-ai-engine/site-model/types";
 import type { InputPhoto, Point2D, ProjectContext, ProjectForm } from "@/lib/dp-ai-engine/types";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/dp-piece-engine";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
@@ -26,12 +28,15 @@ import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 const IMAGE_WIDTH = 1400;
 const IMAGE_HEIGHT = 1000;
 const MASS_ASPECT = IMAGE_HEIGHT / IMAGE_WIDTH;
+const TARGET_PARCEL_STROKE = "#00c7e6";
 
 type Dp2OfficialContext = OfficialParcelContext & {
   parcelPolygonNormalized: Point2D[];
+  presentationParcelPolygonNormalized: Point2D[];
   mass: InputPhoto;
   metricFrame: MetricFrame;
   presentationFrame: MetricFrame;
+  designerCadastreOverlay: string;
   presentationOrthophoto: string;
   cadastralOverlay: string;
   addressPointNormalized: Point2D;
@@ -43,19 +48,37 @@ type Dp2OfficialContext = OfficialParcelContext & {
 type ReviewedRoofDesign = ManualRoofDesign & { obstaclesConfirmed: true };
 type Dp2Input = DpPieceInput & { manualRoofDesign?: unknown };
 
+function parcelSvgPoints(points: Point2D[], width: number, height: number, x = 0, y = 0) {
+  return points.map((point) => `${(x + point.x * width).toFixed(1)},${(y + point.y * height).toFixed(1)}`).join(" ");
+}
+
+function buildRoofDesignerReviewSvg(official: Dp2OfficialContext) {
+  const orthophoto = `data:image/png;base64,${official.mass.base64}`;
+  const cadastre = official.designerCadastreOverlay
+    ? `data:image/png;base64,${official.designerCadastreOverlay}`
+    : "";
+  const target = parcelSvgPoints(official.parcelPolygonNormalized, IMAGE_WIDTH, IMAGE_HEIGHT);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" viewBox="0 0 ${IMAGE_WIDTH} ${IMAGE_HEIGHT}">
+    <image href="${orthophoto}" x="0" y="0" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" preserveAspectRatio="none"/>
+    ${cadastre ? `<image href="${cadastre}" x="0" y="0" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" preserveAspectRatio="none" opacity=".88"/>` : ""}
+    <polygon points="${target}" fill="${TARGET_PARCEL_STROKE}" fill-opacity=".07" stroke="#ffffff" stroke-width="12" stroke-linejoin="round"/>
+    <polygon points="${target}" fill="none" stroke="${TARGET_PARCEL_STROKE}" stroke-width="7" stroke-linejoin="round"/>
+  </svg>`;
+}
+
 export class Dp2RoofDesignerRequiredError extends Error {
   readonly code = "DP2_ROOF_DESIGNER_REQUIRED";
   readonly reason: string;
   readonly imageBase64: string;
-  readonly imageMimeType = "image/png" as const;
+  readonly imageMimeType = "image/svg+xml" as const;
   readonly widthPx: number;
   readonly heightPx: number;
 
   constructor(official: Dp2OfficialContext) {
     super("PilotPaper a besoin que le pan soit validé dans le Roof Designer avant de générer la DP2.");
     this.name = "Dp2RoofDesignerRequiredError";
-    this.reason = "Mode fiable : le pan et les obstacles sont validés sur l'orthophoto IGN métrée. Le LiDAR n'est pas requis.";
-    this.imageBase64 = official.mass.base64;
+    this.reason = `Parcelle cible ${official.parcelReference} contourée en turquoise. La vue est centrée au plus près du bâtiment résolu ; le LiDAR n'est pas requis.`;
+    this.imageBase64 = Buffer.from(buildRoofDesignerReviewSvg(official), "utf8").toString("base64");
     this.widthPx = official.mass.widthPx ?? IMAGE_WIDTH;
     this.heightPx = official.mass.heightPx ?? IMAGE_HEIGHT;
   }
@@ -142,41 +165,101 @@ function reframePoint(point: Point2D, source: MetricFrame, target: MetricFrame):
   };
 }
 
+function frameAroundBuilding(
+  building: BuildingFootprint,
+  options: { aspect: number; minWidthMeters: number; maxWidthMeters: number; scale: number },
+): MetricFrame {
+  const projected = building.polygon.map(([longitude, latitude]) => toWebMercator(longitude, latitude));
+  const minX = Math.min(...projected.map((point) => point.x));
+  const maxX = Math.max(...projected.map((point) => point.x));
+  const minY = Math.min(...projected.map((point) => point.y));
+  const maxY = Math.max(...projected.map((point) => point.y));
+  const buildingWidth = Math.max(1, maxX - minX);
+  const buildingHeight = Math.max(1, maxY - minY);
+  const desiredWidth = Math.max(
+    options.minWidthMeters,
+    buildingWidth * options.scale,
+    (buildingHeight * options.scale) / options.aspect,
+  );
+  const widthMeters = Math.min(options.maxWidthMeters, desiredWidth);
+  const heightMeters = widthMeters * options.aspect;
+  const center = toWebMercator(building.centroid[0], building.centroid[1]);
+  return {
+    longitude: building.centroid[0],
+    latitude: building.centroid[1],
+    widthMeters,
+    heightMeters,
+    minX: center.x - widthMeters / 2,
+    maxX: center.x + widthMeters / 2,
+    minY: center.y - heightMeters / 2,
+    maxY: center.y + heightMeters / 2,
+  };
+}
+
 async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialContext> {
   const site = await resolveOfficialParcelContext(address);
-  const metricFrame = metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
-    aspect: MASS_ASPECT,
-    minWidthMeters: 45,
-    maxWidthMeters: 140,
-    parcelScale: 2.2,
-    fallbackWidthMeters: 90,
-  });
-  const presentationFrame = metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
-    aspect: MASS_ASPECT,
-    minWidthMeters: 130,
-    maxWidthMeters: 280,
-    parcelScale: 5.2,
-    fallbackWidthMeters: 180,
-  });
+  let targetBuilding: BuildingFootprint | undefined;
+  try {
+    targetBuilding = await resolveTargetBuilding(site);
+  } catch (error) {
+    console.warn("[PilotPaper][DP2] BD TOPO target building unavailable; falling back to parcel-centered framing.", error);
+  }
+
+  const metricFrame = targetBuilding
+    ? frameAroundBuilding(targetBuilding, {
+        aspect: MASS_ASPECT,
+        minWidthMeters: 32,
+        maxWidthMeters: 72,
+        scale: 2.6,
+      })
+    : metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
+        aspect: MASS_ASPECT,
+        minWidthMeters: 45,
+        maxWidthMeters: 90,
+        parcelScale: 1.7,
+        fallbackWidthMeters: 70,
+      });
+
+  const presentationFrame = targetBuilding
+    ? frameAroundBuilding(targetBuilding, {
+        aspect: MASS_ASPECT,
+        minWidthMeters: 90,
+        maxWidthMeters: 165,
+        scale: 5.2,
+      })
+    : metricFrameForParcel(site.parcelGeometry, site.longitude, site.latitude, {
+        aspect: MASS_ASPECT,
+        minWidthMeters: 100,
+        maxWidthMeters: 180,
+        parcelScale: 3.8,
+        fallbackWidthMeters: 125,
+      });
+
   const parcelPolygonNormalized = projectParcelRingNormalized(site.parcelGeometry, metricFrame);
-  const [massRaster, presentationRaster, cadastralRaster] = await Promise.all([
+  const presentationParcelPolygonNormalized = projectParcelRingNormalized(site.parcelGeometry, presentationFrame);
+  const [massRaster, designerCadastreRaster, presentationRaster, cadastralRaster] = await Promise.all([
     fetchIgnRaster(
       orthophotoCandidates({ frame: metricFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "DP2 : orthophoto métrée pour Roof Designer", minBytes: 2_000, required: true },
+      { purpose: "DP2 : orthophoto métrée centrée sur le bâtiment pour Roof Designer", minBytes: 2_000, required: true },
+    ),
+    fetchIgnRaster(
+      cadastralCandidates({ frame: metricFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT }),
+      { purpose: "DP2 : cadastre du Roof Designer", minBytes: 1_000, required: false },
     ),
     fetchIgnRaster(
       orthophotoCandidates({ frame: presentationFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "DP2 : vue de présentation élargie", minBytes: 2_000, required: true },
+      { purpose: "DP2 : vue de présentation centrée sur le bâtiment", minBytes: 2_000, required: true },
     ),
     fetchIgnRaster(
       cadastralCandidates({ frame: presentationFrame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT }),
-      { purpose: "DP2 : contexte cadastral élargi", minBytes: 1_000, required: true },
+      { purpose: "DP2 : contexte cadastral autour du bâtiment", minBytes: 1_000, required: true },
     ),
   ]);
   if (!massRaster || !presentationRaster || !cadastralRaster) throw new Error("DP2 : contexte IGN incomplet.");
   return {
     ...site,
     parcelPolygonNormalized,
+    presentationParcelPolygonNormalized,
     metricFrame,
     presentationFrame,
     mass: {
@@ -188,6 +271,7 @@ async function resolveDp2OfficialContext(address: string): Promise<Dp2OfficialCo
       heightPx: IMAGE_HEIGHT,
       metersPerPixel: metricFrame.widthMeters / IMAGE_WIDTH,
     },
+    designerCadastreOverlay: designerCadastreRaster?.base64 ?? "",
     presentationOrthophoto: presentationRaster.base64,
     cadastralOverlay: cadastralRaster.base64,
     addressPointNormalized: normalizedPointInFrame(site.longitude, site.latitude, presentationFrame),
@@ -340,6 +424,7 @@ function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
   const imageHeight = 590;
   const orthophoto = `data:image/png;base64,${context.presentationOrthophoto}`;
   const cadastre = `data:image/png;base64,${context.cadastralOverlay}`;
+  const targetParcel = parcelSvgPoints(context.presentationParcelPolygonNormalized, imageWidth, imageHeight, x, y);
   const entranceX = x + context.addressPointNormalized.x * imageWidth;
   const entranceY = y + context.addressPointNormalized.y * imageHeight;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -352,12 +437,14 @@ function buildDp2Svg(context: Dp2OfficialContext, project: ProjectContext) {
     <rect x="58" y="154" width="1084" height="620" rx="12" fill="#edf0f2"/>
     <image href="${orthophoto}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none"/>
     <image href="${cadastre}" x="${x}" y="${y}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="none" opacity=".88"/>
+    <polygon points="${targetParcel}" fill="${TARGET_PARCEL_STROKE}" fill-opacity=".05" stroke="#ffffff" stroke-width="7" stroke-linejoin="round"/>
+    <polygon points="${targetParcel}" fill="none" stroke="${TARGET_PARCEL_STROKE}" stroke-width="4" stroke-linejoin="round"/>
     ${panelSvg(displayPolygons, x, y, imageWidth, imageHeight)}
     <circle cx="${entranceX.toFixed(1)}" cy="${entranceY.toFixed(1)}" r="8" fill="#e54b2b" stroke="#ffffff" stroke-width="3"/>
     <rect x="82" y="650" width="500" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
     <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">${project.exactPanelCount} MODULES · PAN ${escapeXml(project.array.roofFace)}</text>
     <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Calepinage ${project.array.rows} × ${project.array.columns} · parcelles voisines visibles</text>
-    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Point rouge : accès/adresse du projet · Réf. cadastrale ${escapeXml(context.parcelReference)}</text>
+    <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Turquoise : parcelle cible · point rouge : accès/adresse · Réf. ${escapeXml(context.parcelReference)}</text>
     <text x="1082" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1082 217 L1070 251 L1082 242 L1094 251 Z" fill="#102a56"/>
     <line x1="58" y1="832" x2="1142" y2="832" stroke="#102a56" stroke-width="2"/>
@@ -381,16 +468,18 @@ function buildRoofDesignerOutput(
     sourceSummary: [
       `IGN Géoplateforme — adresse : ${official.normalizedAddress}`,
       `APICARTO Cadastre — parcelle ${official.parcelReference} (${Math.round(official.parcelAreaM2)} m²)`,
+      "BD TOPO — cadrage automatiquement recentré sur le bâtiment cible lorsqu'il est disponible",
       `Roof Designer — pan ${form.array.roofFace} tracé et validé sur orthophoto IGN métrée`,
       `Pente déclarée/validée — ${design.slopeDeg.toFixed(1)}°`,
       `Keepout Designer — ${obstacleCount} zone(s) interdite(s) validée(s)`,
       "PV Layout Engine — placement déterministe hors bords et keepouts",
-      "Projection Engine — projection du même calepinage dans le cadrage DP2 élargi",
+      "Projection Engine — projection du même calepinage dans le cadrage DP2",
     ],
     inspector: {
       passed: true,
       score: 1,
       checks: [
+        "Parcelle cible distinguée visuellement du parcellaire environnant",
         "Pan sélectionné explicitement par l'utilisateur ; aucune détection de pan ambiguë",
         "Échelle planimétrique issue directement du repère métrique IGN",
         `Pente utilisée : ${design.slopeDeg.toFixed(1)}°`,
