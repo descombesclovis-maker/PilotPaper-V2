@@ -3,6 +3,7 @@
 export type RoofFaceChoice = {
   id: string;
   label: string;
+  displayFaceId?: string;
   stableKey?: string;
   originalSegmentIndex?: number;
   buildingId?: string;
@@ -29,6 +30,11 @@ export function RoofFaceSelector({
   disabled = false,
 }: RoofFaceSelectorProps) {
   const selected = new Set(selectedFaceIds);
+  const selectedFace = selectedFaceIds.length ? faces.find((face) => selected.has(face.id)) : undefined;
+
+  function visibleFaceId(face: RoofFaceChoice) {
+    return face.displayFaceId ?? face.label.replace(/^Pan\s+/i, "").trim() || "?";
+  }
 
   function select(faceId: string) {
     if (disabled) return;
@@ -45,7 +51,7 @@ export function RoofFaceSelector({
           </p>
         </div>
         <div className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600">
-          {selectedFaceIds.length ? `Pan ${selectedFaceIds[0]} sélectionné` : `${faces.length} pan${faces.length > 1 ? "s" : ""} compatible${faces.length > 1 ? "s" : ""}`}
+          {selectedFace ? `${selectedFace.label} sélectionné` : `${faces.length} pan${faces.length > 1 ? "s" : ""} compatible${faces.length > 1 ? "s" : ""}`}
         </div>
       </div>
 
@@ -78,7 +84,7 @@ export function RoofFaceSelector({
                 top: `${Math.max(4, Math.min(96, face.centerNormalized.y * 100))}%`,
               }}
             >
-              {face.id}
+              {visibleFaceId(face)}
             </button>
           );
         })}
