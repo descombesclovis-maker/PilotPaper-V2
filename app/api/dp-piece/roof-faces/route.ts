@@ -1,9 +1,11 @@
 import { fetchIgnRaster, orthophotoCandidates } from "@/lib/dp-ai-engine/context/ignRaster";
 import { fromWebMercator, toWebMercator, type MetricFrame } from "@/lib/dp-ai-engine/context/officialParcel";
-import { buildArchitecturalSectionGeometry } from "@/lib/dp-ai-engine/geometry/architecturalSection";
 import { googleSolarConfigured } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
-import { listGoogleSolarFaces, selectGoogleSolarFace } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
+import {
+  listGoogleSolarFaces,
+  selectGoogleSolarFaceBySegmentIndex,
+} from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
 import {
   buildingForGoogleSolarFace,
   resolveTargetRoofContext,
@@ -55,7 +57,7 @@ function frameAroundTarget(target: Pick<TargetRoofContext, "building" | "buildin
   const maxBuildingY = Math.max(...points.map((point) => point.y));
   const buildingWidth = Math.max(4, maxBuildingX - minBuildingX);
   const buildingHeight = Math.max(4, maxBuildingY - minBuildingY);
-  const widthMeters = Math.min(80, Math.max(30, buildingWidth * 2.2, (buildingHeight * 2.2) / IMAGE_ASPECT));
+  const widthMeters = Math.min(72, Math.max(28, buildingWidth * 1.8, (buildingHeight * 1.8) / IMAGE_ASPECT));
   const heightMeters = widthMeters * IMAGE_ASPECT;
   const centerX = (minBuildingX + maxBuildingX) / 2;
   const centerY = (minBuildingY + maxBuildingY) / 2;
@@ -72,11 +74,14 @@ function frameAroundTarget(target: Pick<TargetRoofContext, "building" | "buildin
   };
 }
 
-function averageNormalized(points: Array<{ x: number; y: number }>) {
-  const count = Math.max(1, points.length);
+function normalizedGeoPoint(
+  point: { latitude: number; longitude: number },
+  frame: MetricFrame,
+) {
+  const projected = toWebMercator(point.longitude, point.latitude);
   return {
-    x: points.reduce((sum, point) => sum + point.x, 0) / count,
-    y: points.reduce((sum, point) => sum + point.y, 0) / count,
+    x: Math.max(0, Math.min(1, (projected.x - frame.minX) / (frame.maxX - frame.minX))),
+    y: Math.max(0, Math.min(1, (frame.maxY - projected.y) / (frame.maxY - frame.minY))),
   };
 }
 
@@ -108,13 +113,11 @@ export async function POST(request: Request) {
     const frame = frameAroundTarget(target);
     const raster = await fetchIgnRaster(
       orthophotoCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "Sélecteur des pans compatibles du bâtiment cible", minBytes: 2_000, required: true },
+      { purpose: "Sélecteur des pans compatibles du bâtiment adressé", minBytes: 2_000, required: true },
     );
     if (!raster) throw new Error("La vue aérienne IGN rapprochée n'a pas pu être chargée.");
 
-    const faces = [] as Array<{
-      id: string;
-      label: string;
+    const compatible = [] as Array<{
       originalSegmentIndex: number;
       buildingId: string;
       centerNormalized: { x: number; y: number };
@@ -128,8 +131,8 @@ export async function POST(request: Request) {
       const faceBuilding = buildingForGoogleSolarFace(target.solar, face.originalSegmentIndex, target);
       if (!faceBuilding) continue;
       try {
-        const selected = selectGoogleSolarFace(target.solar, face.faceId);
-        const automatic = automaticRoofDesignFromGoogleSolar({
+        const selected = selectGoogleSolarFaceBySegmentIndex(target.solar, face.originalSegmentIndex);
+        automaticRoofDesignFromGoogleSolar({
           insights: selected.insights,
           frame,
           requestedRows: rows,
@@ -141,31 +144,36 @@ export async function POST(request: Request) {
           placement,
         });
 
-        buildArchitecturalSectionGeometry({
-          building: faceBuilding,
-          insights: target.solar,
-          selectedSegmentIndex: face.originalSegmentIndex,
-        });
-
-        faces.push({
-          id: face.faceId,
-          label: `Pan ${face.faceId}`,
+        compatible.push({
           originalSegmentIndex: face.originalSegmentIndex,
           buildingId: faceBuilding.id,
-          centerNormalized: averageNormalized(automatic.design.quadNormalized),
+          centerNormalized: normalizedGeoPoint(face.segment.center, frame),
           areaMeters2: face.areaMeters2,
           panelCellCount: face.panelCount,
           pitchDegrees: Number(face.segment.pitchDegrees),
           azimuthDegrees: Number(face.segment.azimuthDegrees),
         });
       } catch {
-        // Not selectable for this exact PV configuration and V1 document set.
+        // This physical pan exists on the addressed house but cannot host this
+        // exact module/configuration. DP3 is deliberately NOT a selector gate.
       }
     }
 
+    const faces = compatible
+      .sort((a, b) => b.areaMeters2 - a.areaMeters2 || a.originalSegmentIndex - b.originalSegmentIndex)
+      .map((face, index) => {
+        const id = String.fromCharCode(65 + index);
+        return {
+          ...face,
+          id,
+          label: `Pan ${id}`,
+          stableKey: `${face.buildingId}:${face.originalSegmentIndex}`,
+        };
+      });
+
     if (!faces.length) {
       return Response.json({
-        error: `Aucun pan du bâtiment cadastral cible ne peut accueillir automatiquement la configuration ${rows} × ${columns} avec le module ${moduleSpec.canonicalReference}.`,
+        error: `Aucun pan de la maison correspondant à l'adresse ne peut accueillir automatiquement la configuration ${rows} × ${columns} avec le module ${moduleSpec.canonicalReference}.`,
       }, { status: 409 });
     }
 
