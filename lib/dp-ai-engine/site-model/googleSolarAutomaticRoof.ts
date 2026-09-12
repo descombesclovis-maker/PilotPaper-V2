@@ -12,6 +12,7 @@ const EARTH_RADIUS_M = 6_378_137;
 
 type LocalPoint = { east: number; north: number };
 type AxisPoint = { u: number; v: number; panel: GoogleSolarPanel };
+type GooglePanelOrientation = "PORTRAIT" | "LANDSCAPE";
 
 type GridCell = {
   row: number;
@@ -23,6 +24,7 @@ export type GoogleSolarAutomaticRoofResult = {
   design: ManualRoofDesign & { obstaclesConfirmed: true };
   segmentIndex: number;
   segment: GoogleSolarRoofSegment;
+  googleCandidateOrientation: GooglePanelOrientation;
   googlePanelCountUsedAsSafeArea: number;
   googlePanelWidthMeters: number;
   googlePanelHeightMeters: number;
@@ -138,6 +140,7 @@ function rectangleCells(args: {
 function automaticCandidateForSegment(args: {
   insights: GoogleSolarBuildingInsights;
   segmentIndex: number;
+  candidateOrientation: GooglePanelOrientation;
   requestedRows: number;
   requestedColumns: number;
   requestedOrientation: "portrait" | "landscape";
@@ -148,18 +151,19 @@ function automaticCandidateForSegment(args: {
 }) {
   const segment = args.insights.solarPotential.roofSegmentStats[args.segmentIndex];
   if (!segment) return undefined;
-  const googleOrientation = args.requestedOrientation === "portrait" ? "PORTRAIT" : "LANDSCAPE";
   const panels = args.insights.solarPotential.solarPanels
-    .filter((panel) => panel.segmentIndex === args.segmentIndex && panel.orientation === googleOrientation);
-  if (panels.length < args.requestedRows * args.requestedColumns) return undefined;
+    .filter((panel) => panel.segmentIndex === args.segmentIndex && panel.orientation === args.candidateOrientation);
+  if (!panels.length) return undefined;
 
   const googlePanelWidth = args.insights.solarPotential.panelWidthMeters;
   const googlePanelHeight = args.insights.solarPotential.panelHeightMeters;
-  const googleAlong = args.requestedOrientation === "portrait" ? googlePanelWidth : googlePanelHeight;
-  const googleSlope = args.requestedOrientation === "portrait" ? googlePanelHeight : googlePanelWidth;
+  const googleAlong = args.candidateOrientation === "PORTRAIT" ? googlePanelWidth : googlePanelHeight;
+  const googleSlope = args.candidateOrientation === "PORTRAIT" ? googlePanelHeight : googlePanelWidth;
   const pitchCos = Math.max(0.2, Math.cos(radians(segment.pitchDegrees)));
   const googleSlopeGround = googleSlope * pitchCos;
 
+  // The requested array is independent from Google's reference-panel orientation.
+  // Google cells are only a proof that the underlying roof patch is admissible.
   const actualAlong = args.requestedOrientation === "portrait" ? args.moduleWidthMeters : args.moduleHeightMeters;
   const actualSlope = args.requestedOrientation === "portrait" ? args.moduleHeightMeters : args.moduleWidthMeters;
   const requestedWidth = args.requestedColumns * actualAlong + (args.requestedColumns - 1) * args.interPanelGapMeters;
@@ -183,10 +187,12 @@ function automaticCandidateForSegment(args: {
     }
   }
 
-  const minSupportColumns = Math.max(args.requestedColumns, Math.ceil(requestedWidth / Math.max(0.1, googleAlong * 0.98)));
-  const minSupportRows = Math.max(args.requestedRows, Math.ceil(requestedSlope / Math.max(0.1, googleSlope * 0.98)));
-  const maxSupportColumns = Math.min(uClusters.length, minSupportColumns + 4);
-  const maxSupportRows = Math.min(vClusters.length, minSupportRows + 4);
+  // The number of Google cells is not the requested module count. Only the
+  // physical union of a contiguous, fully occupied block matters.
+  const minSupportColumns = Math.max(1, Math.ceil(requestedWidth / Math.max(0.1, googleAlong * 0.98)));
+  const minSupportRows = Math.max(1, Math.ceil(requestedSlope / Math.max(0.1, googleSlope * 0.98)));
+  const maxSupportColumns = Math.min(uClusters.length, minSupportColumns + 5);
+  const maxSupportRows = Math.min(vClusters.length, minSupportRows + 5);
 
   let best: {
     cells: GridCell[];
@@ -203,8 +209,13 @@ function automaticCandidateForSegment(args: {
         for (let startColumn = 0; startColumn <= uClusters.length - columns; startColumn += 1) {
           const block = rectangleCells({ cells, startRow, startColumn, rows, columns });
           if (!block) continue;
-          const safeWidth = columns * googleAlong * 0.98;
-          const safeSlope = rows * googleSlope * 0.98;
+          const firstU = uClusters[startColumn]!;
+          const lastU = uClusters[startColumn + columns - 1]!;
+          const firstV = vClusters[startRow]!;
+          const lastV = vClusters[startRow + rows - 1]!;
+          const safeWidth = Math.abs(lastU - firstU) + googleAlong * 0.98;
+          const safeSlopeGround = Math.abs(lastV - firstV) + googleSlopeGround * 0.98;
+          const safeSlope = safeSlopeGround / pitchCos;
           if (requestedWidth > safeWidth + 0.02 || requestedSlope > safeSlope + 0.02) continue;
           const energy = block.reduce((sum, cell) => sum + (cell.point.panel.yearlyEnergyDcKwh ?? 0), 0);
           const centerColumn = startColumn + (columns - 1) / 2;
@@ -213,7 +224,8 @@ function automaticCandidateForSegment(args: {
             blockCenterColumn: centerColumn,
             totalColumns: uClusters.length,
           });
-          const score = energy - penalty * 100_000 - (rows * columns - args.requestedRows * args.requestedColumns) * 10;
+          const excessArea = safeWidth * safeSlope - requestedWidth * requestedSlope;
+          const score = energy - penalty * 100_000 - Math.max(0, excessArea) * 2;
           if (!best || score > best.score) {
             best = { cells: block, startRow, startColumn, rows, columns, score };
           }
@@ -256,6 +268,7 @@ function automaticCandidateForSegment(args: {
 
   return {
     segment,
+    candidateOrientation: args.candidateOrientation,
     localCorners,
     googlePanelCountUsedAsSafeArea: best.cells.length,
     yearlyEnergyDcKwh: best.cells.reduce((sum, cell) => sum + (cell.point.panel.yearlyEnergyDcKwh ?? 0), 0),
@@ -269,7 +282,7 @@ function automaticCandidateForSegment(args: {
 /**
  * Converts Google's already-vetted contiguous panel cells into a deterministic
  * metric support for PilotPaper. Google decides where panels can safely exist;
- * PilotPaper still lays out the exact manufacturer dimensions from the form.
+ * PilotPaper still lays out the exact manufacturer dimensions/orientation from the form.
  */
 export function automaticRoofDesignFromGoogleSolar(args: {
   insights: GoogleSolarBuildingInsights;
@@ -282,11 +295,12 @@ export function automaticRoofDesignFromGoogleSolar(args: {
   interPanelGapMeters: number;
   placement: "centered" | "left" | "right" | "custom";
 }): GoogleSolarAutomaticRoofResult {
+  const orientations: GooglePanelOrientation[] = ["PORTRAIT", "LANDSCAPE"];
   const candidates = args.insights.solarPotential.roofSegmentStats
-    .map((_, segmentIndex) => ({
+    .flatMap((_, segmentIndex) => orientations.map((candidateOrientation) => ({
       segmentIndex,
-      candidate: automaticCandidateForSegment({ ...args, segmentIndex }),
-    }))
+      candidate: automaticCandidateForSegment({ ...args, segmentIndex, candidateOrientation }),
+    })))
     .filter((entry): entry is { segmentIndex: number; candidate: NonNullable<ReturnType<typeof automaticCandidateForSegment>> } => Boolean(entry.candidate));
 
   const best = candidates.sort((a, b) => b.candidate.yearlyEnergyDcKwh - a.candidate.yearlyEnergyDcKwh)[0];
@@ -314,6 +328,7 @@ export function automaticRoofDesignFromGoogleSolar(args: {
     },
     segmentIndex: best.segmentIndex,
     segment: best.candidate.segment,
+    googleCandidateOrientation: best.candidate.candidateOrientation,
     googlePanelCountUsedAsSafeArea: best.candidate.googlePanelCountUsedAsSafeArea,
     googlePanelWidthMeters: args.insights.solarPotential.panelWidthMeters,
     googlePanelHeightMeters: args.insights.solarPotential.panelHeightMeters,
