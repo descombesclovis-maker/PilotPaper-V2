@@ -1,8 +1,11 @@
 "use client";
 
-type RoofFaceChoice = {
+export type RoofFaceChoice = {
   id: string;
   label: string;
+  stableKey?: string;
+  originalSegmentIndex?: number;
+  buildingId?: string;
   centerNormalized: { x: number; y: number };
   areaMeters2?: number;
   panelCellCount?: number;
@@ -38,7 +41,7 @@ export function RoofFaceSelector({
         <div>
           <p className="text-sm font-semibold text-zinc-900">Choisissez le pan à équiper</p>
           <p className="mt-1 text-xs leading-5 text-zinc-500">
-            Seuls les pans du bâtiment cible capables d'accueillir exactement la configuration demandée sont proposés.
+            Seuls les pans de la maison cible capables d'accueillir exactement la configuration demandée sont proposés.
           </p>
         </div>
         <div className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600">
@@ -50,7 +53,7 @@ export function RoofFaceSelector({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imageUrl}
-          alt="Vue aérienne IGN du bâtiment cible avec pans compatibles"
+          alt="Vue aérienne IGN de la maison cible avec pans compatibles"
           className="block h-auto w-full select-none"
           draggable={false}
         />
@@ -58,7 +61,7 @@ export function RoofFaceSelector({
           const isSelected = selected.has(face.id);
           return (
             <button
-              key={face.id}
+              key={face.stableKey ?? face.id}
               type="button"
               disabled={disabled}
               aria-pressed={isSelected}
@@ -86,7 +89,7 @@ export function RoofFaceSelector({
           const isSelected = selected.has(face.id);
           return (
             <button
-              key={face.id}
+              key={face.stableKey ?? face.id}
               type="button"
               disabled={disabled}
               onClick={() => select(face.id)}
@@ -106,5 +109,3 @@ export function RoofFaceSelector({
     </div>
   );
 }
-
-export type { RoofFaceChoice };
