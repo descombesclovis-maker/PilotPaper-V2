@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 360" role="img" aria-label="Carte de France">
+  <rect width="420" height="360" rx="32" fill="#f4f7fa"/>
+  <path d="M128 52 205 27 279 55 333 116 319 187 351 235 304 307 224 330 159 302 102 318 67 263 79 205 50 153 82 94Z" fill="#fff" stroke="#173b67" stroke-width="7" stroke-linejoin="round"/>
+  <circle cx="211" cy="181" r="10" fill="#00a9c7"/>
+  <circle cx="211" cy="181" r="22" fill="none" stroke="#00a9c7" stroke-width="4" opacity=".35"/>
+  <text x="210" y="349" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" font-weight="700" fill="#173b67">Localisation du projet</text>
+</svg>
