@@ -12,24 +12,75 @@ Cette branche est un **banc de validation local**. Elle sécurise les briques qu
 
 ## Architecture V1 de référence
 
-`Official Parcel Context → Roof Designer revu → SurfaceSupport → Keepouts → PV Layout Engine → Projection Engine → Photorealistic Render Engine → PilotPaper Inspector → Régression`
+`Adresse → Google Solar Building Insights → Target Property Resolver → parcelle APICARTO → zone sûre toiture → SurfaceSupport → PV Layout Engine → Projection Engine → DP → PilotPaper Inspector → Régression`
 
-Le principe central est désormais celui des logiciels solaires matures : **le modèle du site est validé avant de générer les plans**.
+Le principe central est celui des logiciels solaires matures : **un fournisseur spécialisé propose la géométrie physique et PilotPaper reste responsable des dimensions fabricant, du calepinage exact, de la projection, de la cohérence documentaire et du contrôle qualité**.
 
-### Ce qui est déterministe
+Le **Roof Designer** reste disponible comme récupération humaine fiable lorsque le fournisseur automatique n'a pas de donnée exploitable. Il n'est plus le chemin normal de DP2.
 
-- parcelle et contexte IGN/APICARTO ;
-- échelle de l'orthophoto ;
-- géométrie métrique issue du Roof Designer ;
+### Ce qui est déterministe dans PilotPaper
+
+- géocodage et contexte IGN/APICARTO ;
+- recalage de la parcelle officielle au centre physique du bâtiment ;
 - dimensions fabricant des modules ;
-- keepouts ;
-- calepinage ;
+- choix d'un bloc contigu de cellules Google Solar déjà admissibles ;
+- vérification que le champ photovoltaïque réel tient intégralement dans cette zone sûre ;
+- calepinage exact rangées × colonnes ;
+- jeux entre modules et recul bas ;
 - projection ;
 - contrôles de cohérence.
 
-### Ce qui peut demander une validation humaine
+### Ce qui vient du fournisseur automatique
 
-Pour la V1, l'utilisateur peut valider le pan dans le **Roof Designer** :
+Google Solar Building Insights fournit notamment :
+
+- le centre physique du bâtiment ;
+- les segments de toiture ;
+- pente et azimut ;
+- dimensions du panneau de référence Google ;
+- les centres des panneaux candidats déjà positionnés sur les segments ;
+- leur orientation et leur segment d'appartenance ;
+- un indicateur de qualité d'imagerie.
+
+PilotPaper n'utilise pas les panneaux Google comme dimensions finales. Ils forment une **carte de cellules sûres**. Le moteur recherche un rectangle contigu entièrement couvert par ces cellules, assez grand pour contenir les dimensions réelles du module choisi dans le formulaire, puis le `PV Layout Engine` repose les modules fabricant exacts.
+
+## Target Property Resolver
+
+Le point postal peut être placé sur la rue ou près d'une limite cadastrale. Il ne doit donc jamais être la seule preuve de parcelle.
+
+Flux V1 automatique :
+
+1. l'adresse fournit une première coordonnée ;
+2. Google Solar localise le bâtiment physique ;
+3. PilotPaper utilise le **centre physique du bâtiment** pour refaire un reverse cadastral IGN ;
+4. APICARTO retourne la géométrie vectorielle officielle de cette parcelle ;
+5. cette parcelle devient la vérité cadastrale du dossier.
+
+Cette étape doit empêcher les erreurs de type parcelle voisine lorsque le point adresse tombe sur une limite.
+
+## Google Solar API — fournisseur AUTO primaire
+
+Google Solar est le fournisseur automatique principal de DP2 V1 lorsqu'une clé est configurée et qu'un Building Insights exploitable est disponible.
+
+Le chemin normal est :
+
+`formulaire → adresse → Google Solar → bâtiment physique → parcelle officielle recalée → segment/zone sûre → dimensions fabricant → Layout Engine → DP2`
+
+Règles :
+
+- l'utilisateur ne doit pas cliquer sur le toit lorsque le chemin AUTO réussit ;
+- la quantité, les rangées, colonnes, orientation, module, jeu et placement viennent du formulaire ;
+- un bloc Google incomplet ou discontinu est rejeté ;
+- les dimensions fabricant doivent tenir intégralement dans la zone sûre ;
+- si aucune zone sûre n'est démontrée, PilotPaper bascule vers le Roof Designer au lieu d'inventer une géométrie ;
+- les données `BASE` sont autorisées uniquement en V1 `test_unverified` et doivent rester signalées à l'Inspector ;
+- aucune erreur fournisseur ne peut transformer une sortie incertaine en document validé.
+
+## Roof Designer — fallback de sécurité
+
+Le Roof Designer reste disponible si Google Solar est absent, indisponible ou incapable d'accueillir le calepinage exact demandé.
+
+Dans ce mode seulement, l'utilisateur peut valider :
 
 1. coin gauche de la gouttière ;
 2. coin droit de la gouttière ;
@@ -38,23 +89,28 @@ Pour la V1, l'utilisateur peut valider le pan dans le **Roof Designer** :
 5. pente du pan ;
 6. obstacles/keepouts éventuels.
 
-L'orthophoto IGN fournit déjà l'échelle planimétrique. Aucune largeur de toiture n'est demandée à l'utilisateur pour la DP2.
+Il ne doit jamais être déclenché tant que le chemin automatique Google Solar a démontré un support sûr compatible avec le formulaire.
 
-Cette intervention courte est volontaire : elle remplace une chaîne automatique fragile par une géométrie explicitement revue, comme dans les outils professionnels de conception solaire.
+## LiDAR HD IGN / BD TOPO
 
-## Fournisseurs automatiques : optionnels, jamais bloquants
+Les briques LiDAR HD IGN, BD TOPO, segmentation de pans et détection géométrique d'obstacles restent disponibles comme fournisseurs expérimentaux et futurs contrôles croisés. Le LiDAR est **optionnel** dans la V1 et ne doit jamais bloquer DP2.
 
-### Google Solar API
+## OpenAI
 
-Google Solar API est la première piste d'automatisation premium à brancher autour du Roof Designer. Elle peut fournir notamment segments de toiture, pente, azimut, hauteur de plan et informations de panneaux. Elle pourra préremplir ou suggérer des valeurs, mais **ne doit jamais bloquer** la génération si elle est indisponible.
+OpenAI n'est pas une source métrique pour DP2.
 
-### LiDAR HD IGN / BD TOPO
+Son rôle cible est :
 
-Les briques LiDAR HD IGN, BD TOPO, segmentation de pans et détection géométrique d'obstacles restent dans le dépôt comme moteur expérimental et futur fournisseur automatique. Le LiDAR est **optionnel** dans la V1 fiable et ne doit jamais bloquer DP2.
+- contrôle visuel indépendant du résultat automatique ;
+- détection d'incohérences évidentes entre orthophoto, bâtiment, champ photovoltaïque et document produit ;
+- rendu photoréaliste pour les pièces où l'insertion paysagère est nécessaire, notamment DP6 ;
+- classification ou commentaire d'obstacles lorsqu'une information sémantique est utile.
 
-### Vision / IA générative
+Une réponse OpenAI ne peut jamais déplacer ou redimensionner silencieusement un champ photovoltaïque déjà déterminé par la géométrie.
 
-La vision peut servir de contrôle ou de classification. Elle n'est pas une source métrique officielle pour DP2. L'IA générative reste réservée aux pièces où un rendu visuel est réellement utile, notamment l'insertion paysagère.
+## Fournisseurs premium de secours futurs
+
+Aurora AI Roof + AutoDesigner, Scanifly SolarAI ou une autre API spécialisée pourront être ajoutés derrière la même abstraction fournisseur. Ils devront produire un résultat compatible avec le `SiteModel` et ne jamais introduire de règle documentaire privée.
 
 ## Règle de promotion obligatoire
 
@@ -67,13 +123,16 @@ Une pièce ne peut pas être déclarée validée si elle contient encore une cop
 
 ## Briques communes actuelles
 
-- `context/officialParcel.ts` : adresse → parcelle IGN → géométrie vectorielle APICARTO ;
+- `context/officialParcel.ts` : adresse → premier contexte cadastral IGN/APICARTO ;
 - `context/ignRaster.ts` : accès WMS IGN et fallbacks ;
-- `site-model/manualRoofDesigner.ts` : pan revu → géométrie métrique + keepouts ;
+- `providers/googleSolar.ts` : Building Insights Google Solar ;
+- `site-model/targetPropertyResolver.ts` : centre physique bâtiment → parcelle officielle recalée ;
+- `site-model/googleSolarAutomaticRoof.ts` : cellules Google contiguës → zone sûre compatible avec le formulaire ;
+- `site-model/manualRoofDesigner.ts` : fallback revu → géométrie métrique, avec correction de l'échelle Web Mercator ;
 - `geometry/projectLayout.ts` : calepinage déterministe ;
 - `geometry/panelProjection.ts` : projection homographique ;
-- `site-model/siteModelEngine.ts` : expérimentation automatique, hors chemin critique DP2 ;
-- `site-model/lidarAltimetry.ts` et `site-model/roofGeometryEngine.ts` : fournisseurs automatiques expérimentaux et optionnels.
+- `site-model/siteModelEngine.ts` : expérimentation automatique secondaire ;
+- `site-model/lidarAltimetry.ts` et `site-model/roofGeometryEngine.ts` : fournisseurs LiDAR expérimentaux et optionnels.
 
 ## DP1 — Plan de situation
 
@@ -85,34 +144,36 @@ DP1 doit :
 - ne jamais inventer de contour ;
 - être confirmé sur plusieurs parcelles réelles.
 
+Lorsque le Target Property Resolver corrige la parcelle cible à partir du bâtiment physique, cette même vérité cadastrale devra ensuite être partagée avec DP1 et toutes les autres pièces du dossier.
+
 ## DP2 — Plan de masse
 
-DP2 suit désormais un flux fiable et simple :
+Flux AUTO V1 :
 
-`adresse → parcelle officielle → orthophoto IGN métrée → Roof Designer → keepouts → Layout Engine → projection → DP2`
+`formulaire → Google Solar → parcelle cible recalée → zone sûre → Layout Engine → projection → DP2`
 
 Contraintes :
 
 - aucune photo utilisateur obligatoire ;
-- aucun OpenAI requis ;
-- aucun LiDAR requis ;
-- le pan doit être explicitement validé ;
-- la pente doit être connue/validée ;
-- les obstacles doivent être tracés ou l'absence d'obstacle explicitement confirmée ;
-- le Layout Engine ne peut jamais placer un module hors du pan ou dans un keepout ;
-- la DP2 finale utilise un cadrage plus large montrant la maison et les parcelles environnantes ;
-- un simple point repère l'accès/adresse du projet.
+- aucun clic utilisateur obligatoire lorsque le fournisseur AUTO réussit ;
+- le module réel vient du catalogue fabricant vérifié ;
+- le Layout Engine ne peut jamais placer un module hors de la zone sûre démontrée ;
+- le nombre de modules et le calepinage doivent correspondre exactement au formulaire ;
+- la DP2 finale montre la maison et les parcelles environnantes ;
+- la parcelle cible est contourée avec une couleur distincte ;
+- un simple point repère l'adresse/accès ;
+- Roof Designer seulement en récupération.
 
-## Stratégie d'automatisation future
+## Stratégie de fallback
 
-L'automatisation complète reviendra **au-dessus** du Roof Designer, jamais à sa place :
+Ordre de préférence V1 :
 
-1. Google Solar API / LiDAR / autre fournisseur propose une géométrie ;
-2. PilotPaper affiche cette proposition ;
-3. l'utilisateur accepte ou corrige en quelques secondes ;
-4. le modèle validé devient la source unique des DP.
+1. **Google Solar AUTO** ;
+2. fournisseur automatique secondaire lorsqu'il sera intégré ;
+3. **Roof Designer** revu ;
+4. blocage explicite si aucune géométrie sûre ne peut être démontrée.
 
-Ainsi, une panne fournisseur ou une maison difficile n'empêche jamais l'utilisateur de terminer le dossier.
+Il n'existe jamais de fallback « deviné » qui invente un toit ou un obstacle pour éviter un blocage.
 
 ## Gel des sujets périphériques
 
