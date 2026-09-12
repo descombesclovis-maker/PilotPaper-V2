@@ -18,10 +18,14 @@ const MAP_X = 70;
 const MAP_Y = 166;
 const MAP_WIDTH = 1060;
 const MAP_HEIGHT = 590;
-const SITUATION_WIDTH_METERS = 2500;
-const SITUATION_HEIGHT_METERS = SITUATION_WIDTH_METERS * (MAP_HEIGHT / MAP_WIDTH);
+const MAP_ASPECT = MAP_HEIGHT / MAP_WIDTH;
+const MIN_SITUATION_WIDTH_METERS = 420;
+const MAX_SITUATION_WIDTH_METERS = 850;
+const PARCEL_CONTEXT_SCALE = 5.5;
+const TARGET_PARCEL_STROKE = "#00a9bd";
 
 type IgnDp1Context = OfficialParcelContext & {
+  situationFrame: MetricFrame;
   situationBase64: string;
   situationMimeType: "image/jpeg" | "image/png";
   imagerySource: string;
@@ -40,23 +44,59 @@ function escapeXml(value: unknown) {
   })[char] ?? char);
 }
 
-function situationFrame(longitude: number, latitude: number): MetricFrame {
-  const center = toWebMercator(longitude, latitude);
+function frameFromCenter(args: { longitude: number; latitude: number; widthMeters: number }): MetricFrame {
+  const center = toWebMercator(args.longitude, args.latitude);
+  const heightMeters = args.widthMeters * MAP_ASPECT;
   return {
-    longitude,
-    latitude,
-    widthMeters: SITUATION_WIDTH_METERS,
-    heightMeters: SITUATION_HEIGHT_METERS,
-    minX: center.x - SITUATION_WIDTH_METERS / 2,
-    maxX: center.x + SITUATION_WIDTH_METERS / 2,
-    minY: center.y - SITUATION_HEIGHT_METERS / 2,
-    maxY: center.y + SITUATION_HEIGHT_METERS / 2,
+    longitude: args.longitude,
+    latitude: args.latitude,
+    widthMeters: args.widthMeters,
+    heightMeters,
+    minX: center.x - args.widthMeters / 2,
+    maxX: center.x + args.widthMeters / 2,
+    minY: center.y - heightMeters / 2,
+    maxY: center.y + heightMeters / 2,
+  };
+}
+
+function parcelAwareSituationFrame(site: OfficialParcelContext): MetricFrame {
+  const projected = parcelRings(site.parcelGeometry)
+    .flat()
+    .map(([longitude, latitude]) => toWebMercator(longitude, latitude));
+  if (!projected.length) return frameFromCenter({ longitude: site.longitude, latitude: site.latitude, widthMeters: MIN_SITUATION_WIDTH_METERS });
+
+  const minX = Math.min(...projected.map((point) => point.x));
+  const maxX = Math.max(...projected.map((point) => point.x));
+  const minY = Math.min(...projected.map((point) => point.y));
+  const maxY = Math.max(...projected.map((point) => point.y));
+  const parcelWidth = Math.max(8, maxX - minX);
+  const parcelHeight = Math.max(8, maxY - minY);
+  const desiredWidth = Math.max(
+    MIN_SITUATION_WIDTH_METERS,
+    parcelWidth * PARCEL_CONTEXT_SCALE,
+    (parcelHeight * PARCEL_CONTEXT_SCALE) / MAP_ASPECT,
+  );
+  const requiredWidth = Math.max(parcelWidth * 1.45, (parcelHeight * 1.45) / MAP_ASPECT);
+  const widthMeters = Math.max(requiredWidth, Math.min(MAX_SITUATION_WIDTH_METERS, desiredWidth));
+  const heightMeters = widthMeters * MAP_ASPECT;
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  return {
+    longitude: site.longitude,
+    latitude: site.latitude,
+    widthMeters,
+    heightMeters,
+    minX: centerX - widthMeters / 2,
+    maxX: centerX + widthMeters / 2,
+    minY: centerY - heightMeters / 2,
+    maxY: centerY + heightMeters / 2,
   };
 }
 
 export function buildDp1IgnWmsCandidates(longitude: number, latitude: number) {
   return orthophotoCandidates({
-    frame: situationFrame(longitude, latitude),
+    frame: frameFromCenter({ longitude, latitude, widthMeters: MIN_SITUATION_WIDTH_METERS }),
     widthPx: IMAGE_WIDTH,
     heightPx: IMAGE_HEIGHT,
     format: "image/jpeg",
@@ -65,7 +105,7 @@ export function buildDp1IgnWmsCandidates(longitude: number, latitude: number) {
 
 function buildCadastralWmsCandidates(longitude: number, latitude: number) {
   return cadastralCandidates({
-    frame: situationFrame(longitude, latitude),
+    frame: frameFromCenter({ longitude, latitude, widthMeters: MIN_SITUATION_WIDTH_METERS }),
     widthPx: IMAGE_WIDTH,
     heightPx: IMAGE_HEIGHT,
   });
@@ -73,13 +113,23 @@ function buildCadastralWmsCandidates(longitude: number, latitude: number) {
 
 async function resolveIgnDp1Context(address: string): Promise<IgnDp1Context> {
   const site = await resolveOfficialParcelContext(address);
+  const situationFrame = parcelAwareSituationFrame(site);
   const [situation, cadastralOverlay] = await Promise.all([
-    fetchIgnRaster(buildDp1IgnWmsCandidates(site.longitude, site.latitude), {
-      purpose: "DP1 : vue aérienne IGN",
+    fetchIgnRaster(orthophotoCandidates({
+      frame: situationFrame,
+      widthPx: IMAGE_WIDTH,
+      heightPx: IMAGE_HEIGHT,
+      format: "image/jpeg",
+    }), {
+      purpose: "DP1 : vue aérienne IGN rapprochée sur la parcelle",
       minBytes: 10_000,
       required: true,
     }),
-    fetchIgnRaster(buildCadastralWmsCandidates(site.longitude, site.latitude), {
+    fetchIgnRaster(cadastralCandidates({
+      frame: situationFrame,
+      widthPx: IMAGE_WIDTH,
+      heightPx: IMAGE_HEIGHT,
+    }), {
       purpose: "DP1 : limites cadastrales voisines",
       minBytes: 1_000,
       required: false,
@@ -88,6 +138,7 @@ async function resolveIgnDp1Context(address: string): Promise<IgnDp1Context> {
   if (!situation) throw new Error("DP1 bloquée : orthophoto IGN indisponible.");
   return {
     ...site,
+    situationFrame,
     situationBase64: situation.base64,
     situationMimeType: situation.mimeType,
     imagerySource: situation.source,
@@ -97,7 +148,7 @@ async function resolveIgnDp1Context(address: string): Promise<IgnDp1Context> {
 }
 
 function projectParcelRings(context: IgnDp1Context): ProjectedRing[] {
-  const bounds = situationFrame(context.longitude, context.latitude);
+  const bounds = context.situationFrame;
   const rings = parcelRings(context.parcelGeometry).map((ring) => ring.map(([longitude, latitude]) => {
     const point = toWebMercator(longitude, latitude);
     const nx = (point.x - bounds.minX) / (bounds.maxX - bounds.minX);
@@ -123,14 +174,6 @@ function parcelPath(context: IgnDp1Context) {
   return projectParcelRings(context).map(ringPath).join(" ");
 }
 
-function parcelLabelAnchor(context: IgnDp1Context) {
-  const ring = projectParcelRings(context)[0]!;
-  const points = ring.slice(0, Math.max(1, ring.length - 1));
-  const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
-  const y = points.reduce((sum, point) => sum + point.y, 0) / points.length;
-  return { x, y };
-}
-
 function documentFrame(args: { code: string; title: string; address: string; body: string; footer?: string }) {
   const width = 1200;
   const height = 900;
@@ -151,24 +194,20 @@ function documentFrame(args: { code: string; title: string; address: string; bod
 function buildDp1Svg(context: IgnDp1Context) {
   const image = `data:${context.situationMimeType};base64,${context.situationBase64}`;
   const cadastralOverlay = context.cadastralOverlayBase64
-    ? `<image href="data:image/png;base64,${context.cadastralOverlayBase64}" x="${MAP_X}" y="${MAP_Y}" width="${MAP_WIDTH}" height="${MAP_HEIGHT}" preserveAspectRatio="none" opacity=".62"/>`
+    ? `<image href="data:image/png;base64,${context.cadastralOverlayBase64}" x="${MAP_X}" y="${MAP_Y}" width="${MAP_WIDTH}" height="${MAP_HEIGHT}" preserveAspectRatio="none" opacity=".34"/>`
     : "";
   const path = parcelPath(context);
-  const anchor = parcelLabelAnchor(context);
-  const labelY = Math.max(MAP_Y + 22, Math.min(MAP_Y + MAP_HEIGHT - 16, anchor.y - 16));
   const body = `<rect x="58" y="154" width="1084" height="620" rx="12" fill="#edf0f2"/>
     <clipPath id="dp1-map-clip"><rect x="${MAP_X}" y="${MAP_Y}" width="${MAP_WIDTH}" height="${MAP_HEIGHT}" rx="8"/></clipPath>
     <g clip-path="url(#dp1-map-clip)">
       <image href="${image}" x="${MAP_X}" y="${MAP_Y}" width="${MAP_WIDTH}" height="${MAP_HEIGHT}" preserveAspectRatio="none"/>
       ${cadastralOverlay}
-      <path d="${path}" fill="#ff7a32" fill-opacity=".22" fill-rule="evenodd" stroke="#f15a24" stroke-width="7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      <path d="${path}" fill="${TARGET_PARCEL_STROKE}" fill-opacity=".035" fill-rule="evenodd" stroke="#ffffff" stroke-width="5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      <path d="${path}" fill="none" fill-rule="evenodd" stroke="${TARGET_PARCEL_STROKE}" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
     </g>
-    <circle cx="${anchor.x.toFixed(1)}" cy="${anchor.y.toFixed(1)}" r="8" fill="#f15a24" stroke="#fff" stroke-width="3"/>
-    <rect x="${Math.max(MAP_X + 8, Math.min(MAP_X + MAP_WIDTH - 220, anchor.x - 105)).toFixed(1)}" y="${labelY.toFixed(1)}" width="210" height="34" rx="8" fill="#fff" fill-opacity=".94" stroke="#f15a24" stroke-width="2"/>
-    <text x="${anchor.x.toFixed(1)}" y="${(labelY + 22).toFixed(1)}" text-anchor="middle" font-family="Arial,sans-serif" font-size="13" font-weight="700" fill="#a43f1b">PARCELLE ${escapeXml(context.parcelReference)}</text>
-    <rect x="78" y="666" width="500" height="70" rx="10" fill="#fff" fill-opacity=".92"/>
-    <text x="98" y="694" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">PARCELLE ${escapeXml(context.parcelReference)} · ${Math.round(context.parcelAreaM2)} m²</text>
-    <text x="98" y="719" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Contour vectoriel officiel APICARTO Cadastre${context.cadastralOverlaySource ? " · limites cadastrales IGN" : ""}</text>
+    <rect x="78" y="680" width="570" height="56" rx="10" fill="#fff" fill-opacity=".90"/>
+    <text x="98" y="704" font-family="Arial,sans-serif" font-size="14" font-weight="700" fill="#102a56">Parcelle cible ${escapeXml(context.parcelReference)} · ${Math.round(context.parcelAreaM2)} m²</text>
+    <text x="98" y="725" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Contour officiel APICARTO · limites voisines IGN en surimpression légère</text>
     <text x="1080" y="205" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1080 218 L1068 252 L1080 243 L1092 252 Z" fill="#102a56"/>`;
   return documentFrame({
@@ -210,7 +249,8 @@ export async function generateDp1Piece(input: DpPieceInput): Promise<DpPieceOutp
         "Contour cadastral projeté mathématiquement dans la même emprise EPSG:3857 que l'orthophoto",
         `Superficie cadastrale officielle : ${Math.round(context.parcelAreaM2)} m²`,
         "Orthophoto officielle récupérée indépendamment de la couche cadastrale",
-        "Nord et parcelle du projet représentés",
+        "Cadrage de situation recentré automatiquement sur la parcelle avec contexte voisin conservé",
+        "Nord et parcelle du projet représentés sans étiquette opaque sur la toiture",
       ],
       issues: context.cadastralOverlaySource ? [] : ["La couche contextuelle des limites cadastrales voisines est indisponible ; le contour vectoriel officiel de la parcelle du projet reste présent."],
     },
