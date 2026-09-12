@@ -1,10 +1,14 @@
 import { fetchIgnRaster, orthophotoCandidates } from "@/lib/dp-ai-engine/context/ignRaster";
-import { toWebMercator, type MetricFrame } from "@/lib/dp-ai-engine/context/officialParcel";
+import { fromWebMercator, toWebMercator, type MetricFrame } from "@/lib/dp-ai-engine/context/officialParcel";
 import { buildArchitecturalSectionGeometry } from "@/lib/dp-ai-engine/geometry/architecturalSection";
-import { googleSolarConfigured, type GoogleSolarBuildingInsights } from "@/lib/dp-ai-engine/providers/googleSolar";
+import { googleSolarConfigured } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
 import { listGoogleSolarFaces, selectGoogleSolarFace } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
-import { buildingForGoogleSolarFace, resolveTargetRoofContext } from "@/lib/dp-ai-engine/site-model/targetRoofContext";
+import {
+  buildingForGoogleSolarFace,
+  resolveTargetRoofContext,
+  type TargetRoofContext,
+} from "@/lib/dp-ai-engine/site-model/targetRoofContext";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 
 export const dynamic = "force-dynamic";
@@ -24,29 +28,47 @@ function finiteNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function frameAroundBuilding(solar: GoogleSolarBuildingInsights): MetricFrame {
-  const center = toWebMercator(solar.center.longitude, solar.center.latitude);
-  let buildingWidth = 18;
-  let buildingHeight = 12;
-
-  if (solar.boundingBox) {
-    const sw = toWebMercator(solar.boundingBox.sw.longitude, solar.boundingBox.sw.latitude);
-    const ne = toWebMercator(solar.boundingBox.ne.longitude, solar.boundingBox.ne.latitude);
-    buildingWidth = Math.max(4, Math.abs(ne.x - sw.x));
-    buildingHeight = Math.max(4, Math.abs(ne.y - sw.y));
+function frameAroundTarget(target: Pick<TargetRoofContext, "building" | "buildings">): MetricFrame {
+  const points = target.buildings.flatMap((building) => (
+    building.polygon.map(([longitude, latitude]) => toWebMercator(longitude, latitude))
+  ));
+  if (!points.length) {
+    const [longitude, latitude] = target.building.centroid;
+    const center = toWebMercator(longitude, latitude);
+    const widthMeters = 40;
+    const heightMeters = widthMeters * IMAGE_ASPECT;
+    return {
+      longitude,
+      latitude,
+      widthMeters,
+      heightMeters,
+      minX: center.x - widthMeters / 2,
+      maxX: center.x + widthMeters / 2,
+      minY: center.y - heightMeters / 2,
+      maxY: center.y + heightMeters / 2,
+    };
   }
 
-  const widthMeters = Math.min(72, Math.max(30, buildingWidth * 2.35, (buildingHeight * 2.35) / IMAGE_ASPECT));
+  const minBuildingX = Math.min(...points.map((point) => point.x));
+  const maxBuildingX = Math.max(...points.map((point) => point.x));
+  const minBuildingY = Math.min(...points.map((point) => point.y));
+  const maxBuildingY = Math.max(...points.map((point) => point.y));
+  const buildingWidth = Math.max(4, maxBuildingX - minBuildingX);
+  const buildingHeight = Math.max(4, maxBuildingY - minBuildingY);
+  const widthMeters = Math.min(80, Math.max(30, buildingWidth * 2.2, (buildingHeight * 2.2) / IMAGE_ASPECT));
   const heightMeters = widthMeters * IMAGE_ASPECT;
+  const centerX = (minBuildingX + maxBuildingX) / 2;
+  const centerY = (minBuildingY + maxBuildingY) / 2;
+  const center = fromWebMercator(centerX, centerY);
   return {
-    longitude: solar.center.longitude,
-    latitude: solar.center.latitude,
+    longitude: center.longitude,
+    latitude: center.latitude,
     widthMeters,
     heightMeters,
-    minX: center.x - widthMeters / 2,
-    maxX: center.x + widthMeters / 2,
-    minY: center.y - heightMeters / 2,
-    maxY: center.y + heightMeters / 2,
+    minX: centerX - widthMeters / 2,
+    maxX: centerX + widthMeters / 2,
+    minY: centerY - heightMeters / 2,
+    maxY: centerY + heightMeters / 2,
   };
 }
 
@@ -83,7 +105,7 @@ export async function POST(request: Request) {
     const interPanelGapMeters = Math.max(0, finiteNumber(body.interPanelGapMm, 20)) / 1000;
 
     const target = await resolveTargetRoofContext(address);
-    const frame = frameAroundBuilding(target.solar);
+    const frame = frameAroundTarget(target);
     const raster = await fetchIgnRaster(
       orthophotoCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
       { purpose: "Sélecteur des pans compatibles du bâtiment cible", minBytes: 2_000, required: true },
@@ -119,8 +141,6 @@ export async function POST(request: Request) {
           placement,
         });
 
-        // Prevalidation uses the exact BD TOPO sub-volume that carries this
-        // Google Solar face, not one arbitrary polygon for the whole address.
         buildArchitecturalSectionGeometry({
           building: faceBuilding,
           insights: target.solar,
