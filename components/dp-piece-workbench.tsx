@@ -20,7 +20,13 @@ import type { DPNumber } from "@/lib/dp-ai-engine/types";
 import { RoofFaceSelector, type RoofFaceChoice } from "@/components/roof-face-selector";
 import styles from "./dp-piece-workbench.module.css";
 
-type PhotoValue = { role: "near" | "roof" | "far"; mimeType: "image/jpeg" | "image/png" | "image/webp"; base64: string; filename: string };
+type PhotoValue = {
+  role: "near" | "roof" | "far";
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  base64: string;
+  filename: string;
+};
+
 type PieceResult = {
   dp: DPNumber;
   title: string;
@@ -31,6 +37,7 @@ type PieceResult = {
   sourceSummary: string[];
   inspector: { passed: boolean; score: number; checks: string[]; issues: string[] };
 };
+
 type RecoveryPoint = { x: number; y: number };
 type RoofDesignerRecovery = {
   type: "roof_designer";
@@ -47,13 +54,22 @@ type ManualRoofPayload = {
   obstaclesConfirmed: true;
 };
 type ApiFailure = { error?: string; recovery?: RoofDesignerRecovery; validationStatus?: "test_unverified" };
+
 type RoofFaceMap = {
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
   normalizedAddress?: string;
   parcelReference?: string;
+  buildingId?: string;
   imageryQuality?: string;
+  configuration?: {
+    moduleReference: string;
+    panelCount: number;
+    rows: number;
+    columns: number;
+    orientation: "portrait" | "landscape";
+  };
   faces: RoofFaceChoice[];
 };
 
@@ -97,7 +113,7 @@ const modules = [
 ] as const;
 
 const fieldLabels: Record<DpPieceField, { label: string; hint?: string }> = {
-  address: { label: "Adresse exacte du projet", hint: "PilotPaper interroge l'IGN et le cadastre lorsque la pièce l'exige." },
+  address: { label: "Adresse exacte du projet", hint: "L'adresse verrouille la parcelle cadastrale et le bâtiment cible avant toute analyse de toiture." },
   parcelReference: { label: "Référence cadastrale" },
   moduleReference: { label: "Module photovoltaïque", hint: "Dimensions et puissance viennent du catalogue fabricant vérifié." },
   panelCount: { label: "Nombre de modules" },
@@ -116,13 +132,28 @@ const fieldLabels: Record<DpPieceField, { label: string; hint?: string }> = {
   farPhoto: { label: "Vue lointaine", hint: "Maison replacée dans son environnement." },
 };
 
+const ROOF_ANALYSIS_KEYS: Array<keyof Draft> = [
+  "address",
+  "moduleReference",
+  "panelCount",
+  "rows",
+  "columns",
+  "orientation",
+  "placement",
+  "interPanelGapMm",
+];
+
 function numeric(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function positiveInteger(value: string) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function initialDraft(): Draft {
-  if (typeof window === "undefined") return defaultDraft;
   try {
     const saved = localStorage.getItem("pilotpaper-v1-k-par-k-draft");
     if (!saved) return defaultDraft;
@@ -133,7 +164,6 @@ function initialDraft(): Draft {
 }
 
 function initialHistory(): Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>> {
-  if (typeof window === "undefined") return {};
   try {
     const saved = localStorage.getItem("pilotpaper-v1-k-par-k-history");
     return saved ? JSON.parse(saved) as Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>> : {};
@@ -184,13 +214,51 @@ export function DpPieceWorkbench() {
     return "";
   }, [result]);
 
+  const configurationReady = useMemo(() => {
+    const panelCount = positiveInteger(draft.panelCount);
+    const rows = positiveInteger(draft.rows);
+    const columns = positiveInteger(draft.columns);
+    return Boolean(
+      draft.address.trim().length >= 8
+      && draft.moduleReference
+      && panelCount
+      && rows
+      && columns
+      && rows * columns === panelCount,
+    );
+  }, [draft.address, draft.moduleReference, draft.panelCount, draft.rows, draft.columns]);
+
+  const roofAnalysisSignature = useMemo(() => [
+    draft.address.trim(),
+    draft.moduleReference,
+    draft.panelCount,
+    draft.rows,
+    draft.columns,
+    draft.orientation,
+    draft.placement,
+    draft.interPanelGapMm,
+  ].join("|"), [
+    draft.address,
+    draft.moduleReference,
+    draft.panelCount,
+    draft.rows,
+    draft.columns,
+    draft.orientation,
+    draft.placement,
+    draft.interPanelGapMm,
+  ]);
+
   useEffect(() => {
     try { localStorage.setItem("pilotpaper-v1-k-par-k-draft", JSON.stringify(draft)); } catch { /* ignore */ }
   }, [draft]);
 
-  const loadRoofFaces = useCallback(async (address: string) => {
-    const cleanAddress = address.trim();
-    if (cleanAddress.length < 8) return;
+  const loadRoofFaces = useCallback(async (snapshot: Draft) => {
+    const cleanAddress = snapshot.address.trim();
+    const panelCount = positiveInteger(snapshot.panelCount);
+    const rows = positiveInteger(snapshot.rows);
+    const columns = positiveInteger(snapshot.columns);
+    if (cleanAddress.length < 8 || !panelCount || !rows || !columns || rows * columns !== panelCount) return;
+
     setRoofFaceMapState("loading");
     setRoofFaceMapError("");
     setRoofFaceMap(null);
@@ -199,34 +267,51 @@ export function DpPieceWorkbench() {
       const response = await fetch("/api/dp-piece/roof-faces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: cleanAddress }),
+        body: JSON.stringify({
+          address: cleanAddress,
+          moduleReference: snapshot.moduleReference,
+          panelCount,
+          rows,
+          columns,
+          orientation: snapshot.orientation,
+          placement: snapshot.placement,
+          gutterClearanceMm: numeric(snapshot.gutterClearanceMm),
+          interPanelGapMm: numeric(snapshot.interPanelGapMm),
+        }),
       });
       const body = await response.json().catch(() => null) as (RoofFaceMap & { error?: string }) | null;
       if (!response.ok || !body?.faces?.length || !body.imageDataUrl) {
-        throw new Error(body?.error || "Aucun pan de toiture exploitable n'a été détecté à cette adresse.");
+        throw new Error(body?.error || "Aucun pan compatible n'a pu être démontré sur le bâtiment cible.");
       }
       setRoofFaceMap(body);
       setRoofFaceMapState("ready");
     } catch (mapError) {
       setRoofFaceMapState("error");
-      setRoofFaceMapError(mapError instanceof Error ? mapError.message : "La mini-carte de toiture n'a pas pu être chargée.");
+      setRoofFaceMapError(mapError instanceof Error ? mapError.message : "L'analyse automatique de la toiture a échoué.");
     }
   }, []);
 
   useEffect(() => {
-    if (!requiresRoofFace || draft.address.trim().length < 8) return;
-    const address = draft.address;
-    const timer = window.setTimeout(() => { void loadRoofFaces(address); }, 650);
+    if (!requiresRoofFace || !configurationReady) return;
+    const snapshot = { ...draft };
+    const timer = window.setTimeout(() => { void loadRoofFaces(snapshot); }, 700);
     return () => window.clearTimeout(timer);
-  }, [draft.address, loadRoofFaces, requiresRoofFace, selectedDp]);
+    // roofAnalysisSignature intentionally contains every configuration value that changes eligibility.
+  }, [requiresRoofFace, configurationReady, roofAnalysisSignature, loadRoofFaces]);
 
   function update<K extends keyof Draft>(key: K, value: Draft[K]) {
-    setDraft((current) => ({ ...current, [key]: value, ...(key === "address" ? { roofFace: "" } : {}) }));
-    if (key === "address") {
+    const affectsRoofAnalysis = ROOF_ANALYSIS_KEYS.includes(key);
+    setDraft((current) => ({
+      ...current,
+      [key]: value,
+      ...(affectsRoofAnalysis ? { roofFace: "" } : {}),
+    }));
+    if (affectsRoofAnalysis) {
       setResult(null);
       setRoofFaceMap(null);
       setRoofFaceMapState("idle");
       setRoofFaceMapError("");
+      setError("");
     }
   }
 
@@ -256,6 +341,9 @@ export function DpPieceWorkbench() {
     setError("");
     setPhotos({});
     setDraft((current) => ({ ...current, roofFace: "" }));
+    setRoofFaceMap(null);
+    setRoofFaceMapState("idle");
+    setRoofFaceMapError("");
     clearRecovery();
   }
 
@@ -272,8 +360,8 @@ export function DpPieceWorkbench() {
 
   async function generate(manualRoofDesign?: ManualRoofPayload) {
     if (!contract) return;
-    if (requiresRoofFace && !draft.roofFace) {
-      setError("Choisissez d'abord le pan de toiture voulu directement sur la mini-carte dans la zone RÉSULTAT.");
+    if (requiresRoofFace && !draft.roofFace && !manualRoofDesign) {
+      setError("Choisissez d'abord l'un des pans compatibles proposés dans RÉSULTAT.");
       return;
     }
     setBusy(true);
@@ -431,7 +519,7 @@ export function DpPieceWorkbench() {
         </header>
         <section className={styles.hero}>
           <div><span className={styles.eyebrow}>VALIDATION K-PAR-K</span><h1>Une pièce. Un formulaire.<br />Un résultat à contrôler.</h1><p>On fiabilise DP1 à DP8 séparément avant de reconstruire le dossier automatique complet. Chaque défaut observé devient une règle générale et un test de régression.</p></div>
-          <div className={styles.heroStatus}><ShieldCheck size={28} /><strong>Architecture V1 contrôlée</strong><span>Official Context → Roof Designer → Layout → Projection → Inspector</span></div>
+          <div className={styles.heroStatus}><ShieldCheck size={28} /><strong>Architecture V1 contrôlée</strong><span>Parcelle → Bâtiment → Toiture → Layout → Projection → Inspector</span></div>
         </section>
         <section className={styles.grid}>
           {DP_PIECE_CONTRACTS.map((piece) => {
@@ -472,12 +560,15 @@ export function DpPieceWorkbench() {
         <section className={styles.formPanel}>
           <div className={styles.panelHeading}><div><span>FORMULAIRE DP{contract.dp}</span><h2>Uniquement les données nécessaires</h2></div><MapPinned size={24} /></div>
           <div className={styles.formGrid}>{contract.fields.map(inputField)}</div>
+          {requiresRoofFace && draft.address.trim().length >= 8 && !configurationReady ? (
+            <div className={styles.error}><TriangleAlert size={19} /><span>Complétez une configuration cohérente : nombre de panneaux = rangées × colonnes. Les pans seront analysés ensuite.</span></div>
+          ) : null}
           {error ? <div className={styles.error}><TriangleAlert size={19} /><span>{error}</span></div> : null}
 
           {recovery ? (
             <div className={styles.recoveryCard}>
-              <div className={styles.recoveryHeading}><Crosshair size={20} /><div><strong>Roof Designer · validation du pan</strong><span>{recoveryPoints.length}/4 coins du pan · {keepoutPolygons.length} keepout(s)</span></div></div>
-              <p>Cette étape remplace la détection LiDAR incertaine. Tu définis seulement la géométrie visible ; PilotPaper conserve l'échelle réelle de l'orthophoto IGN et calcule ensuite le calepinage.</p>
+              <div className={styles.recoveryHeading}><Crosshair size={20} /><div><strong>Roof Designer · recours manuel</strong><span>{recoveryPoints.length}/4 coins du pan · {keepoutPolygons.length} keepout(s)</span></div></div>
+              <p><strong>Dernier recours uniquement.</strong> Les sources automatiques ont été tentées avant d'ouvrir cet outil. Tu définis la géométrie visible ; PilotPaper conserve l'échelle IGN et relance ensuite le Layout Engine.</p>
               <div className={styles.recoveryReason}>{recovery.reason}</div>
               <div className={styles.designerGuide}><span>1 · Gouttière gauche</span><span>2 · Gouttière droite</span><span>3 · Faîtage droite</span><span>4 · Faîtage gauche</span></div>
               <div className={styles.recoveryImageWrap} onClick={addRecoveryPoint} role="button" tabIndex={0} aria-label="Roof Designer">
@@ -502,12 +593,12 @@ export function DpPieceWorkbench() {
                 {keepoutPolygons.length > 0 ? <div className={styles.keepoutStatus}>✓ {keepoutPolygons.length} obstacle(s) / keepout(s) tracé(s). Ils seront interdits au Layout Engine.</div> : null}
               </div>
               <button type="button" className={styles.recoveryConfirmWide} onClick={submitRoofDesigner} disabled={busy || recoveryPoints.length !== 4 || !slopeReady || !obstacleReviewReady || designerMode === "obstacle"}>
-                {busy ? <><LoaderCircle className={styles.spin} size={17} /> Calcul du calepinage…</> : <>Valider le toit et générer DP2</>}
+                {busy ? <><LoaderCircle className={styles.spin} size={17} /> Calcul du calepinage…</> : <>Valider le toit et relancer DP2</>}
               </button>
             </div>
           ) : (
             <button className={styles.generate} disabled={busy || !faceReady} onClick={() => void generate()}>
-              {busy ? <><LoaderCircle className={styles.spin} size={19} /> Génération DP{contract.dp}…</> : !faceReady ? <>Choisissez un pan dans RÉSULTAT</> : <>Générer DP{contract.dp} <span>TEST</span></>}
+              {busy ? <><LoaderCircle className={styles.spin} size={19} /> Génération DP{contract.dp}…</> : !faceReady ? <>Sélectionnez un pan compatible dans RÉSULTAT</> : <>Générer DP{contract.dp} <span>TEST</span></>}
             </button>
           )}
           <p className={styles.modeNote}>Cette V1 ne peut produire qu'un résultat <strong>test_unverified</strong>. Aucun clic ne peut le transformer en document de production.</p>
@@ -515,7 +606,7 @@ export function DpPieceWorkbench() {
 
         <section className={styles.previewPanel}>
           <div className={styles.panelHeading}>
-            <div><span>RÉSULTAT</span><h2>{requiresRoofFace && !result ? "Choix du pan de toiture" : "Contrôle visuel"}</h2></div>
+            <div><span>RÉSULTAT</span><h2>{requiresRoofFace && !result ? "Analyse du bâtiment et des pans compatibles" : "Contrôle visuel"}</h2></div>
             {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
 
@@ -532,11 +623,13 @@ export function DpPieceWorkbench() {
           ) : requiresRoofFace ? (
             <div className="space-y-4 p-5">
               {draft.address.trim().length < 8 ? (
-                <div className={styles.emptyPreview}><MapPinned size={34} /><strong>Renseignez l'adresse du projet</strong><span>La mini-carte apparaîtra ici automatiquement avec tous les pans détectés.</span></div>
+                <div className={styles.emptyPreview}><img src="/pilotpaper-france-map.svg" alt="Carte de France" /><strong>Localisez d'abord le projet</strong><span>Entrez l'adresse exacte. PilotPaper identifiera ensuite la parcelle et uniquement le bâtiment concerné.</span></div>
+              ) : !configurationReady ? (
+                <div className={styles.emptyPreview}><MapPinned size={34} /><strong>Adresse reçue · configuration à compléter</strong><span>Choisissez le module, le nombre de panneaux, les rangées, colonnes et l'orientation. L'analyse des pans se fera uniquement pour cette configuration.</span></div>
               ) : roofFaceMapState === "loading" ? (
-                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse de la toiture…</strong><span>PilotPaper charge l'orthophoto IGN et identifie tous les pans A/B/C…</span></div>
+                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse du bâtiment cible…</strong><span>Parcelle cadastrale → bâtiment BD TOPO → pans Google Solar → test du calepinage → validation DP3.</span></div>
               ) : roofFaceMapState === "error" ? (
-                <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Mini-carte indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces(draft.address)}>Réessayer</button></div>
+                <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Analyse automatique indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces({ ...draft })}>Réessayer l'analyse automatique</button></div>
               ) : roofFaceMap ? (
                 <>
                   <RoofFaceSelector
@@ -545,25 +638,25 @@ export function DpPieceWorkbench() {
                     selectedFaceIds={draft.roofFace ? [draft.roofFace] : []}
                     onChange={(faceIds) => {
                       const next = faceIds.at(-1) ?? "";
-                      update("roofFace", next);
+                      setDraft((current) => ({ ...current, roofFace: next }));
                       setError("");
                       setResult(null);
                     }}
                     disabled={busy}
                   />
                   {draft.roofFace ? (
-                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">Pan {draft.roofFace} sélectionné. PilotPaper utilisera exactement ce pan pour DP{contract.dp}.</div>
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">Pan {draft.roofFace} sélectionné. Ce pan a déjà passé le contrôle du bâtiment cible, du calepinage demandé et de la coupe DP3.</div>
                   ) : (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Choisissez un pan de toiture avant de générer la DP.</div>
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Seuls les pans capables d'accueillir cette configuration sont affichés. Choisissez celui à équiper.</div>
                   )}
-                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces(draft.address)} disabled={busy}>Réanalyser les pans</button></div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}{roofFaceMap.buildingId ? ` · bâtiment ${roofFaceMap.buildingId}` : ""}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces({ ...draft })} disabled={busy}>Réanalyser</button></div>
                 </>
               ) : (
-                <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>Détection des pans en attente</strong><span>La mini-carte s'affichera ici.</span></div>
+                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={30} /><strong>Préparation de l'analyse</strong><span>PilotPaper attend la configuration complète.</span></div>
               )}
             </div>
           ) : (
-            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "Roof Designer attend ta validation" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Une fois le pan, la pente et les obstacles confirmés, le Layout Engine prend le relais." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
+            <div className={styles.emptyPreview}><img src="/pilotpaper-dp.svg" alt="" /><strong>{recovery ? "Roof Designer attend ta validation" : `DP${contract.dp} en attente`}</strong><span>{recovery ? "Le recours manuel n'est utilisé qu'après échec de toutes les sources automatiques." : "Le résultat apparaîtra ici sans ouvrir de nouvelle fenêtre."}</span></div>
           )}
         </section>
       </div>
