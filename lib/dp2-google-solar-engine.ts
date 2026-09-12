@@ -19,6 +19,7 @@ import {
 } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { inspectAutomaticSatelliteLayout } from "@/lib/dp-ai-engine/quality/openaiSatelliteLayoutInspector";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
+import { selectGoogleSolarFace } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
 import { metricSurfaceFromManualRoofDesign } from "@/lib/dp-ai-engine/site-model/manualRoofDesigner";
 import { resolveTargetParcelFromBuildingCenter } from "@/lib/dp-ai-engine/site-model/targetPropertyResolver";
 import type { Point2D, ProjectContext, ProjectForm } from "@/lib/dp-ai-engine/types";
@@ -279,6 +280,7 @@ function resolveLayoutContext(
       "Google Solar fournit les cellules candidates déjà positionnées sur le segment de toiture.",
       "PilotPaper utilise uniquement un rectangle contigu entièrement composé de cellules candidates Google Solar.",
       "Le Layout Engine replace ensuite les dimensions fabricant exactes à l'intérieur de cette zone sûre.",
+      "Le pan A/B/C demandé est verrouillé sur un segment physique Google Solar distinct avant tout calepinage.",
     ],
   };
 }
@@ -329,7 +331,7 @@ function buildDp2Svg(context: AutoContext, project: ProjectContext) {
     <circle cx="${entranceX.toFixed(1)}" cy="${entranceY.toFixed(1)}" r="7" fill="#e54b2b" stroke="#ffffff" stroke-width="3"/>
     <rect x="82" y="650" width="530" height="94" rx="10" fill="#fff" fill-opacity=".94"/>
     <text x="102" y="680" font-family="Arial,sans-serif" font-size="15" font-weight="700" fill="#102a56">${project.exactPanelCount} MODULES · AUTO GOOGLE SOLAR</text>
-    <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Calepinage ${project.array.rows} × ${project.array.columns} · ${escapeXml(project.array.orientation)}</text>
+    <text x="102" y="706" font-family="Arial,sans-serif" font-size="14" fill="#4b5563">Calepinage ${project.array.rows} × ${project.array.columns} · ${escapeXml(project.array.orientation)} · pan ${escapeXml(project.array.roofFace)}</text>
     <text x="102" y="728" font-family="Arial,sans-serif" font-size="12" fill="#68717d">Parcelle cible ${escapeXml(context.parcelReference)} · point rouge : adresse</text>
     <text x="1082" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#102a56">N</text>
     <path d="M1082 217 L1070 251 L1082 242 L1094 251 Z" fill="#102a56"/>
@@ -342,8 +344,9 @@ function buildDp2Svg(context: AutoContext, project: ProjectContext) {
 async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput> {
   const form = buildBaseForm(input);
   const context = await resolveAutomaticContext(input.address);
+  const selectedFace = selectGoogleSolarFace(context.solar, form.array.roofFace);
   const automatic = automaticRoofDesignFromGoogleSolar({
-    insights: context.solar,
+    insights: selectedFace.insights,
     frame: context.metricFrame,
     requestedRows: form.array.rows,
     requestedColumns: form.array.columns,
@@ -357,7 +360,7 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
     frame: context.metricFrame,
     design: automatic.design,
     faceId: form.array.roofFace,
-    label: `Pan ${form.array.roofFace} · Google Solar segment ${automatic.segmentIndex + 1}`,
+    label: `Pan ${form.array.roofFace} · Google Solar segment ${selectedFace.originalSegmentIndex + 1}`,
   });
   const project = resolveLayoutContext(form, designed);
   const metricPolygons = allPanelPolygonsForRoleProjective(project, "satellite_mass");
@@ -394,7 +397,7 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
     mimeType: "image/svg+xml",
     text: buildDp2Svg(context, project),
     sourceSummary: [
-      `Google Solar API — bâtiment physique et segment ${automatic.segmentIndex + 1} · imagerie ${imageQuality}`,
+      `Google Solar API — pan ${form.array.roofFace} verrouillé sur le segment physique ${selectedFace.originalSegmentIndex + 1} · imagerie ${imageQuality}`,
       `Google Solar API — ${automatic.googlePanelCountUsedAsSafeArea} cellule(s) contiguë(s) ${automatic.googleCandidateOrientation.toLowerCase()} utilisées comme zone sûre`,
       `IGN/APICARTO — parcelle recalée depuis le centre physique du bâtiment : ${context.parcelReference}`,
       `Module fabricant — ${form.panel.model} · ${form.panel.widthMm} × ${form.panel.heightMm} mm`,
@@ -410,6 +413,7 @@ async function generateAutomaticDp2(input: DpPieceInput): Promise<DpPieceOutput>
       score,
       checks: [
         "Bâtiment cible fourni par Google Solar puis parcelle officielle recalée au centre du bâtiment",
+        `Pan ${form.array.roofFace} verrouillé sur un segment Google Solar distinct avant recherche du calepinage`,
         `Qualité imagerie Google Solar : ${imageQuality}`,
         `Pente automatique du segment : ${automatic.segment.pitchDegrees.toFixed(1)}°`,
         `Azimut automatique du segment : ${automatic.segment.azimuthDegrees.toFixed(1)}°`,
