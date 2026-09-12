@@ -14,6 +14,27 @@ type UpdatePayload = {
   validationData?: unknown;
 };
 
+function normalizedFormData(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value ?? {};
+  const record = { ...(value as Record<string, unknown>) };
+  let selectedFaceIds: string[] = [];
+  try {
+    const parsed = JSON.parse(String(record.selectedRoofFaceIdsJson ?? "[]"));
+    if (Array.isArray(parsed)) {
+      selectedFaceIds = parsed.map((item) => String(item).trim().toUpperCase()).filter(Boolean);
+    }
+  } catch {
+    selectedFaceIds = [];
+  }
+  if (selectedFaceIds.length) {
+    // Visual multi-selection is an allowed set, never a priority order. The
+    // layout engine must be free to use one sufficiently large selected face
+    // even when that face was not clicked first.
+    record.roofSelectionMode = "automatic";
+  }
+  return record;
+}
+
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -31,6 +52,7 @@ export async function PATCH(
   const moduleCount = Number.isFinite(parsedModuleCount) && parsedModuleCount > 0
     ? Math.round(parsedModuleCount)
     : null;
+  const formData = normalizedFormData(payload.formData);
 
   const row = await env.DB.prepare(
     `UPDATE projects SET
@@ -48,7 +70,7 @@ export async function PATCH(
       moduleCount,
       payload.moduleReference?.trim() ?? "",
       payload.injectionMode?.trim() ?? "",
-      JSON.stringify(payload.formData ?? {}),
+      JSON.stringify(formData),
       JSON.stringify(payload.validationData ?? {}),
       id,
       user.email,

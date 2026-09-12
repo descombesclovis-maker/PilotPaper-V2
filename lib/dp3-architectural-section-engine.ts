@@ -79,7 +79,7 @@ function sectionAxisX(args: {
   return east * Math.sin(azimuth) + north * Math.cos(azimuth);
 }
 
-function buildForm(input: DpPieceInput, module: ReturnType<typeof requireVerifiedPvModule>): ProjectForm {
+function buildForm(input: DpPieceInput, moduleSpec: ReturnType<typeof requireVerifiedPvModule>): ProjectForm {
   const panelCount = positiveInteger(input.panelCount, "Le nombre de panneaux");
   const rows = positiveInteger(input.rows, "Le nombre de rangées");
   const columns = positiveInteger(input.columns, "Le nombre de colonnes");
@@ -91,12 +91,12 @@ function buildForm(input: DpPieceInput, module: ReturnType<typeof requireVerifie
     projectId: `v1-dp3-architectural-${crypto.randomUUID()}`,
     address: input.address.trim(),
     panel: {
-      manufacturer: module.manufacturer,
-      model: module.canonicalReference,
-      widthMm: module.widthMm,
-      heightMm: module.heightMm,
+      manufacturer: moduleSpec.manufacturer,
+      model: moduleSpec.canonicalReference,
+      widthMm: moduleSpec.widthMm,
+      heightMm: moduleSpec.heightMm,
       frameColor: "black",
-      powerWp: module.powerWp,
+      powerWp: moduleSpec.powerWp,
     },
     requestedPanelCount: panelCount,
     array: {
@@ -304,8 +304,8 @@ export async function generateDp3Piece(input: DpPieceInput): Promise<DpPieceOutp
   if (!input.address?.trim()) throw new Error("DP3 : l'adresse du projet est requise.");
   if (!googleSolarConfigured()) throw new Error("DP3 : Google Solar API doit être configurée pour produire une coupe automatique fiable.");
 
-  const module = requireVerifiedPvModule(input.moduleReference ?? "");
-  const form = buildForm(input, module);
+  const moduleSpec = requireVerifiedPvModule(input.moduleReference ?? "");
+  const form = buildForm(input, moduleSpec);
   const addressContext = await resolveOfficialParcelContext(input.address);
   const solar = await fetchGoogleSolarBuildingInsights({ latitude: addressContext.latitude, longitude: addressContext.longitude });
   const site = await resolveTargetParcelFromBuildingCenter({ addressContext, buildingCenter: solar.center });
@@ -318,8 +318,8 @@ export async function generateDp3Piece(input: DpPieceInput): Promise<DpPieceOutp
     requestedRows: form.array.rows,
     requestedColumns: form.array.columns,
     requestedOrientation: form.array.orientation,
-    moduleWidthMeters: module.widthMm / 1000,
-    moduleHeightMeters: module.heightMm / 1000,
+    moduleWidthMeters: moduleSpec.widthMm / 1000,
+    moduleHeightMeters: moduleSpec.heightMm / 1000,
     interPanelGapMeters: form.array.interPanelGapMm / 1000,
     placement: form.array.placement,
   });
@@ -354,8 +354,8 @@ export async function generateDp3Piece(input: DpPieceInput): Promise<DpPieceOutp
     pitchDeg: section.selectedPitchDeg,
     rows: form.array.rows,
     orientation: form.array.orientation,
-    moduleWidthM: module.widthMm / 1000,
-    moduleHeightM: module.heightMm / 1000,
+    moduleWidthM: moduleSpec.widthMm / 1000,
+    moduleHeightM: moduleSpec.heightMm / 1000,
     gapM: form.array.interPanelGapMm / 1000,
     resolvedGutterM,
     leftX: section.leftX,
@@ -367,13 +367,13 @@ export async function generateDp3Piece(input: DpPieceInput): Promise<DpPieceOutp
     parcelReference: site.parcelReference,
     buildingId: building.id,
     faceId: form.array.roofFace,
-    moduleReference: module.canonicalReference,
+    moduleReference: moduleSpec.canonicalReference,
     panelCount: layout.count,
     rows: form.array.rows,
     columns: form.array.columns,
     orientation: form.array.orientation,
-    moduleWidthM: module.widthMm / 1000,
-    moduleHeightM: module.heightMm / 1000,
+    moduleWidthM: moduleSpec.widthMm / 1000,
+    moduleHeightM: moduleSpec.heightMm / 1000,
     fieldWidthM: automatic.requestedArrayWidthMeters,
     fieldSlopeLengthM: automatic.requestedArraySlopeLengthMeters,
     resolvedGutterM,
@@ -395,7 +395,7 @@ export async function generateDp3Piece(input: DpPieceInput): Promise<DpPieceOutp
       `BD TOPO — emprise réelle du bâtiment ${building.id} et hauteur de gouttière ${building.heightM?.toFixed(2) ?? "inconnue"} m`,
       `Google Solar — pan ${form.array.roofFace}, pente ${section.selectedPitchDeg.toFixed(1)}°, azimut ${section.selectedAzimuthDeg.toFixed(1)}°, imagerie ${imageryQuality}`,
       `APICARTO/IGN — parcelle ${site.parcelReference} recalée depuis le centre physique du bâtiment`,
-      `Module fabricant — ${module.canonicalReference} · ${module.widthMm} × ${module.heightMm} mm`,
+      `Module fabricant — ${moduleSpec.canonicalReference} · ${moduleSpec.widthMm} × ${moduleSpec.heightMm} mm`,
       `PilotPaper Layout Engine — ${layout.count} modules, recul bas résolu ${Math.round(resolvedGutterM * 1000)} mm`,
     ],
     inspector: {
