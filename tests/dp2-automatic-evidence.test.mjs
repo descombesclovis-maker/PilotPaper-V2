@@ -7,6 +7,8 @@ const autoEngine = await readFile(new URL("../lib/dp2-google-solar-engine.ts", i
 const provider = await readFile(new URL("../lib/dp-ai-engine/providers/googleSolar.ts", import.meta.url), "utf8");
 const safeCells = await readFile(new URL("../lib/dp-ai-engine/site-model/googleSolarAutomaticRoof.ts", import.meta.url), "utf8");
 const targetResolver = await readFile(new URL("../lib/dp-ai-engine/site-model/targetPropertyResolver.ts", import.meta.url), "utf8");
+const visualInspector = await readFile(new URL("../lib/dp-ai-engine/quality/openaiSatelliteLayoutInspector.ts", import.meta.url), "utf8");
+const png = await readFile(new URL("../lib/dp-ai-engine/utils/pngPixels.ts", import.meta.url), "utf8");
 const fallback = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const designer = await readFile(new URL("../lib/dp-ai-engine/site-model/manualRoofDesigner.ts", import.meta.url), "utf8");
 
@@ -41,6 +43,7 @@ test("automatic layout consumes only contiguous Google candidate cells and exact
   assert.match(safeCells, /requestedOrientation/);
   assert.match(safeCells, /requestedWidth > safeWidth/);
   assert.match(safeCells, /requestedSlope > safeSlope/);
+  assert.match(safeCells, /googleCandidateOrientation/);
 });
 
 test("physical building center re-resolves the official parcel instead of trusting the roadside address point", () => {
@@ -49,6 +52,18 @@ test("physical building center re-resolves the official parcel instead of trusti
   assert.match(targetResolver, /index.*parcel/);
   assert.match(targetResolver, /buildingCenter/);
   assert.match(targetResolver, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
+});
+
+test("OpenAI is an independent visual veto after geometry, never a geometry source", () => {
+  assert.match(autoEngine, /inspectAutomaticSatelliteLayout/);
+  assert.match(autoEngine, /allPanelPolygonsForRoleProjective/);
+  assert.match(visualInspector, /annotatePngWithPanelPolygons/);
+  assert.match(visualInspector, /Tu ne dois proposer AUCUNE nouvelle géométrie/);
+  assert.match(visualInspector, /status: "rejected"/);
+  assert.match(png, /annotatePngWithPanelPolygons/);
+  const autoStart = autoEngine.indexOf("async function generateAutomaticDp2");
+  const auto = autoEngine.slice(autoStart);
+  assert.ok(auto.indexOf("resolveLayoutContext") < auto.indexOf("inspectAutomaticSatelliteLayout"));
 });
 
 test("Roof Designer remains a safety fallback, not the primary DP2 workflow", () => {
