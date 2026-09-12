@@ -1,5 +1,6 @@
 import { generateDp1Piece } from "@/lib/dp1-engine";
 import { Dp2RoofDesignerRequiredError, generateDp2Piece } from "@/lib/dp2-v1-engine";
+import { generateDp3Piece } from "@/lib/dp3-architectural-section-engine";
 import { generateDpPiece, type DpPieceInput } from "@/lib/dp-piece-engine";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,9 @@ export async function POST(request: Request) {
       ? await generateDp1Piece(input)
       : input.dp === 2
         ? await generateDp2Piece(input)
-        : await generateDpPiece(input);
+        : input.dp === 3
+          ? await generateDp3Piece(input)
+          : await generateDpPiece(input);
 
     return Response.json(result, {
       headers: {
