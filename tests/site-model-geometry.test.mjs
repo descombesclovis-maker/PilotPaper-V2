@@ -12,7 +12,8 @@ const lidarModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/lidar
 const roofModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/roofGeometryEngine.ts");
 const parcelModule = await vite.ssrLoadModule("/lib/dp-ai-engine/context/officialParcel.ts");
 const assistedModule = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/assistedRoofRecovery.ts");
-const dp2Source = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
+const dp2AutoSource = await readFile(new URL("../lib/dp2-google-solar-engine.ts", import.meta.url), "utf8");
+const dp2FallbackSource = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const buildingSource = await readFile(new URL("../lib/dp-ai-engine/site-model/buildingResolver.ts", import.meta.url), "utf8");
 const siteModelSource = await readFile(new URL("../lib/dp-ai-engine/site-model/siteModelEngine.ts", import.meta.url), "utf8");
 
@@ -81,7 +82,7 @@ test("LiDAR roof geometry remains available as an optional experimental provider
   assert.ok(roof.obstacles.some((obstacle) => obstacle.maxHeightAbovePlaneM > 0.5));
 });
 
-test("old four-click LiDAR recovery remains isolated and is no longer the DP2 critical path", () => {
+test("old four-click LiDAR recovery remains isolated and is no longer a DP2 critical path", () => {
   const frame = {
     longitude: 4.75,
     latitude: 46.30,
@@ -102,19 +103,19 @@ test("old four-click LiDAR recovery remains isolated and is no longer the DP2 cr
   assert.equal(polygon.length, 4);
   assert.ok(polygon.flat().every(Number.isFinite));
   assert.match(siteModelSource, /buildAssistedSiteModelFromParcel/);
+  assert.doesNotMatch(dp2AutoSource, /buildAssistedSiteModelFromParcel|recoverRoofFromFourClicks/);
 });
 
-test("DP2 critical path is reviewed Roof Designer and explicitly does not call LiDAR", () => {
-  assert.match(dp2Source, /Dp2RoofDesignerRequiredError/);
-  assert.match(dp2Source, /manualRoofDesign/);
-  assert.match(dp2Source, /metricSurfaceFromManualRoofDesign/);
-  assert.match(dp2Source, /LiDAR non requis/);
-  assert.equal(dp2Source.indexOf("buildAutomaticSiteModelFromParcel"), -1);
-  assert.equal(dp2Source.indexOf("buildAssistedSiteModelFromParcel"), -1);
-  assert.equal(dp2Source.indexOf("samplePolygonLidarHeights"), -1);
+test("DP2 primary path is Google Solar and Roof Designer remains explicit recovery", () => {
+  assert.match(dp2AutoSource, /fetchGoogleSolarBuildingInsights/);
+  assert.match(dp2AutoSource, /automaticRoofDesignFromGoogleSolar/);
+  assert.match(dp2AutoSource, /generateRoofDesignerDp2/);
+  assert.doesNotMatch(dp2AutoSource, /samplePolygonLidarHeights|buildRoofModelFromLidar/);
+  assert.match(dp2FallbackSource, /Dp2RoofDesignerRequiredError/);
+  assert.match(dp2FallbackSource, /manualRoofDesign/);
 });
 
-test("building resolver remains available for future automatic providers", () => {
+test("building resolver remains available as an independent auxiliary provider", () => {
   assert.match(buildingSource, /BDTOPO_V3:batiment/);
   assert.match(buildingSource, /https:\/\/data\.geopf\.fr\/wfs\/ows/);
   assert.match(buildingSource, /EPSG:3857/);
