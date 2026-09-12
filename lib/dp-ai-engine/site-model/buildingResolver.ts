@@ -45,11 +45,9 @@ function pointOnSegment(point: LonLat, a: LonLat, b: LonLat, epsilon = 1e-10) {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   const lengthSq = dx ** 2 + dy ** 2;
-
   if (lengthSq <= epsilon ** 2) {
     return Math.hypot(point[0] - a[0], point[1] - a[1]) <= epsilon;
   }
-
   const cross = (point[1] - a[1]) * dx - (point[0] - a[0]) * dy;
   if (Math.abs(cross) > epsilon) return false;
   const dot = (point[0] - a[0]) * dx + (point[1] - a[1]) * dy;
@@ -204,7 +202,7 @@ export function selectTargetBuilding(
     const centroidInsideParcel = parcelRingsAll.some((ring) => pointInLonLatPolygon(building.centroid, ring));
     const addressDistance = distanceM(addressPoint, building.centroid);
     const parcelPenalty = centroidInsideParcel ? 0 : 500;
-    const containmentBonus = containsAddress ? -1000 : 0;
+    const containmentBonus = containsAddress ? 1000 : 0;
     const smallAreaPenalty = building.areaM2 && building.areaM2 < 12 ? 100 : 0;
     const residentialScaleBonus = Math.min(35, Math.max(0, (building.areaM2 ?? 0) - 25) * 0.18);
     return {
@@ -222,14 +220,6 @@ export function selectTargetBuilding(
   return best;
 }
 
-/**
- * Returns the physical building group belonging to the target address.
- * BD TOPO can split one real house into several touching polygons (wings,
- * old/new volumes, covered passages). Starting from the address anchor, we
- * include only parcel-contained footprints that physically touch or are
- * separated by a very small modelling gap. Detached garages/outbuildings and
- * neighbouring parcels stay out of the cluster.
- */
 export async function resolveTargetBuildingCluster(parcel: OfficialParcelContext) {
   const all = await fetchBuildingCandidates(parcel);
   const parcelCandidates = all.filter((building) => buildingTouchesParcel(building, parcel));
@@ -270,8 +260,9 @@ export function closestBuildingToPoint(
   return best && best.distanceM <= maxDistanceM ? best.building : undefined;
 }
 
-/** Resolve the physical project building from the official address + parcel. */
+/** Resolve the physical project building and retain every contiguous volume. */
 export async function resolveTargetBuilding(parcel: OfficialParcelContext): Promise<BuildingFootprint> {
   const cluster = await resolveTargetBuildingCluster(parcel);
-  return cluster[0]!;
+  const anchor = cluster[0]!;
+  return { ...anchor, components: cluster };
 }
