@@ -20,7 +20,12 @@ test("DP2 entry routes through Google Solar automatic engine", () => {
   const generatorStart = autoEngine.indexOf("export async function generateDp2Piece");
   assert.ok(generatorStart >= 0);
   const generator = autoEngine.slice(generatorStart);
-  assert.ok(generator.indexOf("generateAutomaticDp2") < generator.indexOf("generateRoofDesignerDp2"));
+  const googlePath = generator.indexOf("if (googleSolarConfigured())");
+  const automaticCall = generator.indexOf("return await generateAutomaticDp2(input)", googlePath);
+  const reviewedFallback = generator.lastIndexOf("return generateRoofDesignerDp2(input)");
+  assert.ok(googlePath >= 0);
+  assert.ok(automaticCall > googlePath);
+  assert.ok(reviewedFallback > automaticCall);
 });
 
 test("Google Solar provider uses Building Insights and supports France-friendly MEDIUM plus BASE fallback", () => {
