@@ -2,26 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const engine = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const engine = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const raster = await readFile(new URL("../lib/dp-ai-engine/context/ignRaster.ts", import.meta.url), "utf8");
 const route = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
 const contract = await readFile(new URL("../lib/dp-piece-contract.ts", import.meta.url), "utf8");
 const workbench = await readFile(new URL("../components/dp-piece-workbench.tsx", import.meta.url), "utf8");
 
-test("DP2 geometry path does not require a user photograph or OpenAI configuration", () => {
-  assert.doesNotMatch(engine, /configFromEnv/);
-  assert.doesNotMatch(engine, /OPENAI_API_KEY/);
-  assert.doesNotMatch(engine, /asRoofPhoto/);
-  assert.match(engine, /buildAutomaticSiteModelFromParcel/);
+test("DP2 does not require user photographs OpenAI or LiDAR for geometry", () => {
+  assert.doesNotMatch(engine, /configFromEnv|OPENAI_API_KEY|asRoofPhoto/);
+  assert.doesNotMatch(engine, /buildAutomaticSiteModelFromParcel|buildAssistedSiteModelFromParcel/);
+  assert.match(engine, /metricSurfaceFromManualRoofDesign/);
 });
 
-test("DP2 routes through its dedicated orchestrator and exposes explicit assisted recovery", () => {
+test("DP2 routes through Roof Designer recovery before deterministic generation", () => {
   assert.match(route, /generateDp2Piece/);
   assert.match(route, /input\.dp === 2/);
-  assert.match(route, /Dp2AssistedRecoveryRequiredError/);
+  assert.match(route, /Dp2RoofDesignerRequiredError/);
   assert.match(route, /status: 409/);
-  assert.match(route, /roof_quad/);
-  assert.match(engine, /buildAssistedSiteModelFromParcel/);
+  assert.match(route, /roof_designer/);
+  assert.match(engine, /manualRoofDesign/);
 });
 
 test("DP2 consumes separate shared orthophoto and cadastral raster layers", () => {
@@ -32,7 +31,7 @@ test("DP2 consumes separate shared orthophoto and cadastral raster layers", () =
   assert.doesNotMatch(raster, /ORTHOIMAGERY\.ORTHOPHOTOS,CADASTRALPARCELS/);
 });
 
-test("DP2 UI contract is geospatial and no longer asks for near roof or far photographs", () => {
+test("DP2 UI contract stays geospatial and does not ask for project photographs", () => {
   const dp2Start = contract.indexOf("dp: 2,");
   const dp3Start = contract.indexOf("dp: 3,");
   assert.ok(dp2Start >= 0 && dp3Start > dp2Start);
@@ -40,10 +39,13 @@ test("DP2 UI contract is geospatial and no longer asks for near roof or far phot
   assert.doesNotMatch(dp2, /"nearPhoto"|"roofPhoto"|"farPhoto"/);
 });
 
-test("workbench collects exactly four normalized points and resubmits them as assistedRoofQuad", () => {
-  assert.match(workbench, /type RoofQuadRecovery/);
-  assert.match(workbench, /recoveryPoints\.length >= 4/);
-  assert.match(workbench, /\.slice\(0, 4\)/);
-  assert.match(workbench, /assistedRoofQuad/);
-  assert.match(workbench, /Analyser ce pan avec LiDAR/);
+test("workbench reviews roof slope and keepouts before submitting manualRoofDesign", () => {
+  assert.match(workbench, /type RoofDesignerRecovery/);
+  assert.match(workbench, /Gouttière gauche/);
+  assert.match(workbench, /Faîtage droite/);
+  assert.match(workbench, /manualRoofDesign/);
+  assert.match(workbench, /Ajouter un obstacle/);
+  assert.match(workbench, /obstaclesConfirmed: true/);
+  assert.match(workbench, /Valider le toit et générer DP2/);
+  assert.doesNotMatch(workbench, /Analyser ce pan avec LiDAR/);
 });
