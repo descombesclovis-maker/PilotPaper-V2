@@ -3,11 +3,22 @@ import type {
   GoogleSolarRoofSegment,
 } from "../providers/googleSolar";
 
-export type SelectedGoogleSolarFace = {
+export type GoogleSolarFaceDescriptor = {
   faceId: string;
   faceRank: number;
   originalSegmentIndex: number;
   segment: GoogleSolarRoofSegment;
+  areaMeters2: number;
+  panelCount: number;
+};
+
+export type SelectedGoogleSolarFace = GoogleSolarFaceDescriptor & {
+  insights: GoogleSolarBuildingInsights;
+};
+
+export type SelectedGoogleSolarFaces = {
+  faceIds: string[];
+  faces: GoogleSolarFaceDescriptor[];
   insights: GoogleSolarBuildingInsights;
 };
 
@@ -28,62 +39,103 @@ function segmentArea(segment: GoogleSolarRoofSegment) {
 }
 
 /**
- * Assigns stable human roof-face letters to physical Google Solar segments.
+ * Stable inventory of every physical Google Solar roof segment.
  * A/B/C are geometry identities, not "best available layout" aliases.
  * The ordering never depends on requested panel count, orientation or energy.
  */
-export function selectGoogleSolarFace(
+export function listGoogleSolarFaces(
   insights: GoogleSolarBuildingInsights,
-  faceId: string,
-): SelectedGoogleSolarFace {
-  const faceRank = requestedFaceRank(faceId);
+): GoogleSolarFaceDescriptor[] {
   const panelCountBySegment = new Map<number, number>();
   for (const panel of insights.solarPotential.solarPanels) {
     panelCountBySegment.set(panel.segmentIndex, (panelCountBySegment.get(panel.segmentIndex) ?? 0) + 1);
   }
 
-  const ranked = insights.solarPotential.roofSegmentStats
+  return insights.solarPotential.roofSegmentStats
     .map((segment, originalSegmentIndex) => ({
       segment,
       originalSegmentIndex,
-      area: segmentArea(segment),
+      areaMeters2: segmentArea(segment),
       panelCount: panelCountBySegment.get(originalSegmentIndex) ?? 0,
     }))
     .sort((a, b) => (
-      b.area - a.area
+      b.areaMeters2 - a.areaMeters2
       || b.panelCount - a.panelCount
       || a.originalSegmentIndex - b.originalSegmentIndex
-    ));
+    ))
+    .map((entry, faceRank) => ({
+      ...entry,
+      faceRank,
+      faceId: String.fromCharCode(65 + faceRank),
+    }));
+}
 
-  const selected = ranked[faceRank];
-  if (!selected) {
-    throw new Error(
-      `Google Solar : le pan ${faceId.toUpperCase()} n'existe pas sur ce bâtiment (${ranked.length} pan(s) détecté(s)).`,
-    );
+/**
+ * Restricts Google Solar to the exact physical faces explicitly authorised by
+ * the user. Segment indices are remapped because downstream engines expect a
+ * compact 0..N-1 list. No unselected face can silently re-enter the layout.
+ */
+export function selectGoogleSolarFaces(
+  insights: GoogleSolarBuildingInsights,
+  faceIds: string[],
+): SelectedGoogleSolarFaces {
+  const requested = [...new Set(faceIds.map((id) => String(id ?? "").trim().toUpperCase()).filter(Boolean))];
+  if (!requested.length) {
+    throw new Error("Google Solar : sélectionnez au moins un pan de toiture.");
   }
 
-  const selectedPanels = insights.solarPotential.solarPanels
-    .filter((panel) => panel.segmentIndex === selected.originalSegmentIndex)
-    .map((panel) => ({ ...panel, segmentIndex: 0 }));
+  const ranked = listGoogleSolarFaces(insights);
+  const selected = requested.map((faceId) => {
+    const rank = requestedFaceRank(faceId);
+    const face = ranked[rank];
+    if (!face) {
+      throw new Error(
+        `Google Solar : le pan ${faceId} n'existe pas sur ce bâtiment (${ranked.length} pan(s) détecté(s)).`,
+      );
+    }
+    return face;
+  });
 
-  if (!selectedPanels.length) {
-    throw new Error(
-      `Google Solar : le pan ${faceId.toUpperCase()} est bien distinct mais Google ne fournit aucune cellule photovoltaïque exploitable dessus.`,
-    );
+  const compactIndexByOriginal = new Map<number, number>();
+  selected.forEach((face, compactIndex) => compactIndexByOriginal.set(face.originalSegmentIndex, compactIndex));
+
+  const selectedPanels = insights.solarPotential.solarPanels
+    .filter((panel) => compactIndexByOriginal.has(panel.segmentIndex))
+    .map((panel) => ({
+      ...panel,
+      segmentIndex: compactIndexByOriginal.get(panel.segmentIndex)!,
+    }));
+
+  for (const face of selected) {
+    if (!selectedPanels.some((panel) => panel.segmentIndex === compactIndexByOriginal.get(face.originalSegmentIndex))) {
+      throw new Error(
+        `Google Solar : le pan ${face.faceId} est bien distinct mais Google ne fournit aucune cellule photovoltaïque exploitable dessus.`,
+      );
+    }
   }
 
   return {
-    faceId: faceId.toUpperCase(),
-    faceRank,
-    originalSegmentIndex: selected.originalSegmentIndex,
-    segment: selected.segment,
+    faceIds: selected.map((face) => face.faceId),
+    faces: selected,
     insights: {
       ...insights,
       solarPotential: {
         ...insights.solarPotential,
-        roofSegmentStats: [selected.segment],
+        roofSegmentStats: selected.map((face) => face.segment),
         solarPanels: selectedPanels,
       },
     },
+  };
+}
+
+export function selectGoogleSolarFace(
+  insights: GoogleSolarBuildingInsights,
+  faceId: string,
+): SelectedGoogleSolarFace {
+  const selection = selectGoogleSolarFaces(insights, [faceId]);
+  const face = selection.faces[0]!;
+  return {
+    ...face,
+    insights: selection.insights,
   };
 }

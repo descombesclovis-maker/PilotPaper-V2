@@ -54,6 +54,8 @@ export interface MetricPoint2D {
   yMm: number;
 }
 
+export interface Point2D { x: number; y: number }
+
 export interface RoofFaceMetricObstacle {
   type: string;
   description: string;
@@ -70,6 +72,13 @@ export interface RoofFaceMetricGeometry extends RoofMetricGeometry {
   surfacePolygonMm?: MetricPoint2D[];
   /** Exact obstacle footprints in the same local roof-plane basis. */
   obstaclePolygonsMm?: RoofFaceMetricObstacle[];
+  /**
+   * Stable physical identity anchor shown to the user in the satellite_mass
+   * selector. It allows later vision passes to preserve A/B/C across views.
+   */
+  sourceCenterNormalized?: Point2D;
+  sourceOriginalSegmentIndex?: number;
+  identitySource?: "google-solar" | "ign-vision";
   /**
    * Transitional compatibility field used by the legacy capacity allocator.
    * V1.2 must stop relying on it once polygon-aware placement is validated.
@@ -109,8 +118,6 @@ export interface ProjectForm {
   support?: ProjectSupport;
   notes?: string;
 }
-
-export interface Point2D { x: number; y: number }
 
 export interface RoofViewObservation {
   role: PhotoRole;

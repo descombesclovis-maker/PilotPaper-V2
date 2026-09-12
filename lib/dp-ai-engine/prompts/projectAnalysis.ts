@@ -5,6 +5,10 @@ import { supportRules } from "../geometry/supportRules";
 export function projectAnalysisPrompt(form: ProjectForm): string {
   const count=requestedPanelCount(form);
   const rules=supportRules(form.support?.topology??"unknown",form.support?.covering??"unknown");
+  const anchoredFaces=(form.roofFaces??[])
+    .filter(face=>face.sourceCenterNormalized&&Number.isFinite(face.sourceCenterNormalized.x)&&Number.isFinite(face.sourceCenterNormalized.y))
+    .map(face=>`- ${face.id}: authoritative satellite_mass center = (${face.sourceCenterNormalized!.x.toFixed(4)}, ${face.sourceCenterNormalized!.y.toFixed(4)})${face.identitySource?`, identity source=${face.identitySource}`:""}`)
+    .join("\n");
   return `You are the vision-analysis stage of a French photovoltaic prior-declaration document generator.
 Analyze ALL supplied images as evidence of the SAME property. Do not design, render, beautify or invent anything.
 
@@ -19,6 +23,7 @@ Hard facts:
 - covering: ${form.support?.covering ?? "unknown"}
 - roof-selection mode: ${form.roofSelection?.mode ?? "automatic"}
 ${form.roofSelection?.priorityFaceId?`- priority face: ${form.roofSelection.priorityFaceId}`:""}
+${anchoredFaces?`\nAUTHORITATIVE SELECTED-FACE IDENTITIES:\n${anchoredFaces}\nThese normalized centers refer specifically to the satellite_mass image. They were bound to physical Google Solar segments before this vision pass. A/B/C identity MUST follow these anchors, not left-to-right order and not apparent area. For each listed ID, assign that exact ID to the satellite_mass roof polygon that contains the anchor or whose interior/centroid is nearest to it. Never swap two anchored IDs. Never use an unlisted face as a substitute for a listed one.`:""}
 
 CROSS-VIEW IDENTITY IS CRITICAL:
 - First match the SAME physical building and the SAME physical roof plane across the authoritative image roles before assigning face IDs.
@@ -28,7 +33,7 @@ CROSS-VIEW IDENTITY IS CRITICAL:
 - If the correspondence is genuinely ambiguous, lower confidence and report the ambiguity; do not silently attach the roof photograph to a different building.
 
 DETECT ALL DISTINCT USABLE ROOF/SUPPORT PLANES OF THE TARGET BUILDING, not one merged roof silhouette.
-Assign stable IDs A, B, C... consistently across views. If form.roofFaces already provides IDs, preserve those IDs.
+Assign stable IDs A, B, C... consistently across views. If form.roofFaces already provides IDs, preserve those IDs using sourceCenterNormalized as the authoritative satellite_mass identity anchor when present.
 For EACH face and EACH view where it is visible, return that face polygon in normalized 0..1 image coordinates.
 When a face is quadrilateral, order points as lower-edge-left, lower-edge-right, upper-edge-right, upper-edge-left relative to that plane. Never merge two slopes separated by a ridge/hip.
 Identify gutter/low edge and ridge/high edge when applicable. A boundary between faces is hard: modules may be allocated independently to both faces, but no individual module or continuous panel polygon may cross it.

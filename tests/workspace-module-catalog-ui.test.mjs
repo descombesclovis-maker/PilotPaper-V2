@@ -34,16 +34,18 @@ test("changing the exact reference invalidates stale technical data", () => {
   assert.match(referenceHandler, /resolveModuleReference\(moduleReference, Number\(moduleCount\)\)/);
 });
 
-test("changing quantity recalculates power from resolved module power", () => {
-  const quantityHandlerStart = source.indexOf('id="modules"');
-  assert.ok(quantityHandlerStart >= 0);
-  const quantityHandler = source.slice(quantityHandlerStart, quantityHandlerStart + 1000);
-  assert.match(quantityHandler, /resolvedModule\.powerWp \* Number\(value\)/);
-  assert.doesNotMatch(quantityHandler, /setModuleWidthMm/);
-  assert.doesNotMatch(quantityHandler, /setModuleHeightMm/);
+test("changing quantity recalculates power from resolved module power without mutating manufacturer dimensions", () => {
+  const quantityControl = source.match(/id="modules"[\s\S]*?placeholder="12"/)?.[0] ?? "";
+  assert.ok(quantityControl.length > 0, "module quantity control must exist");
+  assert.match(quantityControl, /resolvedModule\.powerWp \* Number\(value\)/);
+  assert.doesNotMatch(quantityControl, /setModuleWidthMm/);
+  assert.doesNotMatch(quantityControl, /setModuleHeightMm/);
 });
 
-test("layout analysis remains locked until the module is manufacturer-resolved", () => {
-  assert.match(source, /disabled={!projectId \|\| isCheckingLayout \|\| !moduleCount \|\| !resolvedModule}/);
-  assert.match(source, /!resolvedModule \|\|/);
+test("layout analysis remains locked until the module is manufacturer-resolved and at least one roof face is authorised", () => {
+  const capacityButton = source.match(/<Button type="button" disabled={!projectId \|\| isCheckingLayout[\s\S]*?>\{isCheckingLayout \?/)?.[0] ?? "";
+  assert.ok(capacityButton.length > 0, "capacity-check button must exist");
+  assert.match(capacityButton, /!moduleCount/);
+  assert.match(capacityButton, /!resolvedModule/);
+  assert.match(capacityButton, /selectedRoofFaceIds\.length === 0/);
 });
