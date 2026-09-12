@@ -7,7 +7,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const vite = await createServer({ appType: "custom", configFile: false, root, server: { middlewareMode: true } });
 after(async () => { await vite.close(); });
 
-const { selectGoogleSolarFace } = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/googleSolarFaceSelection.ts");
+const { listGoogleSolarFaces, selectGoogleSolarFace, selectGoogleSolarFaces } = await vite.ssrLoadModule("/lib/dp-ai-engine/site-model/googleSolarFaceSelection.ts");
 
 function fakeInsights() {
   return {
@@ -54,12 +54,26 @@ test("roof face A and B are stable distinct physical Google Solar segments", () 
   assert.equal(faceB.segment.azimuthDegrees, 110);
 });
 
+test("complete inventory exposes every physical face before the user chooses", () => {
+  const faces = listGoogleSolarFaces(fakeInsights());
+  assert.deepEqual(faces.map((face) => face.faceId), ["A", "B"]);
+  assert.deepEqual(faces.map((face) => face.originalSegmentIndex), [1, 0]);
+});
+
 test("selected face isolates exactly one segment before automatic layout", () => {
   const faceB = selectGoogleSolarFace(fakeInsights(), "B");
   assert.equal(faceB.insights.solarPotential.roofSegmentStats.length, 1);
   assert.equal(faceB.insights.solarPotential.roofSegmentStats[0].azimuthDegrees, 110);
   assert.ok(faceB.insights.solarPotential.solarPanels.length > 0);
   assert.ok(faceB.insights.solarPotential.solarPanels.every((panel) => panel.segmentIndex === 0));
+});
+
+test("two or more user-authorised faces stay isolated from every unselected face", () => {
+  const selected = selectGoogleSolarFaces(fakeInsights(), ["B", "A", "B"]);
+  assert.deepEqual(selected.faceIds, ["B", "A"]);
+  assert.equal(selected.faces.length, 2);
+  assert.equal(selected.insights.solarPotential.roofSegmentStats.length, 2);
+  assert.ok(selected.insights.solarPotential.solarPanels.every((panel) => panel.segmentIndex === 0 || panel.segmentIndex === 1));
 });
 
 test("requesting a non-existent physical face fails closed instead of silently using another pan", () => {
