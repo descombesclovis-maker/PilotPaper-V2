@@ -66,8 +66,10 @@ export function assertLayoutUsesOneTwin(twin: SiteTwin, layout: PvLayoutSnapshot
   for (const selectedId of layout.selectedFaceIds) {
     if (!faceIds.has(selectedId)) throw new Error(`Le calepinage sélectionne un pan inconnu : ${selectedId}.`);
   }
-  for (const module of layout.modules) {
-    if (!faceIds.has(module.faceId)) throw new Error(`Module ${module.moduleIndex} placé sur un pan inconnu.`);
+  for (const panelModule of layout.modules) {
+    if (!faceIds.has(panelModule.faceId)) {
+      throw new Error(`Module ${panelModule.moduleIndex} placé sur un pan inconnu.`);
+    }
   }
 
   return layout;
