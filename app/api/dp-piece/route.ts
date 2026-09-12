@@ -1,13 +1,38 @@
 import { generateDp1Piece } from "@/lib/dp1-engine";
 import { Dp2RoofDesignerRequiredError, generateDp2Piece } from "@/lib/dp2-v1-engine";
 import { generateDp3Piece } from "@/lib/dp3-architectural-section-engine";
+import { decodeRoofFaceSelectionToken } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
 import { generateDpPiece, type DpPieceInput } from "@/lib/dp-piece-engine";
 
 export const dynamic = "force-dynamic";
 
+type PhysicalDpPieceInput = DpPieceInput & {
+  roofSegmentIndex?: number;
+  roofBuildingId?: string;
+  roofFaceStableKey?: string;
+};
+
+function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
+  const token = decodeRoofFaceSelectionToken(raw.roofFace);
+  if (!token) return raw;
+
+  // DP2/DP3 consume the token directly through the Google Solar physical
+  // selector. Image pieces still receive the human A/B/C label while keeping
+  // the physical identity alongside it for the shared roof context.
+  const keepTokenAsRoofFace = raw.dp === 2 || raw.dp === 3;
+  return {
+    ...raw,
+    roofFace: keepTokenAsRoofFace ? raw.roofFace : token.displayFaceId,
+    roofSegmentIndex: token.originalSegmentIndex,
+    roofBuildingId: token.buildingId,
+    roofFaceStableKey: `${token.buildingId}:${token.originalSegmentIndex}`,
+  };
+}
+
 export async function POST(request: Request) {
   try {
-    const input = await request.json() as DpPieceInput;
+    const rawInput = await request.json() as DpPieceInput;
+    const input = normalizeRoofSelection(rawInput);
     const result = input.dp === 1
       ? await generateDp1Piece(input)
       : input.dp === 2
