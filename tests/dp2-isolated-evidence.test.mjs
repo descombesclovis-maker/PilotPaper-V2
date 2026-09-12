@@ -39,13 +39,14 @@ test("DP2 UI contract stays geospatial and does not ask for project photographs"
   assert.doesNotMatch(dp2, /"nearPhoto"|"roofPhoto"|"farPhoto"/);
 });
 
-test("workbench reviews roof slope and keepouts before submitting manualRoofDesign", () => {
+test("workbench keeps Roof Designer as reviewed last-resort recovery before submitting manualRoofDesign", () => {
   assert.match(workbench, /type RoofDesignerRecovery/);
   assert.match(workbench, /Gouttière gauche/);
   assert.match(workbench, /Faîtage droite/);
   assert.match(workbench, /manualRoofDesign/);
   assert.match(workbench, /Ajouter un obstacle/);
   assert.match(workbench, /obstaclesConfirmed: true/);
-  assert.match(workbench, /Valider le toit et générer DP2/);
+  assert.match(workbench, /Dernier recours uniquement/);
+  assert.match(workbench, /Valider le toit et relancer DP2/);
   assert.doesNotMatch(workbench, /Analyser ce pan avec LiDAR/);
 });
