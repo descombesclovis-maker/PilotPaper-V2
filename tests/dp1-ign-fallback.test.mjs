@@ -39,12 +39,22 @@ test("shared IGN raster provider keeps endpoint fallbacks and validates image re
   assert.match(raster, /contentType\.startsWith\("image\/"\)/);
 });
 
-test("DP1 projects official cadastral geometry onto the IGN situation map", () => {
+test("DP1 uses a parcel-aware close frame instead of the old commune-scale 2.5 km frame", () => {
+  assert.match(engine, /parcelAwareSituationFrame/);
+  assert.match(engine, /MIN_SITUATION_WIDTH_METERS = 420/);
+  assert.match(engine, /MAX_SITUATION_WIDTH_METERS = 850/);
+  assert.match(engine, /PARCEL_CONTEXT_SCALE = 5\.5/);
+  assert.doesNotMatch(engine, /SITUATION_WIDTH_METERS = 2500/);
+});
+
+test("DP1 projects official cadastral geometry with a subtle target outline and no opaque parcel label over the house", () => {
   assert.match(engine, /projectParcelRings/);
   assert.match(engine, /parcelPath/);
-  assert.match(engine, /Contour vectoriel officiel APICARTO Cadastre/);
-  assert.match(engine, /fill="#ff7a32"/);
-  assert.match(engine, /stroke="#f15a24"/);
+  assert.match(engine, /TARGET_PARCEL_STROKE = "#00a9bd"/);
+  assert.match(engine, /fill-opacity=\"\.035\"/);
+  assert.match(engine, /opacity=\"\.34\"/);
+  assert.match(engine, /Parcelle cible/);
+  assert.doesNotMatch(engine, /fill=\"#a43f1b\">PARCELLE/);
 });
 
 test("DP1 inspector fails closed unless official parcel geometry can be represented", () => {
