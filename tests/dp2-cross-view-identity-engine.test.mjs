@@ -16,6 +16,7 @@ after(async () => { await vite.close(); });
 
 const identityModulePromise = vite.ssrLoadModule("/lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts");
 const entrySource = await readFile(new URL("../lib/dp2-v1-engine.ts", import.meta.url), "utf8");
+const autoSource = await readFile(new URL("../lib/dp2-google-solar-engine.ts", import.meta.url), "utf8");
 const engineSource = await readFile(new URL("../lib/dp2-roof-designer-engine.ts", import.meta.url), "utf8");
 const identitySource = await readFile(new URL("../lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts", import.meta.url), "utf8");
 const metricSource = await readFile(new URL("../lib/dp-ai-engine/geometry/metricSurfaceFromIdentity.ts", import.meta.url), "utf8");
@@ -106,15 +107,17 @@ test("cross-view engine refuses a match supported by fewer than two independent 
   assert.ok(issues.some((issue) => issue.includes("indices visuels")));
 });
 
-test("cross-view identity remains reusable QA but DP2 metric geometry now comes from reviewed Roof Designer", () => {
+test("cross-view identity remains reusable QA while DP2 geometry is Google Solar first with reviewed Roof Designer fallback", () => {
   assert.match(routeSource, /@\/lib\/dp2-v1-engine/);
-  assert.match(entrySource, /dp2-roof-designer-engine/);
+  assert.match(entrySource, /dp2-google-solar-engine/);
+  assert.match(autoSource, /fetchGoogleSolarBuildingInsights/);
+  assert.match(autoSource, /generateRoofDesignerDp2/);
   assert.match(identitySource, /cross_view_surface_identity/);
   assert.match(identitySource, /validateCrossViewSurfaceIdentity/);
   assert.match(metricSource, /metricSurfaceFromIdentity/);
-  assert.doesNotMatch(engineSource, /resolveCrossViewSurfaceIdentity/);
-  assert.doesNotMatch(engineSource, /metricSurfaceFromIdentity/);
-  assert.doesNotMatch(engineSource, /buildAutomaticSiteModelFromParcel/);
+  assert.doesNotMatch(autoSource, /resolveCrossViewSurfaceIdentity/);
+  assert.doesNotMatch(autoSource, /metricSurfaceFromIdentity/);
+  assert.doesNotMatch(autoSource, /buildAutomaticSiteModelFromParcel/);
   assert.match(engineSource, /metricSurfaceFromManualRoofDesign/);
   assert.match(engineSource, /resolveProjectLayout/);
 });
