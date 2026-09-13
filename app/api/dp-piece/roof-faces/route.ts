@@ -114,38 +114,38 @@ export async function POST(request: Request) {
     const frame = frameAroundTarget(target);
     const raster = await fetchIgnRaster(
       orthophotoCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "Sélecteur des pans compatibles du bâtiment adressé", minBytes: 2_000, required: true },
+      { purpose: "Inventaire des pans physiques du bâtiment adressé", minBytes: 2_000, required: true },
     );
     if (!raster) throw new Error("La vue aérienne IGN rapprochée n'a pas pu être chargée.");
 
-    const compatible = [] as Array<{
-      originalSegmentIndex: number;
-      buildingId: string;
-      centerNormalized: { x: number; y: number };
-      areaMeters2: number;
-      panelCellCount: number;
-      pitchDegrees: number;
-      azimuthDegrees: number;
-    }>;
+    const physicalFaces = listGoogleSolarFaces(target.solar)
+      .map((face) => {
+        const faceBuilding = buildingForGoogleSolarFace(target.solar, face.originalSegmentIndex, target);
+        if (!faceBuilding) return null;
 
-    for (const face of listGoogleSolarFaces(target.solar)) {
-      const faceBuilding = buildingForGoogleSolarFace(target.solar, face.originalSegmentIndex, target);
-      if (!faceBuilding) continue;
-      try {
-        const selected = selectGoogleSolarFaceBySegmentIndex(target.solar, face.originalSegmentIndex);
-        automaticRoofDesignFromGoogleSolar({
-          insights: selected.insights,
-          frame,
-          requestedRows: rows,
-          requestedColumns: columns,
-          requestedOrientation: orientation,
-          moduleWidthMeters: moduleSpec.widthMm / 1000,
-          moduleHeightMeters: moduleSpec.heightMm / 1000,
-          interPanelGapMeters,
-          placement,
-        });
+        let compatible = true;
+        let incompatibilityReason = "";
+        try {
+          const selected = selectGoogleSolarFaceBySegmentIndex(target.solar, face.originalSegmentIndex);
+          automaticRoofDesignFromGoogleSolar({
+            insights: selected.insights,
+            frame,
+            requestedRows: rows,
+            requestedColumns: columns,
+            requestedOrientation: orientation,
+            moduleWidthMeters: moduleSpec.widthMm / 1000,
+            moduleHeightMeters: moduleSpec.heightMm / 1000,
+            interPanelGapMeters,
+            placement,
+          });
+        } catch (error) {
+          compatible = false;
+          incompatibilityReason = error instanceof Error
+            ? error.message
+            : `La configuration ${rows} × ${columns} ne tient pas sur ce pan.`;
+        }
 
-        compatible.push({
+        return {
           originalSegmentIndex: face.originalSegmentIndex,
           buildingId: faceBuilding.id,
           centerNormalized: normalizedGeoPoint(face.segment.center, frame),
@@ -153,36 +153,36 @@ export async function POST(request: Request) {
           panelCellCount: face.panelCount,
           pitchDegrees: Number(face.segment.pitchDegrees),
           azimuthDegrees: Number(face.segment.azimuthDegrees),
-        });
-      } catch {
-        // This physical pan exists on the addressed house but cannot host this
-        // exact module/configuration. DP3 is deliberately NOT a selector gate.
-      }
-    }
-
-    const faces = compatible
-      .sort((a, b) => b.areaMeters2 - a.areaMeters2 || a.originalSegmentIndex - b.originalSegmentIndex)
-      .map((face, index) => {
-        const displayFaceId = String.fromCharCode(65 + index);
-        const id = encodeRoofFaceSelectionToken({
-          displayFaceId,
-          originalSegmentIndex: face.originalSegmentIndex,
-          buildingId: face.buildingId,
-        });
-        return {
-          ...face,
-          id,
-          displayFaceId,
-          label: `Pan ${displayFaceId}`,
-          stableKey: `${face.buildingId}:${face.originalSegmentIndex}`,
+          compatible,
+          incompatibilityReason,
         };
+      })
+      .filter((face): face is NonNullable<typeof face> => Boolean(face))
+      .sort((a, b) => b.areaMeters2 - a.areaMeters2 || a.originalSegmentIndex - b.originalSegmentIndex);
+
+    const faces = physicalFaces.map((face, index) => {
+      const displayFaceId = String.fromCharCode(65 + index);
+      const id = encodeRoofFaceSelectionToken({
+        displayFaceId,
+        originalSegmentIndex: face.originalSegmentIndex,
+        buildingId: face.buildingId,
       });
+      return {
+        ...face,
+        id,
+        displayFaceId,
+        label: `Pan ${displayFaceId}`,
+        stableKey: `${face.buildingId}:${face.originalSegmentIndex}`,
+      };
+    });
 
     if (!faces.length) {
       return Response.json({
-        error: `Aucun pan de la maison correspondant à l'adresse ne peut accueillir automatiquement la configuration ${rows} × ${columns} avec le module ${moduleSpec.canonicalReference}.`,
+        error: "Aucun pan physique de la maison ciblée n'a pu être démontré. PilotPaper refuse de remplacer la toiture par une estimation inventée.",
       }, { status: 409 });
     }
+
+    const compatibleFaceCount = faces.filter((face) => face.compatible).length;
 
     return Response.json({
       imageDataUrl: `data:${raster.mimeType};base64,${raster.base64}`,
@@ -193,6 +193,8 @@ export async function POST(request: Request) {
       parcelReference: target.parcel.parcelReference,
       buildingId: target.building.id,
       buildingIds: target.buildings.map((building) => building.id),
+      physicalFaceCount: faces.length,
+      compatibleFaceCount,
       configuration: {
         moduleReference: moduleSpec.canonicalReference,
         panelCount,
@@ -203,9 +205,9 @@ export async function POST(request: Request) {
       faces,
     }, { headers: { "Cache-Control": "no-store", "X-PilotPaper-Mode": "test_unverified" } });
   } catch (error) {
-    console.error("[dp-piece/roof-faces] compatible roof selector failed", error);
+    console.error("[dp-piece/roof-faces] physical roof inventory failed", error);
     return Response.json({
-      error: error instanceof Error ? error.message : "La détection des pans compatibles a échoué.",
+      error: error instanceof Error ? error.message : "La détection des pans physiques a échoué.",
     }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
 }
