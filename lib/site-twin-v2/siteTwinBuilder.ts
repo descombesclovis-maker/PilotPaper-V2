@@ -6,6 +6,7 @@ import { assertTwinReadyForAutomaticDocuments } from "./policy";
 import { SiteTwinError, asSiteTwinError } from "./errors";
 import { downloadGoogleGeoTiff, fetchGoogleSolarDataLayers } from "./googleSolarDataLayers";
 import { discoverIgnCopcTiles, sampleIgnLidarSurface } from "./ignLidar";
+import { sampleIgnTerrainElevation } from "./ignTerrain";
 import { checkGooglePhotorealistic3dTiles } from "./googlePhotorealistic3d";
 import {
   checkGeometryEngine,
@@ -38,8 +39,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
   let googleRgb: Uint8Array | undefined;
   let lidarReference: string | undefined;
 
-  // 1) Best automatic source when available: Google's metric DSM at the
-  // highest supported dataLayers resolution. BuildingInsights is NOT used here.
   try {
     googleLayers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 45, pixelSizeMeters: 0.1 });
     const dsm = await downloadGoogleGeoTiff(googleLayers.dsmUrl, "DSM");
@@ -56,8 +55,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
     failures.push(`Google DSM : ${error instanceof Error ? error.message : "échec inconnu"}`);
   }
 
-  // 2) IGN LiDAR HD COPC: PDAL streams only the small crop around the locked
-  // building, rather than downloading a whole 1 km tile.
   if (!geometry) {
     try {
       const tiles = await discoverIgnCopcTiles(property);
@@ -73,8 +70,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
     }
   }
 
-  // 3) IGN MNX service: 50 cm-ish sampling over the locked building. This is
-  // slower/less dense than COPC but remains metric and needs no huge download.
   if (!geometry) {
     try {
       const samples = await sampleIgnLidarSurface(property);
@@ -101,10 +96,8 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
 }
 
 /**
- * Canonical Site Twin V2 builder.
- *
- * PV configuration is deliberately NOT an input. Physical roof detection
- * happens once and cannot change because the user asks for 8, 12 or 24 modules.
+ * Canonical Site Twin V2 builder. PV configuration is deliberately NOT an
+ * input: changing the requested modules can never change physical roof truth.
  */
 export async function buildSiteTwin(address: string): Promise<SiteTwin> {
   const property = await lockSiteTwinProperty(address).catch((error) => {
@@ -120,11 +113,12 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     );
   }
 
-  const { geometry, googleLayers, lidarReference, failures } = await reconstructMetricRoof(property);
+  const [{ geometry, googleLayers, lidarReference, failures }, terrainElevationM] = await Promise.all([
+    reconstructMetricRoof(property),
+    sampleIgnTerrainElevation(property),
+  ]);
   const [longitude, latitude] = property.addressPoint;
 
-  // Google BuildingInsights is now only a cross-check. It cannot delete or
-  // create canonical physical faces reconstructed from elevation evidence.
   let crossCheckNotes: string[] = [];
   try {
     const solar = await fetchGoogleSolarBuildingInsights({ latitude, longitude });
@@ -164,6 +158,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
         `Moteur géométrique : ${geometry.engineVersion}.`,
         ...geometry.diagnostics,
         ...crossCheckNotes,
+        ...(terrainElevationM != null ? [`Terrain IGN MNT : ${terrainElevationM.toFixed(2)} m.`] : ["Terrain MNT non disponible : DP3 métrique devra refuser toute hauteur inventée."]),
         ...(failures.length ? [`Sources essayées avant succès : ${failures.join(" | ")}`] : []),
       ],
     ),
@@ -199,6 +194,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     sources: {
       lidar: geometry.source === "ign-lidar" || geometry.source === "ign-mns" ? "available" : "not-checked",
       lidarReference,
+      terrainElevationM,
       orthoReference: googleLayers?.rgbUrl ? "Google Solar RGB dataLayer" : undefined,
       googleSolarBuildingCenter: property.addressPoint,
       googleDsmReference: googleLayers?.dsmUrl,
