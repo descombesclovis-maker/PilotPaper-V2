@@ -1,7 +1,7 @@
 import { configFromEnv, type EngineConfig } from "./config";
 import { OpenAIVisionAnalyzer } from "./providers/openaiVision";
 import { TestFallbackVisionAnalyzer } from "./providers/testFallbackVision";
-import { OpenAIImageEditor } from "./providers/openaiImage";
+import { OpenAISemanticImageEditor } from "./providers/openaiSemanticImage";
 import { GeminiImageEditor } from "./providers/geminiImage";
 import { OpenAIQualityJudge } from "./providers/openaiJudge";
 import { OpenAICrossPieceJudge } from "./providers/openaiCrossPieceJudge";
@@ -11,16 +11,20 @@ import { OpenAIEnvironmentPhotoJudge } from "./providers/openaiEnvironmentPhotoJ
 
 export function createDPAIEngine(config: EngineConfig = configFromEnv()): DPAIEngine {
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY is required for analysis and QA");
-  // The local launcher asks for zero retries, but dp-ai-gate intentionally clamps
-  // that value to 1. Treat <=1 as the host's explicit fast-test contract so the
-  // fallback cannot be lost inside the Cloudflare/Vite worker environment.
   const fastTest = config.testFast === true || config.maxRetries <= 1;
   const strictAnalyzer = new OpenAIVisionAnalyzer(config.openaiApiKey, config.analysisModel);
   const analyzer = fastTest ? new TestFallbackVisionAnalyzer(strictAnalyzer) : strictAnalyzer;
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);
+
+  // Visual DP pieces use the same semantic full-photo editing behavior expected
+  // from ChatGPT image editing. Geometry remains authoritative for calculations
+  // and QA, but a bad precomputed mask can no longer force a bad render.
   const editor = config.imageProvider === "gemini"
-    ? (() => { if (!config.geminiApiKey) throw new Error("GEMINI_API_KEY is required when DP_IMAGE_PROVIDER=gemini"); return new GeminiImageEditor(config.geminiApiKey); })()
-    : new OpenAIImageEditor(config.openaiApiKey, config.imageModel);
+    ? (() => {
+        if (!config.geminiApiKey) throw new Error("GEMINI_API_KEY is required when DP_IMAGE_PROVIDER=gemini");
+        return new GeminiImageEditor(config.geminiApiKey);
+      })()
+    : new OpenAISemanticImageEditor(config.openaiApiKey, config.imageModel);
 
   if (fastTest) {
     return new DPAIEngine(
