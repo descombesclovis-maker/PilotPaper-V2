@@ -57,6 +57,26 @@ function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | unde
   };
 }
 
+async function generatePiece(input: PhysicalDpPieceInput) {
+  switch (input.dp) {
+    case 1:
+      return generateDp1Piece(input);
+    case 2:
+      return generateDirectChatGptDp({ ...input, dp: 2 });
+    case 3:
+      return generateDirectChatGptDp({ ...input, dp: 3 });
+    case 4:
+      return generateDirectChatGptDp({ ...input, dp: 4 });
+    case 5:
+      return generateDirectChatGptDp({ ...input, dp: 5 });
+    case 6:
+      return generateDirectChatGptDp({ ...input, dp: 6 });
+    case 7:
+    case 8:
+      return generateDpPiece(input);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const rawInput = await request.json() as DpPieceInput;
@@ -64,23 +84,16 @@ export async function POST(request: Request) {
     // call. This removes malformed JPEG/WebP containers from the image path.
     const evidenceSafeInput = await normalizeEvidence(rawInput);
     const input = normalizeRoofSelection(evidenceSafeInput);
-
-    const generated = input.dp === 1
-      ? await generateDp1Piece(input)
-      : input.dp === 2
-        ? await generateDirectChatGptDp({ ...input, dp: 2 })
-        : input.dp === 3
-          ? await generateDirectChatGptDp({ ...input, dp: 3 })
-          : await generateDpPiece(input);
-
+    const generated = await generatePiece(input);
     const result = hideInternalRoofToken(generated, rawInput.roofFace);
+    const directImagePath = input.dp >= 2 && input.dp <= 6;
 
     return Response.json(result, {
       headers: {
         "Cache-Control": "no-store",
         "X-PilotPaper-Mode": "test_unverified",
         "X-PilotPaper-Piece": `DP${result.dp}`,
-        "X-PilotPaper-Image-Path": input.dp === 2 || input.dp === 3 ? "chatgpt-direct" : "default",
+        "X-PilotPaper-Image-Path": directImagePath ? "chatgpt-direct" : "default",
       },
     });
   } catch (error) {
