@@ -58,10 +58,6 @@ export type SiteTwinObstacle = {
   evidence: SiteTwinEvidence[];
 };
 
-/**
- * One physical roof plane. `id` is stable and must NEVER depend on display
- * lettering or on the requested PV configuration.
- */
 export type SiteTwinRoofFace = {
   id: string;
   displayLabel: string;
@@ -91,14 +87,12 @@ export type SiteTwinPhoto = {
   mimeType: "image/jpeg" | "image/png" | "image/webp";
   widthPx: number;
   heightPx: number;
-  /** SHA-256 of normalized image bytes. */
   digest: string;
 };
 
 export type SiteTwinCameraRegistration = {
   photoId: string;
   status: "unregistered" | "automatic" | "confirmed" | "manual";
-  /** 3x3 homography from one selected roof plane to the normalized photo. */
   homography?: [number, number, number, number, number, number, number, number, number];
   reprojectionErrorPx?: number;
   evidence: SiteTwinEvidence[];
@@ -107,6 +101,7 @@ export type SiteTwinCameraRegistration = {
 export type SiteTwinSources = {
   lidar: "available" | "unavailable" | "not-checked";
   lidarReference?: string;
+  terrainElevationM?: number;
   orthoReference?: string;
   googleSolarBuildingCenter?: TwinLonLat;
   googleDsmReference?: string;
@@ -131,7 +126,6 @@ export type SiteTwin = {
   sources: SiteTwinSources;
   evidence: SiteTwinEvidence[];
   confidence: number;
-  /** Changes only when the physical site model changes. */
   revision: number;
 };
 
@@ -148,10 +142,6 @@ export type PvConfiguration = {
   placement: "centered" | "left" | "right" | "custom";
 };
 
-/**
- * Eligibility is deliberately separate from roof detection. A real roof face
- * must remain visible even when the current PV configuration does not fit.
- */
 export type PvFaceEligibility = {
   faceId: string;
   fits: boolean;
