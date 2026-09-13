@@ -1,5 +1,5 @@
 import type { ImageEditor } from "./interfaces";
-import type { GeneratedAsset, InputPhoto } from "../types";
+import type { DPNumber, GeneratedAsset, InputPhoto } from "../types";
 
 function base64ToBlob(base64: string, mime: string): Blob {
   return new Blob([Buffer.from(base64, "base64")], { type: mime });
@@ -11,9 +11,15 @@ function extension(mimeType: string) {
   return "png";
 }
 
-function chooseBasePhoto(photos: InputPhoto[]) {
-  const order: InputPhoto["role"][] = ["roof", "near", "front", "left_oblique", "right_oblique", "far"];
-  for (const role of order) {
+function sourceOrder(dp: DPNumber): InputPhoto["role"][] {
+  if (dp === 2) return ["satellite_mass", "satellite", "roof", "near", "front", "left_oblique", "right_oblique", "far"];
+  if (dp === 3) return ["roof", "near", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite", "far"];
+  if (dp === 4 || dp === 5 || dp === 6) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
+  return ["near", "roof", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
+}
+
+function chooseBasePhoto(dp: DPNumber, photos: InputPhoto[]) {
+  for (const role of sourceOrder(dp)) {
     const match = photos.find((photo) => photo.role === role);
     if (match) return match;
   }
@@ -21,11 +27,10 @@ function chooseBasePhoto(photos: InputPhoto[]) {
 }
 
 /**
- * Direct semantic image editor: this is deliberately the same product behavior
- * expected from ChatGPT image editing. The real project photograph is supplied
- * intact and the image model is allowed to understand the roof and render the
- * requested installation from semantic constraints. No precomputed module mask
- * is required, so a bad upstream projection can no longer force a bad render.
+ * Direct semantic image editor: same product behavior expected from ChatGPT
+ * image editing. The complete real source image is supplied intact and GPT
+ * Image is allowed to understand the site before rendering the requested DP
+ * visual. No precomputed mask can force a wrong placement.
  */
 export class OpenAISemanticImageEditor implements ImageEditor {
   constructor(
@@ -34,26 +39,21 @@ export class OpenAISemanticImageEditor implements ImageEditor {
   ) {}
 
   async edit({ dp, photos, prompt, previous }: Parameters<ImageEditor["edit"]>[0]): Promise<GeneratedAsset> {
-    if (!photos.length) throw new Error("ChatGPT Image direct requires at least one project photograph.");
-    const base = chooseBasePhoto(photos);
-    if (!base) throw new Error("No editable project photograph was found.");
+    if (!photos.length) throw new Error("ChatGPT Image direct requires at least one project image.");
+    const base = chooseBasePhoto(dp, photos);
+    if (!base) throw new Error("No editable project image was found.");
 
     const data = new FormData();
     data.set("model", this.model);
     data.set("prompt", prompt);
     data.set("quality", "high");
 
-    // First image is the real scene to edit. Do not send a geometric mask here:
-    // the model must be able to reason about the complete roof, roof windows,
-    // chimneys, vents, ridges and usable free areas exactly as ChatGPT does.
     data.append(
       "image[]",
       base64ToBlob(base.base64, base.mimeType),
       base.filename ?? `project-${base.role}.${extension(base.mimeType)}`,
     );
 
-    // Other real views are references only; they help disambiguate obstacles and
-    // the building while keeping the first photograph as the editable scene.
     for (const photo of photos.filter((photo) => photo !== base).slice(0, 3)) {
       data.append(
         "image[]",
@@ -62,8 +62,6 @@ export class OpenAISemanticImageEditor implements ImageEditor {
       );
     }
 
-    // A failed candidate can be supplied as an additional visual reference when
-    // QA asks for a correction, but it never replaces the original scene.
     if (previous?.base64) {
       data.append("image[]", base64ToBlob(previous.base64, previous.mimeType), "previous-candidate.png");
     }
