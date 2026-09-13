@@ -8,7 +8,12 @@ export type SiteTwinEvidenceSource =
   | "bdtopo"
   | "ign-ortho"
   | "ign-lidar-hd"
+  | "ign-mns"
   | "google-solar"
+  | "google-solar-dsm"
+  | "google-3d-tiles"
+  | "photogrammetry"
+  | "lightglue"
   | "user-photo"
   | "vision"
   | "user-correction";
@@ -104,6 +109,11 @@ export type SiteTwinSources = {
   lidarReference?: string;
   orthoReference?: string;
   googleSolarBuildingCenter?: TwinLonLat;
+  googleDsmReference?: string;
+  google3dTilesReference?: string;
+  photogrammetryReference?: string;
+  geometryEngineVersion?: string;
+  geometryPrimarySource?: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry";
 };
 
 export type SiteTwin = {
