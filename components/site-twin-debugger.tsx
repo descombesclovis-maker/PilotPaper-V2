@@ -56,8 +56,8 @@ export function SiteTwinDebugger() {
   const [address, setAddress] = useState("");
   const [result, setResult] = useState<SiteTwinLayoutResponse>();
   const [loading, setLoading] = useState(false);
-  const faces = result?.siteTwin?.roof.faces ?? [];
-  const modules = result?.layout?.modules ?? [];
+  const faces = useMemo(() => result?.siteTwin?.roof.faces ?? [], [result?.siteTwin?.roof.faces]);
+  const modules = useMemo(() => result?.layout?.modules ?? [], [result?.layout?.modules]);
   const drawing = useMemo(() => svgGeometry(faces, modules), [faces, modules]);
   const eligibility = new Map((result?.layout?.eligibility ?? []).map((entry) => [entry.faceId, entry]));
   const selected = new Set(result?.layout?.selectedFaceIds ?? []);
@@ -98,7 +98,7 @@ export function SiteTwinDebugger() {
             <ShieldCheck className="size-4" /> Site Twin V2 · validation interne
           </div>
           <p className="mt-2 max-w-3xl text-sm text-zinc-600">
-            Vérifie d'abord la maison et tous ses pans physiques. Aucune DP ne doit reconstruire une autre géométrie ensuite.
+            Vérifie d&apos;abord la maison et tous ses pans physiques. Aucune DP ne doit reconstruire une autre géométrie ensuite.
           </p>
         </div>
         {result?.siteTwin && (
@@ -168,8 +168,8 @@ export function SiteTwinDebugger() {
                   </g>
                 );
               })}
-              {modules.map((module) => (
-                <polygon key={module.moduleIndex} points={drawing.polygon(module.polygonLocalM)} fill="rgba(14,116,144,.70)" stroke="white" strokeWidth="1" />
+              {modules.map((placedModule) => (
+                <polygon key={placedModule.moduleIndex} points={drawing.polygon(placedModule.polygonLocalM)} fill="rgba(14,116,144,.70)" stroke="white" strokeWidth="1" />
               ))}
             </svg>
           </div>
