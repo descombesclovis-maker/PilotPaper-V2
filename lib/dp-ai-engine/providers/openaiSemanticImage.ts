@@ -14,7 +14,8 @@ function extension(mimeType: string) {
 function sourceOrder(dp: DPNumber): InputPhoto["role"][] {
   if (dp === 2) return ["satellite_mass", "satellite", "roof", "near", "front", "left_oblique", "right_oblique", "far"];
   if (dp === 3) return ["roof", "near", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite", "far"];
-  if (dp === 4 || dp === 5 || dp === 6) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
+  if (dp === 6) return ["far", "near", "roof", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite"];
+  if (dp === 4 || dp === 5) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
   return ["near", "roof", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
 }
 
@@ -33,6 +34,8 @@ function chooseBasePhoto(dp: DPNumber, photos: InputPhoto[]) {
  * visual. No precomputed mask can force a wrong placement.
  */
 export class OpenAISemanticImageEditor implements ImageEditor {
+  readonly mode = "semantic-direct" as const;
+
   constructor(
     private apiKey: string,
     private model = "gpt-image-2",
