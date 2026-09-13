@@ -13,6 +13,8 @@ const IMAGE_WIDTH = 1400;
 const IMAGE_HEIGHT = 1000;
 const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
 
+type DirectDpNumber = 2 | 3 | 4 | 5 | 6;
+
 function positiveInteger(value: unknown, label: string) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} doit être un entier positif.`);
@@ -163,6 +165,23 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   return { form, context };
 }
 
+function validatePhotoEvidence(dp: DirectDpNumber, userPhotos: InputPhoto[]) {
+  const has = (...roles: InputPhoto["role"][]) => userPhotos.some((photo) => roles.includes(photo.role));
+  if (dp === 2) return;
+  if (dp === 3 && !has("roof", "near")) {
+    throw new Error("DP3 ChatGPT Image : ajoutez au minimum une vue toiture ou une vue proche du bâtiment.");
+  }
+  if (dp === 4 && !has("roof", "near", "front", "left_oblique", "right_oblique")) {
+    throw new Error("DP4 ChatGPT Image : une vue réelle lisible de la façade/toiture est requise.");
+  }
+  if (dp === 5 && !has("roof", "near")) {
+    throw new Error("DP5 ChatGPT Image : une vue toiture ou une vue proche est requise pour représenter l'aspect extérieur.");
+  }
+  if (dp === 6 && !has("far")) {
+    throw new Error("DP6 ChatGPT Image : une vue lointaine réelle est requise pour l'insertion dans l'environnement.");
+  }
+}
+
 function inspector(quality: QualityReport) {
   return {
     passed: quality.passed,
@@ -178,11 +197,13 @@ function inspector(quality: QualityReport) {
   };
 }
 
-export async function generateDirectChatGptDp(input: DpPieceInput & { dp: 2 | 3 }): Promise<DpPieceOutput> {
+export async function generateDirectChatGptDp(input: DpPieceInput & { dp: DirectDpNumber }): Promise<DpPieceOutput> {
   const contract = getDpPieceContract(input.dp);
   if (!contract) throw new Error(`Contrat DP${input.dp} introuvable.`);
   if (!input.address?.trim()) throw new Error("L'adresse exacte du projet est requise.");
 
+  // Property identity remains deterministic even though the visual rendering is
+  // deliberately delegated to ChatGPT Image.
   const property = await lockSiteTwinProperty(input.address);
   const [longitude, latitude] = property.addressPoint;
   const parcelReference = property.parcel.reference;
@@ -191,15 +212,13 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: 2 | 3 
   // The API route is the single normalization gate. At this point every user
   // image is already a decoded/re-encoded canonical JPEG.
   const userPhotos: InputPhoto[] = (input.photos ?? []).map((photo) => ({ ...photo }));
+  validatePhotoEvidence(input.dp, userPhotos);
+
   const [situation, mass] = await Promise.all([
     fetchIgnImage("satellite", longitude, latitude),
     fetchIgnImage("satellite_mass", longitude, latitude),
   ]);
   const photos: InputPhoto[] = [situation, mass, ...userPhotos];
-
-  if (input.dp === 3 && !userPhotos.some((photo) => photo.role === "roof" || photo.role === "near")) {
-    throw new Error("DP3 ChatGPT Image : ajoutez au minimum une vue toiture ou une vue proche du bâtiment.");
-  }
 
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
