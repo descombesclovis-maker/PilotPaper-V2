@@ -57,7 +57,7 @@ function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | unde
   };
 }
 
-async function generatePiece(input: PhysicalDpPieceInput) {
+async function generatePiece(input: PhysicalDpPieceInput): Promise<DpPieceOutput> {
   switch (input.dp) {
     case 1:
       return generateDp1Piece(input);
@@ -74,6 +74,8 @@ async function generatePiece(input: PhysicalDpPieceInput) {
     case 7:
     case 8:
       return generateDpPiece(input);
+    default:
+      throw new Error(`Numéro de pièce DP non pris en charge : ${String((input as { dp?: unknown }).dp)}.`);
   }
 }
 
