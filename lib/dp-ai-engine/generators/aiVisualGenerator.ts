@@ -69,6 +69,7 @@ export class AIVisualGenerator {
     let bestAsset: GeneratedAsset | undefined;
     let bestReport: QualityReport | undefined;
     const orderedPhotos = prioritizePhotos(dp, photos, context);
+    const semanticDirect = (this.editor as ImageEditor & { mode?: string }).mode === "semantic-direct";
 
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
       const prompt = dpImagePrompt(dp, context, correction);
@@ -81,25 +82,25 @@ export class AIVisualGenerator {
         return { asset, quality: unverifiedTestQuality(dp) };
       }
 
-      // Independent deterministic inspector runs before any model judgement.
-      // A structural/pixel-preservation failure is not something another AI
-      // rendering attempt can safely repair, so fail closed without wasting calls.
-      const deterministic = inspectGeneratedVisualDeterministically({
-        context,
-        originalPhotos: orderedPhotos,
-        generated: asset,
-      });
-      if (!deterministic.passed) {
-        return { asset, quality: deterministicFailureQuality(dp, deterministic) };
+      // The historical deterministic inspector compares every pixel outside a
+      // precomputed module mask. That is valid only for the legacy masked editor.
+      // Direct ChatGPT Image intentionally edits the complete photograph, so its
+      // candidate is instead checked by the independent semantic/visual judge.
+      if (!semanticDirect) {
+        const deterministic = inspectGeneratedVisualDeterministically({
+          context,
+          originalPhotos: orderedPhotos,
+          generated: asset,
+        });
+        if (!deterministic.passed) {
+          return { asset, quality: deterministicFailureQuality(dp, deterministic) };
+        }
       }
 
       let report: QualityReport;
       try {
         report = await this.judge.judge({ dp, form, context, originalPhotos: orderedPhotos, generated: asset });
       } catch (error) {
-        // A judge outage must never destroy an image that was successfully
-        // generated. Production can still reject the failed quality report at
-        // the API gate, while the real image remains available for test export.
         return {
           asset,
           quality: {
