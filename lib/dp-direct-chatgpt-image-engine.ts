@@ -7,7 +7,6 @@ import type { DpPieceInput, DpPieceOutput } from "@/lib/dp-piece-engine";
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 import { lockSiteTwinProperty } from "@/lib/site-twin-v2/propertyLock";
-import { normalizeServerPhotos } from "@/lib/site-twin-v2/serverPhotoNormalizer";
 
 const IGN_WMS_ENDPOINT = "https://data.geopf.fr/wms-r/wms";
 const IMAGE_WIDTH = 1400;
@@ -184,21 +183,21 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: 2 | 3 
   if (!contract) throw new Error(`Contrat DP${input.dp} introuvable.`);
   if (!input.address?.trim()) throw new Error("L'adresse exacte du projet est requise.");
 
-  // Property identity is deterministic; ChatGPT Image is never allowed to pick
-  // another parcel or another house.
   const property = await lockSiteTwinProperty(input.address);
   const [longitude, latitude] = property.addressPoint;
   const parcelReference = property.parcel.reference;
   const { form, context } = buildFormAndContext(input, property.normalizedAddress, parcelReference);
 
-  const normalizedUserPhotos = await normalizeServerPhotos(input.photos);
+  // The API route is the single normalization gate. At this point every user
+  // image is already a decoded/re-encoded canonical JPEG.
+  const userPhotos: InputPhoto[] = (input.photos ?? []).map((photo) => ({ ...photo }));
   const [situation, mass] = await Promise.all([
     fetchIgnImage("satellite", longitude, latitude),
     fetchIgnImage("satellite_mass", longitude, latitude),
   ]);
-  const photos: InputPhoto[] = [situation, mass, ...normalizedUserPhotos];
+  const photos: InputPhoto[] = [situation, mass, ...userPhotos];
 
-  if (input.dp === 3 && !normalizedUserPhotos.some((photo) => photo.role === "roof" || photo.role === "near")) {
+  if (input.dp === 3 && !userPhotos.some((photo) => photo.role === "roof" || photo.role === "near")) {
     throw new Error("DP3 ChatGPT Image : ajoutez au minimum une vue toiture ou une vue proche du bâtiment.");
   }
 
