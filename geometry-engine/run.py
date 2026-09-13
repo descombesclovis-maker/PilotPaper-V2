@@ -5,6 +5,9 @@ import os
 import uvicorn
 
 from main import app
+from photo_api import router as photo_router
+
+app.include_router(photo_router)
 
 
 if __name__ == "__main__":
