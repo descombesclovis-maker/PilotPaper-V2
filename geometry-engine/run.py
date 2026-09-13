@@ -6,8 +6,10 @@ import uvicorn
 
 from main import app
 from photo_api import router as photo_router
+from photogrammetry_api import router as photogrammetry_router
 
 app.include_router(photo_router)
+app.include_router(photogrammetry_router)
 
 
 if __name__ == "__main__":
