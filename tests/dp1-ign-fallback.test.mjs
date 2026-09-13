@@ -64,7 +64,7 @@ test("DP1 inspector fails closed unless official parcel geometry can be represen
 });
 
 test("isolated API routes DP1 through the hardened engine", () => {
-  assert.match(route, /input\.dp === 1/);
-  assert.match(route, /generateDp1Piece/);
+  assert.match(route, /case 1:/);
+  assert.match(route, /return generateDp1Piece\(input\)/);
   assert.match(route, /generateDpPiece/);
 });
