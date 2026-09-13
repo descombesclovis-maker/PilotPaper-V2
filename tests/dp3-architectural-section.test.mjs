@@ -98,7 +98,7 @@ test("an L-shaped building is cut through the selected wing instead of its bound
 });
 
 test("isolated DP3 now uses direct ChatGPT Image with real building photos and refuses invented dimensions", () => {
-  assert.match(route, /input\.dp === 3/);
+  assert.match(route, /case 3:/);
   assert.match(route, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 3 \}\)/);
   assert.doesNotMatch(route, /generateDp3Piece/);
 
