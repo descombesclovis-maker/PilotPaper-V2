@@ -68,24 +68,20 @@ export class AIVisualGenerator {
     let lastReport: QualityReport | undefined;
     let bestAsset: GeneratedAsset | undefined;
     let bestReport: QualityReport | undefined;
-    const orderedPhotos = prioritizePhotos(dp, photos, context);
     const semanticDirect = (this.editor as ImageEditor & { mode?: string }).mode === "semantic-direct";
+    // The legacy selector intentionally removed satellite evidence. Direct GPT
+    // editing must receive the complete evidence set so DP2 can actually see the
+    // IGN mass plan and other pieces can use every useful reference image.
+    const orderedPhotos = semanticDirect ? [...photos] : prioritizePhotos(dp, photos, context);
 
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
       const prompt = dpImagePrompt(dp, context, correction);
       const asset = await this.editor.edit({ dp, context, photos: orderedPhotos, prompt, previous });
 
-      // Local test contract: once OpenAI has actually returned an image, never
-      // discard that paid result because of a downstream QA judgement. The file
-      // remains explicitly unverified and production keeps the strict path.
       if (this.acceptFirstResult) {
         return { asset, quality: unverifiedTestQuality(dp) };
       }
 
-      // The historical deterministic inspector compares every pixel outside a
-      // precomputed module mask. That is valid only for the legacy masked editor.
-      // Direct ChatGPT Image intentionally edits the complete photograph, so its
-      // candidate is instead checked by the independent semantic/visual judge.
       if (!semanticDirect) {
         const deterministic = inspectGeneratedVisualDeterministically({
           context,
