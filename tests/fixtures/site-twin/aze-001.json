@@ -1,0 +1,27 @@
+{
+  "id": "AZE-001",
+  "address": "110 Rue Basse, 71260 Azé",
+  "purpose": "Regression for the real L-shaped house that previously lost physical roof faces when the selector filtered by 2x6 PV compatibility.",
+  "expectations": {
+    "parcelReferenceObserved": "OC 0212",
+    "minimumPhysicalRoofFaceCount": 4,
+    "incompatiblePhysicalFacesMustRemainVisible": true,
+    "googleBuildingInsightsMustNotDefineCanonicalFaceCount": true,
+    "pvConfigurationMustNotChangePhysicalFaceCount": true,
+    "allDpPiecesMustShareOneSiteTwinRevision": true,
+    "dp3MustUseCanonicalMetricGeometry": true,
+    "dp6MustRequireCameraRegistration": true,
+    "exactPanelCount": 12,
+    "rows": 2,
+    "columns": 6,
+    "orientation": "portrait",
+    "preferredGutterClearanceMm": 300,
+    "preferredGutterClearanceIsHardConstraint": false
+  },
+  "failureHistory": [
+    "Only two compatible Google Solar segments were shown although the physical roof is L-shaped and has additional faces.",
+    "DP3 independently re-resolved the roof and represented the wrong house geometry.",
+    "DP6 received malformed/un-normalized image evidence in at least one test and OpenAI rejected the image payload.",
+    "Different DP pieces were allowed to construct different versions of the same site."
+  ]
+}
