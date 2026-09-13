@@ -3,6 +3,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $StateDir = Join-Path $ProjectRoot ".pilotpaper-runtime"
 $PidFile = Join-Path $StateDir "geometry.pid"
 $LogFile = Join-Path $StateDir "geometry-latest.log"
+$ErrorLogFile = Join-Path $StateDir "geometry-error.log"
 [IO.Directory]::CreateDirectory($StateDir) | Out-Null
 
 function Stop-PreviousGeometryEngine {
@@ -23,7 +24,9 @@ function Wait-ForGeometryEngine {
       if ($Health.ok -eq $true) { return $Health }
     } catch {}
   }
-  throw "PilotPaper Geometry Engine n'est pas pret apres 30 secondes. Consultez $LogFile"
+  $Details = ""
+  if (Test-Path $ErrorLogFile) { $Details = (Get-Content $ErrorLogFile -Tail 20 -ErrorAction SilentlyContinue) -join "`n" }
+  throw "PilotPaper Geometry Engine n'est pas pret apres 30 secondes. $Details"
 }
 
 Stop-PreviousGeometryEngine
@@ -31,10 +34,18 @@ $EmbeddedExe = Join-Path $ProjectRoot "runtime/PilotPaperGeometryEngine.exe"
 $DevExe = Join-Path $ProjectRoot "geometry-engine/dist/PilotPaperGeometryEngine.exe"
 $GeometryRoot = Join-Path $ProjectRoot "geometry-engine"
 
+$CommonStartArgs = @{
+  WorkingDirectory = $ProjectRoot
+  WindowStyle = "Hidden"
+  RedirectStandardOutput = $LogFile
+  RedirectStandardError = $ErrorLogFile
+  PassThru = $true
+}
+
 if (Test-Path $EmbeddedExe) {
-  $Process = Start-Process -FilePath $EmbeddedExe -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile -PassThru
+  $Process = Start-Process -FilePath $EmbeddedExe @CommonStartArgs
 } elseif (Test-Path $DevExe) {
-  $Process = Start-Process -FilePath $DevExe -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile -PassThru
+  $Process = Start-Process -FilePath $DevExe @CommonStartArgs
 } else {
   $Python = Get-Command python.exe -ErrorAction SilentlyContinue
   if (-not $Python) { $Python = Get-Command py.exe -ErrorAction SilentlyContinue }
@@ -50,7 +61,7 @@ if (Test-Path $EmbeddedExe) {
     & $VenvPython -m pip install --disable-pip-version-check -r (Join-Path $GeometryRoot "requirements.txt")
     if ($LASTEXITCODE -ne 0) { throw "Installation des dependances geometriques impossible." }
   }
-  $Process = Start-Process -FilePath $VenvPython -ArgumentList @((Join-Path $GeometryRoot "run.py")) -WorkingDirectory $GeometryRoot -WindowStyle Hidden -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile -PassThru
+  $Process = Start-Process -FilePath $VenvPython -ArgumentList @((Join-Path $GeometryRoot "run.py")) -WorkingDirectory $GeometryRoot -WindowStyle Hidden -RedirectStandardOutput $LogFile -RedirectStandardError $ErrorLogFile -PassThru
 }
 
 [IO.File]::WriteAllText($PidFile, [string]$Process.Id)
