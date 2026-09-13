@@ -46,6 +46,7 @@ FATAL rejection codes include:
 WRONG_PANEL_COUNT, WRONG_FACE_ALLOCATION, ARRAY_CROSSES_RIDGE, ARRAY_CROSSES_HIP, WRONG_ROOF_FACE, ARRAY_OUTSIDE_ALLOCATED_FACE, BUILDING_GEOMETRY_CHANGED, OBSTACLE_REMOVED, SUPPORT_STRUCTURE_CHANGED, INVENTED_DIMENSION, INVENTED_CADASTRAL_GEOMETRY.
 
 For DP4 and DP6, photorealism is a HARD acceptance criterion, not a cosmetic bonus.
+For DP4 and DP6 specifically inspect edge integration around every module, photographic texture match with the source roof, and distance realism: module detail, sharpness, reflections and mounting depth must be plausible for the camera distance.
 Exact millimetric clearance may only be certified from authoritative metric evidence. Never infer millimetres from appearance alone.
 Return only the requested JSON object.`;
 }
