@@ -18,8 +18,8 @@ test("legacy DP2 metric helper stays independent from OpenAI", () => {
 
 test("isolated DP2 now routes through direct ChatGPT Image instead of Roof Designer recovery", () => {
   assert.match(route, /generateDirectChatGptDp/);
-  assert.match(route, /input\.dp === 2/);
-  assert.match(route, /dp: 2/);
+  assert.match(route, /case 2:/);
+  assert.match(route, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 2 \}\)/);
   assert.match(route, /chatgpt-direct/);
   assert.doesNotMatch(route, /generateDp2Piece/);
   assert.doesNotMatch(route, /Dp2RoofDesignerRequiredError/);
