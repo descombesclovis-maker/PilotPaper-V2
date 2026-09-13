@@ -32,6 +32,9 @@ jobs:
       - name: Audit critical production dependencies
         run: npm audit --omit=dev --audit-level=critical
 
+      - name: Validate geometry engine Python syntax
+        run: python -m py_compile geometry-engine/app.py geometry-engine/registration.py
+
       - name: Build production bundle
         run: npm run build
 

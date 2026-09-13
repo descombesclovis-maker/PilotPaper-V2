@@ -28,9 +28,10 @@ export class OpenAIQualityJudge implements QualityJudge {
     const imageDataUrls=[...originalPhotos.map(toDataUrl), candidate];
     let prompt=judgePrompt(dp, form, context);
     const requiresPhotorealism = dp === 4 || dp === 6;
+    const requiresPerspective = ![2, 3].includes(dp);
+    const requiresExactVisibleCount = dp !== 3;
+    const requiresGridShape = dp !== 3;
 
-    // Full-frame inspection can hide seams. For every photorealistic project
-    // insertion, append source/candidate crops around the exact PV geometry.
     if(requiresPhotorealism && generated.sourceRole){
       const base=originalPhotos.find(p=>p.role===generated.sourceRole);
       const polys=allPanelPolygonsForRole(context,generated.sourceRole) ?? [];
@@ -49,13 +50,15 @@ export class OpenAIQualityJudge implements QualityJudge {
     });
 
     const fatalCode = report.issues.some(i => i.severity === "fatal" || [
-      "ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE","ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","SUPPORT_STRUCTURE_CHANGED"
+      "ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE","ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","SUPPORT_STRUCTURE_CHANGED","INVENTED_DIMENSION","INVENTED_CADASTRAL_GEOMETRY"
     ].includes(i.code));
     const hardMismatch =
-      (report.panelCountObserved != null && report.panelCountObserved !== context.exactPanelCount) ||
-      ((context.facePlacements?.length ?? 0) <= 1 && report.rowsObserved != null && report.rowsObserved !== (context.facePlacements?.[0]?.rows ?? context.array.rows)) ||
-      ((context.facePlacements?.length ?? 0) <= 1 && report.columnsObserved != null && report.columnsObserved !== (context.facePlacements?.[0]?.columns ?? context.array.columns)) ||
-      !report.buildingPreserved || !report.perspectiveCoherent || !report.scaleCoherent || !report.placementCoherent ||
+      (requiresExactVisibleCount && report.panelCountObserved != null && report.panelCountObserved !== context.exactPanelCount) ||
+      (requiresGridShape && (context.facePlacements?.length ?? 0) <= 1 && report.rowsObserved != null && report.rowsObserved !== (context.facePlacements?.[0]?.rows ?? context.array.rows)) ||
+      (requiresGridShape && (context.facePlacements?.length ?? 0) <= 1 && report.columnsObserved != null && report.columnsObserved !== (context.facePlacements?.[0]?.columns ?? context.array.columns)) ||
+      !report.buildingPreserved ||
+      (requiresPerspective && !report.perspectiveCoherent) ||
+      !report.scaleCoherent || !report.placementCoherent ||
       !report.roofFaceCorrect || !report.insideSelectedRoofFace || !report.singleRoofPlane || report.crossesRidge ||
       !report.arrayGeometryConsistent || fatalCode ||
       (requiresPhotorealism && (

@@ -1,0 +1,7 @@
+-r requirements.txt
+# Optional accelerators/adapters. The engine must still start if they are absent.
+open3d>=0.19,<1
+pdal>=3.5,<4
+torch>=2.8,<3
+lightglue @ git+https://github.com/cvg/LightGlue.git
+pycolmap>=3.12,<4

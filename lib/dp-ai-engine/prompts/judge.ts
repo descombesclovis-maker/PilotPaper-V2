@@ -1,41 +1,52 @@
 import type { DPNumber, ProjectContext, ProjectForm } from "../types";
 
-export function judgePrompt(dp:DPNumber,form:ProjectForm,c:ProjectContext):string {
-  const placements=c.facePlacements??[];
+export function judgePrompt(dp: DPNumber, form: ProjectForm, c: ProjectContext): string {
+  const placements = c.facePlacements ?? [];
+  const dpSpecific = dp === 2
+    ? `DP2 SPECIFIC RULES:
+- This is a mass/site plan viewed from above.
+- The real parcel/building/site identity must match the source aerial/cadastral evidence.
+- EXACT total panel count ${c.exactPanelCount} is mandatory.
+- Reject invented roads, parcel boundaries, building footprints or neighbouring structures.
+- Perspective photorealism is NOT required; geographic/site coherence is required.`
+    : dp === 3
+      ? `DP3 SPECIFIC RULES:
+- This is an architectural section, not a perspective photograph.
+- Do NOT require all ${c.exactPanelCount} modules to be individually visible in the cut plane.
+- Do NOT require source-camera perspective; instead require a coherent architectural section.
+- Reject any invented numeric height, slope, setback or dimension that contradicts authoritative facts.
+- The PV field must be represented on the correct roof/support plane without contradicting the real building geometry.`
+      : "";
+
   return `Act as an independent adversarial quality-control inspector for a generated French photovoltaic DP project visual.
 You did NOT generate the candidate. Reject attractive imagery whenever geometry or evidence is wrong.
 
 DP piece: DP${dp}
-Authoritative form: ${JSON.stringify(form,null,2)}
+Authoritative form: ${JSON.stringify(form, null, 2)}
 Computed immutable facts: ${c.immutableFacts.join(" | ")}
 Expected allocations: ${JSON.stringify(placements)}
 
-Check in priority order:
-1. exact TOTAL panel count = ${c.exactPanelCount};
-2. if multiple face allocations are expected, exact panel count on EACH face;
-3. each module lies wholly inside ONE allocated face — no individual module crosses a ridge, hip, parapet/high-edge or other face boundary;
-4. no panels appear on an unallocated roof face;
-5. orientation and module physical aspect ratio after perspective;
-6. declared placement/clearances where metrically demonstrable;
-7. perspective follows each real roof/support plane;
-8. building/support geometry and surroundings are unchanged;
-9. obstacles (chimneys, roof windows, vents, dormers, parapets) remain present and unobstructed unless the authoritative layout explicitly proves otherwise;
-10. photorealism: believable anti-reflective glass/cells/frame at THIS camera distance;
-11. illumination match: highlights and contact shadows agree with the immutable scene and do not imply a second sun/light source;
-12. reflection realism: no uniform mirror gradient, fake sky reflection, neon blue, or repeated synthetic gloss;
-13. edge integration: no pasted seam, halo, floating border, thick bevel or geometry leak around any module;
-14. photographic texture match: panel region must have compatible sharpness, sensor noise/compression, white balance and contrast with the source photograph;
-15. distance realism: reject crisp cell-grid microdetail when the source camera distance/resolution would not resolve it;
-16. original roof material remains visible and UNCHANGED in gaps between panels;
-17. reject over-clean/over-sharp/CGI modules even when geometry is perfect.
+${dpSpecific}
 
-Interpret the legacy JSON field singleRoofPlane as: TRUE when every individual module stays entirely on one valid plane and no continuous field straddles a boundary. It may still be TRUE when the project intentionally contains multiple independent allocated fields.
+General checks:
+1. preserve the real project/building/site identity;
+2. use only the intended roof/support allocation;
+3. no module may cover a roof window, chimney, vent or other obstacle;
+4. no module may cross a ridge, hip, valley, parapet/high edge or support boundary;
+5. orientation and panel proportions must remain coherent;
+6. declared placement/clearances may only be certified from authoritative metric evidence;
+7. building/support geometry must not be silently altered to make the project fit;
+8. reject invented authoritative-looking dimensions, labels or cadastral facts.
+
+For DP2 specifically, exact total panel count is required.
+For DP3 specifically, panel count visible in the section is NOT required to equal total project panel count because a section cut may intersect only part of the field.
+For DP4/DP5/DP6 photographic edits, preserve perspective and the original scene and require realistic panel integration.
 
 FATAL rejection codes include:
-WRONG_PANEL_COUNT, WRONG_FACE_ALLOCATION, ARRAY_CROSSES_RIDGE, ARRAY_CROSSES_HIP, WRONG_ROOF_FACE, ARRAY_OUTSIDE_ALLOCATED_FACE, BUILDING_GEOMETRY_CHANGED, OBSTACLE_REMOVED, SUPPORT_STRUCTURE_CHANGED.
+WRONG_PANEL_COUNT, WRONG_FACE_ALLOCATION, ARRAY_CROSSES_RIDGE, ARRAY_CROSSES_HIP, WRONG_ROOF_FACE, ARRAY_OUTSIDE_ALLOCATED_FACE, BUILDING_GEOMETRY_CHANGED, OBSTACLE_REMOVED, SUPPORT_STRUCTURE_CHANGED, INVENTED_DIMENSION, INVENTED_CADASTRAL_GEOMETRY.
 
-For DP4 and DP6, photorealism is a HARD acceptance criterion, not a cosmetic bonus. A geometrically perfect insertion with visible CGI/sticker characteristics MUST fail.
-When zoom crops are supplied, inspect every visible module edge and compare crop texture/sharpness/noise against the original crop.
+For DP4 and DP6, photorealism is a HARD acceptance criterion, not a cosmetic bonus.
+For DP4 and DP6 specifically inspect edge integration around every module, photographic texture match with the source roof, and distance realism: module detail, sharpness, reflections and mounting depth must be plausible for the camera distance.
 Exact millimetric clearance may only be certified from authoritative metric evidence. Never infer millimetres from appearance alone.
 Return only the requested JSON object.`;
 }

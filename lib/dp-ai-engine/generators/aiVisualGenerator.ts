@@ -68,38 +68,35 @@ export class AIVisualGenerator {
     let lastReport: QualityReport | undefined;
     let bestAsset: GeneratedAsset | undefined;
     let bestReport: QualityReport | undefined;
-    const orderedPhotos = prioritizePhotos(dp, photos, context);
+    const semanticDirect = (this.editor as ImageEditor & { mode?: string }).mode === "semantic-direct";
+    // The legacy selector intentionally removed satellite evidence. Direct GPT
+    // editing must receive the complete evidence set so DP2 can actually see the
+    // IGN mass plan and other pieces can use every useful reference image.
+    const orderedPhotos = semanticDirect ? [...photos] : prioritizePhotos(dp, photos, context);
 
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
       const prompt = dpImagePrompt(dp, context, correction);
       const asset = await this.editor.edit({ dp, context, photos: orderedPhotos, prompt, previous });
 
-      // Local test contract: once OpenAI has actually returned an image, never
-      // discard that paid result because of a downstream QA judgement. The file
-      // remains explicitly unverified and production keeps the strict path.
       if (this.acceptFirstResult) {
         return { asset, quality: unverifiedTestQuality(dp) };
       }
 
-      // Independent deterministic inspector runs before any model judgement.
-      // A structural/pixel-preservation failure is not something another AI
-      // rendering attempt can safely repair, so fail closed without wasting calls.
-      const deterministic = inspectGeneratedVisualDeterministically({
-        context,
-        originalPhotos: orderedPhotos,
-        generated: asset,
-      });
-      if (!deterministic.passed) {
-        return { asset, quality: deterministicFailureQuality(dp, deterministic) };
+      if (!semanticDirect) {
+        const deterministic = inspectGeneratedVisualDeterministically({
+          context,
+          originalPhotos: orderedPhotos,
+          generated: asset,
+        });
+        if (!deterministic.passed) {
+          return { asset, quality: deterministicFailureQuality(dp, deterministic) };
+        }
       }
 
       let report: QualityReport;
       try {
         report = await this.judge.judge({ dp, form, context, originalPhotos: orderedPhotos, generated: asset });
       } catch (error) {
-        // A judge outage must never destroy an image that was successfully
-        // generated. Production can still reject the failed quality report at
-        // the API gate, while the real image remains available for test export.
         return {
           asset,
           quality: {

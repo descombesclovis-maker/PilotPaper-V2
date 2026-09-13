@@ -3,13 +3,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "[PilotPaper] Version DP-AI-FIRST v0.4.3"
+Write-Host "[PilotPaper] Version Site Twin V2"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if ($ProductionValidation) {
   $WebStarter = Join-Path $PSScriptRoot "start-web-validation.ps1"
 } else {
   $WebStarter = Join-Path $PSScriptRoot "start-web.ps1"
 }
+$GeometryStarter = Join-Path $PSScriptRoot "start-geometry-engine.ps1"
 $StateDir = Join-Path $ProjectRoot ".pilotpaper-runtime"
 $PidFile = Join-Path $StateDir "web.pid"
 [IO.Directory]::CreateDirectory($StateDir) | Out-Null
@@ -48,10 +49,16 @@ if (-not (Test-Path (Join-Path $ProjectRoot ".dev.vars"))) {
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure-openai.ps1")
   if ($LASTEXITCODE -ne 0) { throw "La configuration OpenAI a echoue." }
 }
+
+Write-Host "[PilotPaper] Demarrage du moteur geometrique Site Twin..."
+& powershell -NoProfile -ExecutionPolicy Bypass -File $GeometryStarter
+if ($LASTEXITCODE -ne 0) { throw "Le moteur geometrique Site Twin n'a pas demarre." }
+$env:PILOTPAPER_GEOMETRY_ENGINE_URL = "http://127.0.0.1:8765"
+
 if ($ProductionValidation) {
   Write-Host "[PilotPaper] Demarrage en VALIDATION V1 STRICTE : QA complet, aucun export test implicite."
 } else {
-  Write-Host "[PilotPaper] Demarrage de l'application et du moteur DP-AI-FIRST integre..."
+  Write-Host "[PilotPaper] Demarrage de l'application avec Property Lock + Site Twin + moteur geometrique integre..."
 }
 $Web = Start-Process -FilePath "powershell" -PassThru -WindowStyle Minimized -WorkingDirectory $ProjectRoot -ArgumentList @("-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-File",('"'+$WebStarter+'"'))
 [IO.File]::WriteAllText($PidFile,[string]$Web.Id)
@@ -60,5 +67,5 @@ Start-Process "http://localhost:5173"
 if ($ProductionValidation) {
   Write-Host "[PilotPaper] Pret pour le dossier temoin V1 en mode production strict."
 } else {
-  Write-Host "[PilotPaper] Pret. Aucun ancien moteur local n'est demarre."
+  Write-Host "[PilotPaper] Pret. Site Twin V2 est la source geometrique canonique en cours de validation."
 }

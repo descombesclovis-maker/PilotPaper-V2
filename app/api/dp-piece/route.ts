@@ -1,8 +1,8 @@
 import { generateDp1Piece } from "@/lib/dp1-engine";
-import { Dp2RoofDesignerRequiredError, generateDp2Piece } from "@/lib/dp2-v1-engine";
-import { generateDp3Piece } from "@/lib/dp3-architectural-section-engine";
 import { decodeRoofFaceSelectionToken } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
+import { generateDirectChatGptDp } from "@/lib/dp-direct-chatgpt-image-engine";
 import { generateDpPiece, type DpPieceInput, type DpPieceOutput } from "@/lib/dp-piece-engine";
+import { normalizeServerPhotos, type ServerPhotoInput } from "@/lib/site-twin-v2/serverPhotoNormalizer";
 
 export const dynamic = "force-dynamic";
 
@@ -16,16 +16,29 @@ function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
   const token = decodeRoofFaceSelectionToken(raw.roofFace);
   if (!token) return raw;
 
-  // DP2/DP3 consume the token directly through the Google Solar physical
-  // selector. Image pieces receive the human A/B/C label while the physical
-  // identity remains available alongside it for future shared roof context.
-  const keepTokenAsRoofFace = raw.dp === 2 || raw.dp === 3;
+  // The physical identity is retained alongside the form, but ChatGPT Image
+  // only receives the human label (A/B/C...). Never pollute a semantic prompt
+  // with the old encoded selector token.
   return {
     ...raw,
-    roofFace: keepTokenAsRoofFace ? raw.roofFace : token.displayFaceId,
+    roofFace: token.displayFaceId,
     roofSegmentIndex: token.originalSegmentIndex,
     roofBuildingId: token.buildingId,
     roofFaceStableKey: `${token.buildingId}:${token.originalSegmentIndex}`,
+  };
+}
+
+async function normalizeEvidence(raw: DpPieceInput): Promise<DpPieceInput> {
+  const normalized = await normalizeServerPhotos(raw.photos as ServerPhotoInput[] | undefined);
+  if (!normalized.length) return raw;
+  return {
+    ...raw,
+    photos: normalized.map((photo) => ({
+      role: photo.role,
+      mimeType: photo.mimeType,
+      base64: photo.base64,
+      filename: photo.filename,
+    })),
   };
 }
 
@@ -46,51 +59,48 @@ function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | unde
   };
 }
 
+async function generatePiece(input: PhysicalDpPieceInput): Promise<DpPieceOutput> {
+  switch (input.dp) {
+    case 1:
+      return generateDp1Piece(input);
+    case 2:
+      return generateDirectChatGptDp({ ...input, dp: 2 });
+    case 3:
+      return generateDirectChatGptDp({ ...input, dp: 3 });
+    case 4:
+      return generateDirectChatGptDp({ ...input, dp: 4 });
+    case 5:
+      return generateDirectChatGptDp({ ...input, dp: 5 });
+    case 6:
+      return generateDirectChatGptDp({ ...input, dp: 6 });
+    case 7:
+    case 8:
+      return generateDpPiece(input);
+    default:
+      throw new Error(`Numéro de pièce DP non pris en charge : ${String((input as { dp?: unknown }).dp)}.`);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const rawInput = await request.json() as DpPieceInput;
-    const input = normalizeRoofSelection(rawInput);
-    const generated = input.dp === 1
-      ? await generateDp1Piece(input)
-      : input.dp === 2
-        ? await generateDp2Piece(input)
-        : input.dp === 3
-          ? await generateDp3Piece(input)
-          : await generateDpPiece(input);
+    // Every user image is decoded, EXIF-corrected and re-encoded before any AI
+    // call. This removes malformed JPEG/WebP containers from the image path.
+    const evidenceSafeInput = await normalizeEvidence(rawInput);
+    const input = normalizeRoofSelection(evidenceSafeInput);
+    const generated = await generatePiece(input);
     const result = hideInternalRoofToken(generated, rawInput.roofFace);
+    const directImagePath = input.dp >= 2 && input.dp <= 6;
 
     return Response.json(result, {
       headers: {
         "Cache-Control": "no-store",
         "X-PilotPaper-Mode": "test_unverified",
         "X-PilotPaper-Piece": `DP${result.dp}`,
+        "X-PilotPaper-Image-Path": directImagePath ? "chatgpt-direct" : "default",
       },
     });
   } catch (error) {
-    if (error instanceof Dp2RoofDesignerRequiredError) {
-      return Response.json(
-        {
-          error: error.message,
-          validationStatus: "test_unverified",
-          recovery: {
-            type: "roof_designer",
-            reason: error.reason,
-            imageMimeType: error.imageMimeType,
-            imageBase64: error.imageBase64,
-            widthPx: error.widthPx,
-            heightPx: error.heightPx,
-          },
-        },
-        {
-          status: 409,
-          headers: {
-            "Cache-Control": "no-store",
-            "X-PilotPaper-Mode": "test_unverified",
-            "X-PilotPaper-Recovery": "roof_designer",
-          },
-        },
-      );
-    }
     console.error("[dp-piece] isolated generation failed", error);
     return Response.json(
       {

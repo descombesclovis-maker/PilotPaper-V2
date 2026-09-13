@@ -32,19 +32,26 @@ export class DPAIEngine {
   async generate(form:ProjectForm,photos:InputPhoto[]):Promise<GenerationResult>{
     const userPhotos=photos.filter(p=>!["satellite","satellite_mass"].includes(p.role));
     if(userPhotos.length<3) throw new Error("The engine requires at least 3 independent user photographs");
-    resolveProjectLayout(form); // deterministic preflight before any image generation
+    resolveProjectLayout(form);
     const context=await this.analyzer.analyze(form,photos);
-    const fixedAssets:GeneratedAsset[]=[buildNonVisualDP(1,form,context),buildNonVisualDP(2,form,context),buildNonVisualDP(3,form,context)];
+
+    // DP1 remains a deterministic official-location document.
+    // DP2 and DP3 now use the same direct semantic ChatGPT Image path as the
+    // photographic project visuals, with DP-specific prompts and source images.
+    const fixedAssets:GeneratedAsset[]=[buildNonVisualDP(1,form,context)];
     const quality:Record<number,QualityReport>={};
     const visualAssets=new Map<number,GeneratedAsset>();
 
+    const dp2=await this.visual.generate(2,form,context,photos); visualAssets.set(2,dp2.asset); quality[2]=dp2.quality;
+    const dp3=await this.visual.generate(3,form,context,photos); visualAssets.set(3,dp3.asset); quality[3]=dp3.quality;
     const dp4=await this.visual.generate(4,form,context,photos); visualAssets.set(4,dp4.asset); quality[4]=dp4.quality;
+
+    // DP5 stays deterministic until its new official exterior-aspect renderer
+    // is promoted; this preserves exact physical module identity for cross-DP QA.
     const dp5=buildDP5RoofPlan(form,context); fixedAssets.push(dp5.asset); quality[5]=dp5.quality;
+
     const dp6=await this.visual.generate(6,form,context,photos); visualAssets.set(6,dp6.asset); quality[6]=dp6.quality;
 
-    // Deterministic geometry consistency is checked before any model-based
-    // cross-piece judgement. DP4, DP5 and DP6 must all trace back to exactly the
-    // same persisted physical module identity set.
     const deterministicCross = inspectCrossPieceGeometry(context, [dp4.asset, dp5.asset, dp6.asset]);
     if (!deterministicCross.passed) {
       for (const dp of [4, 5, 6]) {
@@ -53,19 +60,13 @@ export class DPAIEngine {
       }
     }
 
-    // DP7/DP8 are evidence photographs, not generative edits. Official notice describes them as photographs
-    // situating the site in the close and distant environment. We judge them but never invent their pixels.
     const near=photos.find(p=>p.role==="near") ?? userPhotos[0];
     const far=photos.find(p=>p.role==="far") ?? userPhotos[userPhotos.length-1];
     if(!near||!far||near===far) throw new Error("Independent close and distant environment photographs are required for DP7 and DP8.");
     fixedAssets.push(sourceAsset(7,near),sourceAsset(8,far));
     quality[7]=this.envPhotoJudge?await this.envPhotoJudge.judge(7,form,near,photos):fallbackPhotoQuality();
     quality[8]=this.envPhotoJudge?await this.envPhotoJudge.judge(8,form,far,photos):fallbackPhotoQuality();
-    // Failed DP7/DP8 quality is retained in the quality report. The API route
-    // decides whether it is blocking (production) or exportable (test mode).
 
-    // AI cross-piece visual consistency is a second independent layer and only
-    // runs when deterministic geometry identity has already passed.
     if(deterministicCross.passed&&this.crossJudge){
       for(let round=0;round<=this.maxCrossRetries;round++){
         const current=[visualAssets.get(4)!,visualAssets.get(6)!];
@@ -91,7 +92,12 @@ export class DPAIEngine {
         }
       }
     }
-    const assets=[...fixedAssets,...[4,6].map(dp=>visualAssets.get(dp)!).filter(Boolean)]; assets.sort((a,b)=>a.dp-b.dp);
+
+    const assets=[
+      ...fixedAssets,
+      ...[2,3,4,6].map(dp=>visualAssets.get(dp)!).filter(Boolean),
+    ];
+    assets.sort((a,b)=>a.dp-b.dp);
     return{context,assets,quality};
   }
 }
