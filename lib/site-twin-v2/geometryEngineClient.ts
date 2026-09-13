@@ -1,5 +1,6 @@
 import type { SiteTwinPropertyLock } from "./propertyLock";
 import type { SiteTwinRoofEdge, SiteTwinRoofFace, TwinLonLat } from "./types";
+import type { IgnElevationPoint, IgnCopcTile } from "./ignLidar";
 import { SiteTwinError } from "./errors";
 
 export type GeometryEngineRoofResult = {
@@ -54,36 +55,13 @@ function assertGeometryResult(value: unknown): asserts value is GeometryEngineRo
   }
 }
 
-export async function reconstructRoofWithGeometryEngine(args: {
-  property: SiteTwinPropertyLock;
-  source: GeometryEngineRoofResult["source"];
-  elevationGeoTiff?: Uint8Array;
-  pointCloud?: Uint8Array;
-  imagery?: Uint8Array;
-}): Promise<GeometryEngineRoofResult> {
-  if (!args.elevationGeoTiff && !args.pointCloud) {
-    throw new SiteTwinError("GEOMETRY_RECONSTRUCTION_FAILED", "Aucune donnée altimétrique n'a été fournie au moteur géométrique.");
-  }
-
-  const data = new FormData();
-  data.set("source", args.source);
-  data.set("property", JSON.stringify(args.property));
-  if (args.elevationGeoTiff) {
-    data.set("elevation", new Blob([args.elevationGeoTiff], { type: "image/tiff" }), "elevation.tif");
-  }
-  if (args.pointCloud) {
-    data.set("point_cloud", new Blob([args.pointCloud], { type: "application/octet-stream" }), "roof.laz");
-  }
-  if (args.imagery) {
-    data.set("imagery", new Blob([args.imagery], { type: "image/tiff" }), "imagery.tif");
-  }
-
+async function postGeometry(data: FormData) {
   let response: Response;
   try {
     response = await fetch(`${geometryEngineUrl()}/v1/roof/reconstruct`, {
       method: "POST",
       body: data,
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(150_000),
       cache: "no-store",
     });
   } catch (error) {
@@ -102,11 +80,88 @@ export async function reconstructRoofWithGeometryEngine(args: {
     const body = await response.text().catch(() => "");
     throw new SiteTwinError(
       "GEOMETRY_RECONSTRUCTION_FAILED",
-      `Reconstruction géométrique refusée (${response.status})${body ? ` : ${body.slice(0, 400)}` : ""}.`,
+      `Reconstruction géométrique refusée (${response.status})${body ? ` : ${body.slice(0, 500)}` : ""}.`,
       { recoverable: true },
     );
   }
   const result = await response.json() as unknown;
   assertGeometryResult(result);
+  return result;
+}
+
+export async function reconstructRoofWithGeometryEngine(args: {
+  property: SiteTwinPropertyLock;
+  source: GeometryEngineRoofResult["source"];
+  elevationGeoTiff?: Uint8Array;
+  pointCloud?: Uint8Array;
+  sampledPoints?: IgnElevationPoint[];
+  copcTiles?: IgnCopcTile[];
+  imagery?: Uint8Array;
+}): Promise<GeometryEngineRoofResult> {
+  if (!args.elevationGeoTiff && !args.pointCloud && !args.sampledPoints?.length && !args.copcTiles?.length) {
+    throw new SiteTwinError("GEOMETRY_RECONSTRUCTION_FAILED", "Aucune donnée altimétrique n'a été fournie au moteur géométrique.");
+  }
+
+  const data = new FormData();
+  data.set("source", args.source);
+  data.set("property", JSON.stringify(args.property));
+  if (args.elevationGeoTiff) {
+    data.set("elevation", new Blob([args.elevationGeoTiff], { type: "image/tiff" }), "elevation.tif");
+  }
+  if (args.pointCloud) {
+    data.set("point_cloud", new Blob([args.pointCloud], { type: "application/octet-stream" }), "roof.laz");
+  }
+  if (args.sampledPoints?.length) {
+    data.set("sampled_points", JSON.stringify(args.sampledPoints));
+  }
+  if (args.copcTiles?.length) {
+    data.set("copc_tiles", JSON.stringify(args.copcTiles));
+  }
+  if (args.imagery) {
+    data.set("imagery", new Blob([args.imagery], { type: "image/tiff" }), "imagery.tif");
+  }
+  return postGeometry(data);
+}
+
+export type PhotoRegistrationResult = {
+  homography: [number, number, number, number, number, number, number, number, number];
+  reprojectionErrorPx: number;
+  matches: number;
+  inliers: number;
+  method: string;
+  diagnostics: string[];
+};
+
+export async function registerPhotoWithGeometryEngine(args: {
+  reference: Uint8Array;
+  referenceMimeType: string;
+  photo: Uint8Array;
+  photoMimeType: string;
+}): Promise<PhotoRegistrationResult> {
+  const data = new FormData();
+  data.set("reference", new Blob([args.reference], { type: args.referenceMimeType }), "reference-image");
+  data.set("photo", new Blob([args.photo], { type: args.photoMimeType }), "project-photo");
+  const response = await fetch(`${geometryEngineUrl()}/v1/photo/register`, {
+    method: "POST",
+    body: data,
+    signal: AbortSignal.timeout(90_000),
+    cache: "no-store",
+  }).catch((error) => {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "Le moteur de recalage photo n'a pas répondu.", {
+      recoverable: true,
+      cause: error,
+    });
+  });
+  if (!response.ok) {
+    throw new SiteTwinError(
+      "CAMERA_REGISTRATION_FAILED",
+      `Recalage photo refusé (${response.status}) : ${(await response.text()).slice(0, 500)}`,
+      { recoverable: true },
+    );
+  }
+  const result = await response.json() as PhotoRegistrationResult;
+  if (!Array.isArray(result.homography) || result.homography.length !== 9 || !Number.isFinite(result.reprojectionErrorPx)) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "Le moteur photo a renvoyé une homographie invalide.");
+  }
   return result;
 }
