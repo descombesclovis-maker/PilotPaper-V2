@@ -12,6 +12,8 @@ const geometry = await vite.ssrLoadModule("/lib/dp-ai-engine/geometry/architectu
 const route = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
 const contract = await readFile(new URL("../lib/dp-piece-contract.ts", import.meta.url), "utf8");
 const engine = await readFile(new URL("../lib/dp3-architectural-section-engine.ts", import.meta.url), "utf8");
+const direct = await readFile(new URL("../lib/dp-direct-chatgpt-image-engine.ts", import.meta.url), "utf8");
+const prompt = await readFile(new URL("../lib/dp-ai-engine/prompts/dpImage.ts", import.meta.url), "utf8");
 
 const earth = 6_378_137;
 const origin = { latitude: 46.4, longitude: 4.7 };
@@ -43,7 +45,7 @@ function segment({ centerEast, azimuth, minEast, maxEast, height }) {
   };
 }
 
-test("DP3 reconstructs a real two-pitch roof section from BD TOPO footprint and Google roof planes", () => {
+test("legacy section geometry still reconstructs a real two-pitch roof from BD TOPO and roof planes", () => {
   const pitchRiseAtHalfFace = 2.5 * Math.tan(Math.PI / 6);
   const centerHeight = 105 + pitchRiseAtHalfFace;
   const building = {
@@ -95,15 +97,28 @@ test("an L-shaped building is cut through the selected wing instead of its bound
   assert.ok(upperWing.widthM > 4.8 && upperWing.widthM < 5.2);
 });
 
-test("isolated DP3 route uses the architectural engine and no longer asks the user for roof measurements", () => {
+test("isolated DP3 now uses direct ChatGPT Image with real building photos and refuses invented dimensions", () => {
   assert.match(route, /input\.dp === 3/);
-  assert.match(route, /generateDp3Piece/);
-  const dp3Block = contract.match(/dp: 3,[\s\S]*?\n  \},/u)?.[0] ?? "";
+  assert.match(route, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 3 \}\)/);
+  assert.doesNotMatch(route, /generateDp3Piece/);
+
+  const dp3Start = contract.indexOf("dp: 3,");
+  const dp4Start = contract.indexOf("dp: 4,");
+  assert.ok(dp3Start >= 0 && dp4Start > dp3Start);
+  const dp3Block = contract.slice(dp3Start, dp4Start);
   assert.match(dp3Block, /roofFace/);
-  assert.match(dp3Block, /usesRoofUnderstanding: true/);
-  assert.doesNotMatch(dp3Block, /roofSlopeDeg|roofSlopeLengthMm|roofWidthMm/);
-  assert.match(engine, /resolveTargetBuilding/);
-  assert.match(engine, /selectGoogleSolarFace/);
+  assert.match(dp3Block, /"nearPhoto"/);
+  assert.match(dp3Block, /"roofPhoto"/);
+  assert.match(dp3Block, /output: "image"/);
+  assert.match(dp3Block, /usesSiteTwin: true/);
+  assert.match(dp3Block, /allowsGenerativeRefinement: true/);
+
+  assert.match(direct, /DP3 ChatGPT Image/);
+  assert.match(direct, /photo\.role === "roof" \|\| photo\.role === "near"/);
+  assert.match(prompt, /Never invent a height, slope, setback or dimension/);
+  assert.match(prompt, /architectural section/);
+
+  // The old exact section geometry remains unit-tested as a metric/reference
+  // helper, but it is no longer the isolated user-facing rendering route.
   assert.match(engine, /buildArchitecturalSectionGeometry/);
-  assert.match(engine, /Cotes architecturales|Cotes en mètres|cotes en mètres/i);
 });
