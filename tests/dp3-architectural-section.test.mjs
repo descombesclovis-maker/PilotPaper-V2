@@ -114,7 +114,7 @@ test("isolated DP3 now uses direct ChatGPT Image with real building photos and r
   assert.match(dp3Block, /allowsGenerativeRefinement: true/);
 
   assert.match(direct, /DP3 ChatGPT Image/);
-  assert.match(direct, /photo\.role === "roof" \|\| photo\.role === "near"/);
+  assert.match(direct, /has\("roof", "near"\)/);
   assert.match(prompt, /Never invent a height, slope, setback or dimension/);
   assert.match(prompt, /architectural section/);
 
