@@ -5,8 +5,14 @@ import { lockSiteTwinProperty } from "./propertyLock";
 import { assertTwinReadyForAutomaticDocuments } from "./policy";
 import { SiteTwinError, asSiteTwinError } from "./errors";
 import { downloadGoogleGeoTiff, fetchGoogleSolarDataLayers } from "./googleSolarDataLayers";
-import { checkGeometryEngine, reconstructRoofWithGeometryEngine } from "./geometryEngineClient";
-import type { SiteTwin, SiteTwinEvidence } from "./types";
+import { discoverIgnCopcTiles, sampleIgnLidarSurface } from "./ignLidar";
+import { checkGooglePhotorealistic3dTiles } from "./googlePhotorealistic3d";
+import {
+  checkGeometryEngine,
+  reconstructRoofWithGeometryEngine,
+  type GeometryEngineRoofResult,
+} from "./geometryEngineClient";
+import type { SiteTwin, SiteTwinEvidence, SiteTwinEvidenceSource } from "./types";
 
 function stableTwinId(parcelReference: string, buildingIds: string[]) {
   return `site-${createHash("sha256")
@@ -15,21 +21,90 @@ function stableTwinId(parcelReference: string, buildingIds: string[]) {
     .slice(0, 20)}`;
 }
 
-function sourceEvidence(notes: string[]): SiteTwinEvidence {
-  return {
-    source: "google-solar",
-    confidence: 0.96,
-    reference: "Solar API dataLayers DSM",
-    notes,
-  };
+function sourceEvidence(
+  source: SiteTwinEvidenceSource,
+  reference: string,
+  confidence: number,
+  notes: string[],
+): SiteTwinEvidence {
+  return { source, confidence, reference, notes };
+}
+
+async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSiteTwinProperty>>) {
+  const [longitude, latitude] = property.addressPoint;
+  const failures: string[] = [];
+  let geometry: GeometryEngineRoofResult | undefined;
+  let googleLayers: Awaited<ReturnType<typeof fetchGoogleSolarDataLayers>> | undefined;
+  let googleRgb: Uint8Array | undefined;
+  let lidarReference: string | undefined;
+
+  // 1) Best automatic source when available: Google's metric DSM at the
+  // highest supported dataLayers resolution. BuildingInsights is NOT used here.
+  try {
+    googleLayers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 45, pixelSizeMeters: 0.1 });
+    const dsm = await downloadGoogleGeoTiff(googleLayers.dsmUrl, "DSM");
+    googleRgb = googleLayers.rgbUrl
+      ? await downloadGoogleGeoTiff(googleLayers.rgbUrl, "RGB").catch(() => undefined)
+      : undefined;
+    geometry = await reconstructRoofWithGeometryEngine({
+      property,
+      source: "google-dsm",
+      elevationGeoTiff: dsm,
+      imagery: googleRgb,
+    });
+  } catch (error) {
+    failures.push(`Google DSM : ${error instanceof Error ? error.message : "échec inconnu"}`);
+  }
+
+  // 2) IGN LiDAR HD COPC: PDAL streams only the small crop around the locked
+  // building, rather than downloading a whole 1 km tile.
+  if (!geometry) {
+    try {
+      const tiles = await discoverIgnCopcTiles(property);
+      if (!tiles.length) throw new Error("aucune dalle COPC trouvée par le WFS IGN");
+      lidarReference = tiles.map((tile) => tile.url).join(";");
+      geometry = await reconstructRoofWithGeometryEngine({
+        property,
+        source: "ign-lidar",
+        copcTiles: tiles,
+      });
+    } catch (error) {
+      failures.push(`IGN COPC : ${error instanceof Error ? error.message : "échec inconnu"}`);
+    }
+  }
+
+  // 3) IGN MNX service: 50 cm-ish sampling over the locked building. This is
+  // slower/less dense than COPC but remains metric and needs no huge download.
+  if (!geometry) {
+    try {
+      const samples = await sampleIgnLidarSurface(property);
+      lidarReference = "ign_lidar_hd_mnx_multi_wld";
+      geometry = await reconstructRoofWithGeometryEngine({
+        property,
+        source: "ign-mns",
+        sampledPoints: samples,
+      });
+    } catch (error) {
+      failures.push(`IGN MNX : ${error instanceof Error ? error.message : "échec inconnu"}`);
+    }
+  }
+
+  if (!geometry) {
+    throw new SiteTwinError(
+      "GEOMETRY_RECONSTRUCTION_FAILED",
+      "Aucune source métrique n'a permis de reconstruire automatiquement la toiture. PilotPaper refuse d'inventer les pans.",
+      { recoverable: true, details: { failures } },
+    );
+  }
+
+  return { geometry, googleLayers, googleRgb, lidarReference, failures };
 }
 
 /**
  * Canonical Site Twin V2 builder.
  *
- * Important: PV configuration is deliberately NOT an input. Physical roof
- * detection must happen once and cannot change because the user asks for 8, 12
- * or 24 modules.
+ * PV configuration is deliberately NOT an input. Physical roof detection
+ * happens once and cannot change because the user asks for 8, 12 or 24 modules.
  */
 export async function buildSiteTwin(address: string): Promise<SiteTwin> {
   const property = await lockSiteTwinProperty(address).catch((error) => {
@@ -45,39 +120,64 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     );
   }
 
+  const { geometry, googleLayers, lidarReference, failures } = await reconstructMetricRoof(property);
   const [longitude, latitude] = property.addressPoint;
-  const layers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 45, pixelSizeMeters: 0.1 });
-  const dsm = await downloadGoogleGeoTiff(layers.dsmUrl, "DSM");
-  const rgb = layers.rgbUrl
-    ? await downloadGoogleGeoTiff(layers.rgbUrl, "RGB").catch(() => undefined)
-    : undefined;
 
-  const geometry = await reconstructRoofWithGeometryEngine({
-    property,
-    source: "google-dsm",
-    elevationGeoTiff: dsm,
-    imagery: rgb,
-  });
-
-  // Google BuildingInsights is now a cross-check only. It can no longer delete
-  // or create the canonical physical faces reconstructed from metric elevation.
+  // Google BuildingInsights is now only a cross-check. It cannot delete or
+  // create canonical physical faces reconstructed from elevation evidence.
   let crossCheckNotes: string[] = [];
   try {
     const solar = await fetchGoogleSolarBuildingInsights({ latitude, longitude });
     const googleSegmentCount = solar.solarPotential.roofSegmentStats.length;
     if (googleSegmentCount !== geometry.faces.length) {
       crossCheckNotes = [
-        `BuildingInsights annonce ${googleSegmentCount} segments, tandis que le DSM métrique reconstruit ${geometry.faces.length} pans.`,
-        "PilotPaper conserve la géométrie métrique ; BuildingInsights reste une source de contrôle seulement.",
+        `BuildingInsights annonce ${googleSegmentCount} segments, la reconstruction métrique en démontre ${geometry.faces.length}.`,
+        "PilotPaper conserve la géométrie métrique ; BuildingInsights reste un contrôle secondaire.",
       ];
     } else {
-      crossCheckNotes = [`BuildingInsights et DSM convergent sur ${geometry.faces.length} pans physiques.`];
+      crossCheckNotes = [`BuildingInsights et la reconstruction métrique convergent sur ${geometry.faces.length} pans physiques.`];
     }
   } catch (error) {
     crossCheckNotes = [
       `BuildingInsights indisponible pour le contrôle croisé : ${error instanceof Error ? error.message : "erreur inconnue"}.`,
-      "La reconstruction DSM reste utilisable car elle est indépendante de ce contrôle.",
+      "La reconstruction métrique reste indépendante de ce contrôle.",
     ];
+  }
+
+  const tiles3d = await checkGooglePhotorealistic3dTiles();
+  const primaryEvidenceSource: SiteTwinEvidenceSource = geometry.source === "google-dsm"
+    ? "google-solar-dsm"
+    : geometry.source === "ign-mns"
+      ? "ign-mns"
+      : geometry.source === "ign-lidar"
+        ? "ign-lidar-hd"
+        : "photogrammetry";
+
+  const evidence: SiteTwinEvidence[] = [
+    ...property.evidence,
+    sourceEvidence(
+      primaryEvidenceSource,
+      geometry.source,
+      geometry.confidence,
+      [
+        `Source géométrique primaire : ${geometry.source}.`,
+        `Moteur géométrique : ${geometry.engineVersion}.`,
+        ...geometry.diagnostics,
+        ...crossCheckNotes,
+        ...(failures.length ? [`Sources essayées avant succès : ${failures.join(" | ")}`] : []),
+      ],
+    ),
+  ];
+  if (tiles3d.available) {
+    evidence.push(sourceEvidence(
+      "google-3d-tiles",
+      tiles3d.reference,
+      0.65,
+      [
+        "Photorealistic 3D Tiles activé uniquement pour contrôle visuel/UX.",
+        "Cette source n'est jamais autorisée à changer la parcelle, le bâtiment ou la géométrie métrique du toit.",
+      ],
+    ));
   }
 
   const twin: SiteTwin = {
@@ -97,19 +197,16 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     photos: [],
     cameraRegistrations: [],
     sources: {
-      lidar: "not-checked",
-      orthoReference: layers.rgbUrl ? "Google Solar RGB dataLayer" : undefined,
+      lidar: geometry.source === "ign-lidar" || geometry.source === "ign-mns" ? "available" : "not-checked",
+      lidarReference,
+      orthoReference: googleLayers?.rgbUrl ? "Google Solar RGB dataLayer" : undefined,
       googleSolarBuildingCenter: property.addressPoint,
+      googleDsmReference: googleLayers?.dsmUrl,
+      google3dTilesReference: tiles3d.available ? tiles3d.reference : undefined,
+      geometryEngineVersion: geometry.engineVersion,
+      geometryPrimarySource: geometry.source,
     },
-    evidence: [
-      ...property.evidence,
-      sourceEvidence([
-        `DSM Google Solar téléchargé à 0,1 m/pixel lorsque cette résolution est disponible.`,
-        `Moteur géométrique : ${geometry.engineVersion}.`,
-        ...geometry.diagnostics,
-        ...crossCheckNotes,
-      ]),
-    ],
+    evidence,
     confidence: geometry.confidence,
     revision: 1,
   };
