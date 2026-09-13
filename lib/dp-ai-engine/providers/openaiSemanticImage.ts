@@ -27,6 +27,18 @@ function chooseBasePhoto(dp: DPNumber, photos: InputPhoto[]) {
   return photos[0];
 }
 
+function referencePhotos(dp: DPNumber, photos: InputPhoto[], base: InputPhoto) {
+  const remaining = photos.filter((photo) => photo !== base);
+  const ordered: InputPhoto[] = [];
+  for (const role of sourceOrder(dp)) {
+    for (const photo of remaining) {
+      if (photo.role === role && !ordered.includes(photo)) ordered.push(photo);
+    }
+  }
+  for (const photo of remaining) if (!ordered.includes(photo)) ordered.push(photo);
+  return ordered.slice(0, 3);
+}
+
 /**
  * Direct semantic image editor: same product behavior expected from ChatGPT
  * image editing. The complete real source image is supplied intact and GPT
@@ -57,7 +69,7 @@ export class OpenAISemanticImageEditor implements ImageEditor {
       base.filename ?? `project-${base.role}.${extension(base.mimeType)}`,
     );
 
-    for (const photo of photos.filter((photo) => photo !== base).slice(0, 3)) {
+    for (const photo of referencePhotos(dp, photos, base)) {
       data.append(
         "image[]",
         base64ToBlob(photo.base64, photo.mimeType),
