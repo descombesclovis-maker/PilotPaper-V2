@@ -77,7 +77,7 @@ async function fetchIgnImage(role: "satellite" | "satellite_mass", longitude: nu
 }
 
 function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, parcelReference: string) {
-  const module = requireVerifiedPvModule(input.moduleReference ?? "");
+  const pvModule = requireVerifiedPvModule(input.moduleReference ?? "");
   const panelCount = positiveInteger(input.panelCount, "Le nombre de panneaux");
   const rows = positiveInteger(input.rows, "Le nombre de rangées");
   const columns = positiveInteger(input.columns, "Le nombre de colonnes");
@@ -86,8 +86,8 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   }
   const orientation = input.orientation === "landscape" ? "landscape" : "portrait";
   const gap = Math.max(0, finite(input.interPanelGapMm, 20));
-  const panelWidth = orientation === "portrait" ? module.widthMm : module.heightMm;
-  const panelHeight = orientation === "portrait" ? module.heightMm : module.widthMm;
+  const panelWidth = orientation === "portrait" ? pvModule.widthMm : pvModule.heightMm;
+  const panelHeight = orientation === "portrait" ? pvModule.heightMm : pvModule.widthMm;
   const fieldWidthMm = columns * panelWidth + Math.max(0, columns - 1) * gap;
   const fieldHeightMm = rows * panelHeight + Math.max(0, rows - 1) * gap;
   const roofFace = input.roofFace?.trim() || "pan sélectionné";
@@ -101,12 +101,12 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     address: normalizedAddress,
     parcelReference,
     panel: {
-      manufacturer: module.manufacturer,
-      model: module.canonicalReference,
-      widthMm: module.widthMm,
-      heightMm: module.heightMm,
+      manufacturer: pvModule.manufacturer,
+      model: pvModule.canonicalReference,
+      widthMm: pvModule.widthMm,
+      heightMm: pvModule.heightMm,
       frameColor: "black",
-      powerWp: module.powerWp,
+      powerWp: pvModule.powerWp,
     },
     requestedPanelCount: panelCount,
     array: {
@@ -131,7 +131,7 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   const facts = [
     `Adresse verrouillée : ${normalizedAddress}.`,
     `Parcelle cadastrale : ${parcelReference}.`,
-    `Module : ${module.canonicalReference} — ${module.widthMm} × ${module.heightMm} mm.`,
+    `Module : ${pvModule.canonicalReference} — ${pvModule.widthMm} × ${pvModule.heightMm} mm.`,
     `Quantité exacte : ${panelCount} modules.`,
     `Matrice demandée : ${rows} × ${columns}.`,
     `Orientation : ${orientation}.`,
