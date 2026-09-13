@@ -21,6 +21,7 @@ const engineSource = await readFile(new URL("../lib/dp2-roof-designer-engine.ts"
 const identitySource = await readFile(new URL("../lib/dp-ai-engine/identity/crossViewSurfaceIdentity.ts", import.meta.url), "utf8");
 const metricSource = await readFile(new URL("../lib/dp-ai-engine/geometry/metricSurfaceFromIdentity.ts", import.meta.url), "utf8");
 const routeSource = await readFile(new URL("../app/api/dp-piece/route.ts", import.meta.url), "utf8");
+const directSource = await readFile(new URL("../lib/dp-direct-chatgpt-image-engine.ts", import.meta.url), "utf8");
 
 const parcel = [
   { x: 0.10, y: 0.10 },
@@ -107,17 +108,21 @@ test("cross-view engine refuses a match supported by fewer than two independent 
   assert.ok(issues.some((issue) => issue.includes("indices visuels")));
 });
 
-test("cross-view identity remains reusable QA while DP2 geometry is Google Solar first with reviewed Roof Designer fallback", () => {
-  assert.match(routeSource, /@\/lib\/dp2-v1-engine/);
-  assert.match(entrySource, /dp2-google-solar-engine/);
-  assert.match(autoSource, /fetchGoogleSolarBuildingInsights/);
-  assert.match(autoSource, /generateRoofDesignerDp2/);
+test("cross-view identity stays reusable QA while isolated DP2 now renders through direct ChatGPT Image", () => {
+  assert.match(routeSource, /@\/lib\/dp-direct-chatgpt-image-engine/);
+  assert.match(routeSource, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 2 \}\)/);
+  assert.doesNotMatch(routeSource, /@\/lib\/dp2-v1-engine/);
+  assert.match(directSource, /lockSiteTwinProperty/);
+  assert.match(directSource, /satellite_mass/);
+  assert.match(directSource, /OpenAISemanticImageEditor/);
   assert.match(identitySource, /cross_view_surface_identity/);
   assert.match(identitySource, /validateCrossViewSurfaceIdentity/);
   assert.match(metricSource, /metricSurfaceFromIdentity/);
-  assert.doesNotMatch(autoSource, /resolveCrossViewSurfaceIdentity/);
-  assert.doesNotMatch(autoSource, /metricSurfaceFromIdentity/);
-  assert.doesNotMatch(autoSource, /buildAutomaticSiteModelFromParcel/);
+
+  // Legacy deterministic engines remain regression-tested helpers, but they are
+  // no longer the isolated DP2 critical path.
+  assert.match(entrySource, /dp2-google-solar-engine/);
+  assert.match(autoSource, /fetchGoogleSolarBuildingInsights/);
+  assert.match(autoSource, /generateRoofDesignerDp2/);
   assert.match(engineSource, /metricSurfaceFromManualRoofDesign/);
-  assert.match(engineSource, /resolveProjectLayout/);
 });
