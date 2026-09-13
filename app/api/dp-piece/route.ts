@@ -16,10 +16,12 @@ function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
   const token = decodeRoofFaceSelectionToken(raw.roofFace);
   if (!token) return raw;
 
-  const keepTokenAsRoofFace = raw.dp === 2 || raw.dp === 3;
+  // The physical identity is retained alongside the form, but ChatGPT Image
+  // only receives the human label (A/B/C...). Never pollute a semantic prompt
+  // with the old encoded selector token.
   return {
     ...raw,
-    roofFace: keepTokenAsRoofFace ? raw.roofFace : token.displayFaceId,
+    roofFace: token.displayFaceId,
     roofSegmentIndex: token.originalSegmentIndex,
     roofBuildingId: token.buildingId,
     roofFaceStableKey: `${token.buildingId}:${token.originalSegmentIndex}`,
