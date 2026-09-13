@@ -83,9 +83,9 @@ export function assertLayoutPolicy(twin: SiteTwin, layout: PvLayoutSnapshot) {
       throw new SiteTwinError("PV_LAYOUT_INVALID", `Le pan physique ${faceId} a disparu de l'éligibilité PV.`);
     }
   }
-  for (const module of layout.modules) {
-    if (!physicalFaces.has(module.faceId)) {
-      throw new SiteTwinError("PV_LAYOUT_INVALID", `Module ${module.moduleIndex} placé sur un pan inexistant.`);
+  for (const placedModule of layout.modules) {
+    if (!physicalFaces.has(placedModule.faceId)) {
+      throw new SiteTwinError("PV_LAYOUT_INVALID", `Module ${placedModule.moduleIndex} placé sur un pan inexistant.`);
     }
   }
   return layout;
