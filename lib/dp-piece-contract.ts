@@ -35,10 +35,7 @@ export type DpPieceContract = {
   officialRule: string;
 };
 
-/**
- * Canonical PilotPaper DP contracts. The old V1 interpretation is intentionally
- * not reused: every DP is rebuilt from the official administrative purpose.
- */
+/** Canonical PilotPaper DP contracts rebuilt from the administrative purpose. */
 export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
   {
     dp: 1,
@@ -59,13 +56,13 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 2,
     title: "Plan de masse des constructions à modifier",
     shortTitle: "Masse",
-    purpose: "Présenter la parcelle, les constructions existantes, l'orientation, les dimensions pertinentes et l'implantation exacte du projet photovoltaïque.",
+    purpose: "Présenter la vraie parcelle et la vraie construction depuis l'imagerie IGN, puis faire représenter le projet photovoltaïque par ChatGPT Image sans autoriser l'IA à changer la propriété.",
     fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm"],
-    output: "svg",
+    output: "image",
     usesSiteTwin: true,
     usesLayout: true,
     usesCameraRegistration: false,
-    allowsGenerativeRefinement: false,
+    allowsGenerativeRefinement: true,
     preservesOriginalPhoto: false,
     usesInspector: true,
     officialRule: "DP2 — plan de masse lorsque le projet crée une construction ou modifie le volume d'une construction existante ; PilotPaper peut également le produire comme pièce explicative du projet solaire.",
@@ -74,13 +71,13 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 3,
     title: "Plan en coupe du terrain et de la construction",
     shortTitle: "Coupe",
-    purpose: "Montrer une coupe métrique cohérente avec le Site Twin et le terrain naturel, sans inventer de hauteur.",
-    fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm"],
-    output: "svg",
+    purpose: "Produire une coupe architecturale du vrai bâtiment avec ChatGPT Image, contrôlée par les faits métriques disponibles et sans inventer de cote.",
+    fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm", "nearPhoto", "roofPhoto"],
+    output: "image",
     usesSiteTwin: true,
     usesLayout: true,
     usesCameraRegistration: false,
-    allowsGenerativeRefinement: false,
+    allowsGenerativeRefinement: true,
     preservesOriginalPhoto: false,
     usesInspector: true,
     officialRule: "DP3 — plan en coupe lorsque le profil du terrain est modifié ; PilotPaper ne doit jamais fabriquer des cotes altimétriques manquantes.",
@@ -91,12 +88,12 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     shortTitle: "Façades / toitures",
     purpose: "Présenter l'ensemble des façades et la toiture concernée, avec l'état initial et l'état futur lorsque le projet modifie l'aspect extérieur.",
     fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm", "nearPhoto", "roofPhoto"],
-    output: "svg",
+    output: "image",
     usesSiteTwin: true,
     usesLayout: true,
     usesCameraRegistration: true,
-    allowsGenerativeRefinement: false,
-    preservesOriginalPhoto: true,
+    allowsGenerativeRefinement: true,
+    preservesOriginalPhoto: false,
     usesInspector: true,
     officialRule: "DP4 — plans de toutes les façades et des toitures ; faire apparaître l'état initial et futur lorsque le projet les modifie.",
   },
@@ -119,7 +116,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 6,
     title: "Document graphique d'insertion du projet dans son environnement",
     shortTitle: "Insertion",
-    purpose: "Montrer le projet depuis une photographie contextualisée, avec perspective calculée et modification limitée aux modules photovoltaïques.",
+    purpose: "Montrer le projet depuis une photographie contextualisée, avec compréhension directe du toit par ChatGPT Image et contrôle indépendant après génération.",
     fields: ["address", "moduleReference", "panelCount", "rows", "columns", "orientation", "placement", "roofFace", "gutterClearanceMm", "interPanelGapMm", "farPhoto", "nearPhoto", "roofPhoto"],
     output: "image",
     usesSiteTwin: true,
