@@ -97,7 +97,7 @@ test("an L-shaped building is cut through the selected wing instead of its bound
   assert.ok(upperWing.widthM > 4.8 && upperWing.widthM < 5.2);
 });
 
-test("isolated DP3 now uses direct ChatGPT Image with real building photos and refuses invented dimensions", () => {
+test("isolated DP3 now uses direct ChatGPT Image from one real house photo and refuses invented dimensions", () => {
   assert.match(route, /case 3:/);
   assert.match(route, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 3 \}\)/);
   assert.doesNotMatch(route, /generateDp3Piece/);
@@ -106,15 +106,16 @@ test("isolated DP3 now uses direct ChatGPT Image with real building photos and r
   const dp4Start = contract.indexOf("dp: 4,");
   assert.ok(dp3Start >= 0 && dp4Start > dp3Start);
   const dp3Block = contract.slice(dp3Start, dp4Start);
-  assert.match(dp3Block, /roofFace/);
+  assert.doesNotMatch(dp3Block, /"roofFace"/);
   assert.match(dp3Block, /"nearPhoto"/);
-  assert.match(dp3Block, /"roofPhoto"/);
+  assert.doesNotMatch(dp3Block, /"roofPhoto"/);
   assert.match(dp3Block, /output: "image"/);
-  assert.match(dp3Block, /usesSiteTwin: true/);
   assert.match(dp3Block, /allowsGenerativeRefinement: true/);
 
   assert.match(direct, /DP3 ChatGPT Image/);
   assert.match(direct, /has\("roof", "near"\)/);
+  assert.match(direct, /No cadastre, Solar segment, aerial image or/);
+  assert.match(prompt, /Infer the real roof plane and roof type directly from the supplied real photograph/);
   assert.match(prompt, /Never invent a height, slope, setback or dimension/);
   assert.match(prompt, /architectural section/);
 
