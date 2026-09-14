@@ -6,53 +6,85 @@ async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("DP route uses the preventive PilotPaper visual path for DP1-DP6", async () => {
+test("DP route uses preventive and specialized PilotPaper visual paths for DP1-DP6", async () => {
   const route = await source("app/api/dp-piece/route.ts");
   assert.match(route, /generatePreventiveDp/);
+  assert.match(route, /generateSpecializedDp3/);
+  assert.match(route, /generateSpecializedDp4/);
   assert.match(route, /pilotpaper-vision-preventive/);
+  assert.match(route, /pilotpaper-dp3-specialized/);
+  assert.match(route, /pilotpaper-dp4-specialized/);
   assert.doesNotMatch(route, /SiteTwin|googleSolar|roof-faces|normalizeRoofSelection|Geometry/);
 });
 
-test("generation prevents wrong PV counts before exposing a result", async () => {
+test("generation prevents wrong PV counts and wrong module geometry before exposing a result", async () => {
   const engine = await source("lib/pilotpaper-vision-engine.ts");
   assert.match(engine, /EXACTLY \$\{spec\.panelCount\} photovoltaic modules/);
   assert.match(engine, /internally count the cells of the array row by row/);
   assert.match(engine, /internally recount them/);
-  assert.match(engine, /MAX_GENERATION_ATTEMPTS = 3/);
+  assert.match(engine, /MAX_GENERATION_ATTEMPTS = 4/);
+  assert.match(engine, /PHOTOVOLTAIC INSERTION SPECIALIST PROTOCOL/);
+  assert.match(engine, /Modules are rectangular physical objects, not square tiles/);
+  assert.match(engine, /moduleShapeCorrect/);
+  assert.match(engine, /moduleScalePlausible/);
+  assert.match(engine, /projectiveConsistency/);
   assert.match(engine, /AUTOMATIC CORRECTION PASS/);
   assert.match(engine, /if \(inspector\.passed\)/);
   assert.match(engine, /non produite : PilotPaper a détecté une incohérence avant sauvegarde/);
 });
 
-test("DP2 and DP6 lock the real source instead of rebuilding the property", async () => {
+test("DP2 locks the real target parcel and building instead of choosing a neighboring roof", async () => {
   const engine = await source("lib/pilotpaper-vision-engine.ts");
   assert.match(engine, /official close IGN aerial\/cadastral image and is an IMMUTABLE BASE/);
+  assert.match(engine, /actual target building inside parcel/);
+  assert.match(engine, /Do not equip a neighboring roof/);
+  assert.match(engine, /targetParcelCorrect/);
+  assert.match(engine, /targetBuildingCorrect/);
   assert.match(engine, /Do not regenerate the property/);
-  assert.match(engine, /The ONLY physical change allowed is the photovoltaic installation/);
-  assert.match(engine, /Do not invent a new entrance, door, window, roof, annex, tree, road, fence/);
-  assert.match(engine, /\[2, 4, 6\]\.includes\(dp\)/);
 });
 
-test("DP3 is forced into a genuine side section and cannot invent dimensions", async () => {
+test("DP1 can only annotate official cadastral evidence and cannot invent parcel geometry", async () => {
   const engine = await source("lib/pilotpaper-vision-engine.ts");
-  assert.match(engine, /section plane must be PERPENDICULAR TO THE ROOF RIDGE/);
-  assert.match(engine, /not a front elevation/);
-  assert.match(engine, /Do not invent numeric dimensions of the house/);
-  assert.match(engine, /sectionSideCorrect/);
-  assert.match(engine, /inventedNumericDimensions/);
+  assert.match(engine, /Use only cadastral boundaries already visible in the official source/);
+  assert.match(engine, /Never fabricate a parcel contour/);
+  assert.match(engine, /parcelHighlightCorrect/);
+});
+
+test("DP3 has a dedicated non-blocking photo analysis and hybrid section path", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const generator = await source("lib/pilotpaper-dp3-generator.ts");
+  const analyzer = await source("lib/pilotpaper-dp3-section-engine.ts");
+  assert.match(route, /generateSpecializedDp3/);
+  assert.match(generator, /orthographic LATERAL architectural section/);
+  assert.match(generator, /3D axonometric cutaway/);
+  assert.match(generator, /never invent building\/roof\/terrain numeric dimensions/i);
+  assert.match(generator, /Verified module dimensions/);
+  assert.match(generator, /MAX_DP3_ATTEMPTS = 4/);
+  assert.match(analyzer, /pre-analysis stage of PilotPaper DP3/);
+  assert.match(analyzer, /Do NOT invent measurements/);
+  assert.match(analyzer, /return null/);
+});
+
+test("DP4 uses a dedicated photographic insertion path without false all-or-nothing judge gating", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const generator = await source("lib/pilotpaper-dp4-generator.ts");
+  assert.match(route, /generateSpecializedDp4/);
+  assert.match(generator, /same photo with only the photovoltaic array added/);
+  assert.match(generator, /Count panels only in the projected state/);
+  assert.match(generator, /moduleShapeCorrect/);
+  assert.match(generator, /criticalPass/);
+  assert.doesNotMatch(generator, /judge\.passed/);
 });
 
 test("DP2 is the persistent master placement reference for DP3-DP6", async () => {
   const engine = await source("lib/pilotpaper-vision-engine.ts");
   const ui = await source("components/dp-piece-workbench.tsx");
   const persistence = await source("lib/pilotpaper-image2-persistence.ts");
-
   assert.match(engine, /3: \[2\]/);
   assert.match(engine, /4: \[2\]/);
   assert.match(engine, /5: \[2, 4\]/);
   assert.match(engine, /6: \[2, 4, 5\]/);
   assert.match(engine, /générez d'abord la DP2/);
-
   assert.match(ui, /resultsByDp/);
   assert.match(ui, /resultsRef/);
   assert.match(ui, /persistDpPiece/);
@@ -76,11 +108,13 @@ test("visible forms ask only for minimum project facts and required photos", asy
   assert.match(contract, /fields: \[\.\.\.commonPvFields, "farPhoto"\]/);
 });
 
-test("provider wording is removed from the visible interface", async () => {
+test("provider wording is removed case-insensitively from the visible interface", async () => {
   const client = await source("components/dp-piece-workbench-client.tsx");
   assert.match(client, /sanitizeVisibleProviderWording/);
   assert.match(client, /PilotPaper Vision/);
-  assert.match(client, /replaceAll\("ChatGPT"/);
+  assert.match(client, /chatgpt\\s\*image/);
+  assert.match(client, /\/gi/);
+  assert.match(client, /openai\/gi/);
 });
 
 test("visual generations stay sequential, persistent and reopenable", async () => {
