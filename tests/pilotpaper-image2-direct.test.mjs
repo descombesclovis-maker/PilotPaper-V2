@@ -33,16 +33,43 @@ test("DP1 through DP6 missions match the new product contract", async () => {
   assert.match(engine, /DP6 — DISTANT CONTEXTUAL INSERTION/);
 });
 
-test("DP2-DP6 continuity is carried through generated references", async () => {
+test("DP2-DP6 continuity survives navigation through persistent generated references", async () => {
   const engine = await source("lib/pilotpaper-image2-engine.ts");
   const ui = await source("components/dp-piece-workbench.tsx");
+  const persistence = await source("lib/pilotpaper-image2-persistence.ts");
+
   assert.match(engine, /same physical roof zone across all project references/i);
   assert.match(engine, /3: \[2\]/);
   assert.match(engine, /4: \[2, 3\]/);
   assert.match(engine, /5: \[4, 2, 3\]/);
   assert.match(engine, /6: \[5, 4, 2\]/);
-  assert.match(ui, /DP2 → DP3 → DP4 → DP5 → DP6/);
-  assert.match(ui, /visualResults/);
+
+  assert.match(ui, /if \(dp === 3\) return \[2\]/);
+  assert.match(ui, /if \(dp === 4\) return \[2, 3\]/);
+  assert.match(ui, /if \(dp === 5\) return \[4, 2, 3\]/);
+  assert.match(ui, /if \(dp === 6\) return \[5, 4, 2\]/);
+  assert.match(ui, /resultsByDp/);
+  assert.match(ui, /resultsRef/);
+  assert.match(ui, /persistDpPiece/);
+  assert.match(ui, /loadPersistedDpPieces/);
+  assert.match(persistence, /indexedDB\.open/);
+  assert.match(persistence, /generated-dp-pieces/);
+});
+
+test("Image-2 generations are sequential jobs with a visible photovoltaic queue", async () => {
+  const ui = await source("components/dp-piece-workbench.tsx");
+  const generationUi = await source("components/solar-generation-ui.tsx");
+
+  assert.match(ui, /queueRef/);
+  assert.match(ui, /processingRef/);
+  assert.match(ui, /async function processQueue/);
+  assert.match(ui, /queueRef\.current\.shift\(\)/);
+  assert.match(ui, /GenerationDock/);
+  assert.match(ui, /SolarGenerationStage/);
+  assert.match(ui, /Effacer et recommencer/);
+  assert.match(generationUi, /PILOTPAPER LIVE/);
+  assert.match(generationUi, /FILE D’ATTENTE/);
+  assert.match(generationUi, /Aucun faux pourcentage/);
 });
 
 test("DP7 and DP8 preserve original photos", async () => {
