@@ -13,7 +13,7 @@ function extension(mimeType: string) {
 
 function sourceOrder(dp: DPNumber): InputPhoto["role"][] {
   if (dp === 2) return ["satellite_mass", "satellite", "roof", "near", "front", "left_oblique", "right_oblique", "far"];
-  if (dp === 3) return ["roof", "near", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite", "far"];
+  if (dp === 3) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
   if (dp === 6) return ["far", "near", "roof", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite"];
   if (dp === 4 || dp === 5) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
   return ["near", "roof", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
@@ -28,6 +28,12 @@ function chooseBasePhoto(dp: DPNumber, photos: InputPhoto[]) {
 }
 
 function referencePhotos(dp: DPNumber, photos: InputPhoto[], base: InputPhoto) {
+  // DP3-DP6 intentionally use one real source image. This mirrors the direct
+  // ChatGPT image-edit workflow: understand this photograph, preserve it and
+  // apply the requested project. Extra satellite/roof images can introduce a
+  // second geometry and make the model drift to another roof plane.
+  if (dp >= 3 && dp <= 6) return [];
+
   const remaining = photos.filter((photo) => photo !== base);
   const ordered: InputPhoto[] = [];
   for (const role of sourceOrder(dp)) {
@@ -36,7 +42,7 @@ function referencePhotos(dp: DPNumber, photos: InputPhoto[], base: InputPhoto) {
     }
   }
   for (const photo of remaining) if (!ordered.includes(photo)) ordered.push(photo);
-  return ordered.slice(0, 3);
+  return ordered.slice(0, 2);
 }
 
 /**
@@ -77,7 +83,10 @@ export class OpenAISemanticImageEditor implements ImageEditor {
       );
     }
 
-    if (previous?.base64) {
+    // Only DP2 may perform one corrective aerial retry. Photo insertions never
+    // feed a generated candidate back as a new source because that compounds
+    // reconstruction errors and can alter the original house.
+    if (dp === 2 && previous?.base64) {
       data.append("image[]", base64ToBlob(previous.base64, previous.mimeType), "previous-candidate.png");
     }
 
@@ -86,7 +95,7 @@ export class OpenAISemanticImageEditor implements ImageEditor {
       method: "POST",
       headers: { Authorization: `Bearer ${this.apiKey}` },
       body: data,
-      signal: AbortSignal.timeout(240_000),
+      signal: AbortSignal.timeout(180_000),
     });
     console.log(`[PilotPaper][OpenAI direct] DP${dp} HTTP ${response.status} after ${Date.now() - startedAt}ms`);
 
