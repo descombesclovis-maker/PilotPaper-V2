@@ -63,8 +63,8 @@ test("DP1 inspector fails closed unless official parcel geometry can be represen
   assert.match(engine, /Contour cadastral projeté mathématiquement/);
 });
 
-test("isolated API routes DP1 through the hardened engine", () => {
+test("isolated API routes DP1 through the direct ChatGPT Image flow", () => {
   assert.match(route, /case 1:/);
-  assert.match(route, /return generateDp1Piece\(input\)/);
+  assert.match(route, /return generateDirectChatGptDp\(\{ \.\.\.input, dp: 1 \}\)/);
   assert.match(route, /generateDpPiece/);
 });
