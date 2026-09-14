@@ -99,7 +99,7 @@ test("roof selector filters by the requested PV configuration without using DP3 
   assert.doesNotMatch(route, /buildArchitecturalSectionGeometry/);
 });
 
-test("physical roof-face tokens survive display re-lettering", () => {
+test("physical roof-face tokens survive display re-lettering and multi-face normalization", () => {
   const token = faceSelection.encodeRoofFaceSelectionToken({
     displayFaceId: "C",
     originalSegmentIndex: 9,
@@ -111,8 +111,10 @@ test("physical roof-face tokens survive display re-lettering", () => {
     buildingId: "target-wing",
   });
   assert.match(pieceRoute, /decodeRoofFaceSelectionToken/);
-  assert.match(pieceRoute, /roofSegmentIndex: token\.originalSegmentIndex/);
-  assert.match(pieceRoute, /roofBuildingId: token\.buildingId/);
+  assert.match(pieceRoute, /const first = decoded\[0\]!\.token/);
+  assert.match(pieceRoute, /roofSegmentIndex: first\.originalSegmentIndex/);
+  assert.match(pieceRoute, /roofBuildingId: first\.buildingId/);
+  assert.match(pieceRoute, /decoded\.map\(\(entry\) => entry\.token\.displayFaceId\)\.join\(", "\)/);
 });
 
 test("addressed property resolution starts from the exact address building and forbids recursive neighbour absorption", () => {
