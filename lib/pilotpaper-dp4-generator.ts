@@ -102,9 +102,11 @@ async function inspect(apiKey: string, source: PiecePhotoInput, dp2: VisualRefer
   const prompt = [
     "Inspect PilotPaper DP4. Image 1 is the real source photo, image 2 is accepted DP2, image 3 is the candidate before/after sheet.",
     facts,
+    "The candidate must preserve the established successful PilotPaper DP4 composition: a clear title, ÉTAT INITIAL on the left, ÉTAT PROJETÉ on the right, two matching photo frames, and the technical legend below. Do not reward redesigns that change this composition.",
     "The candidate must show initial and projected states of the SAME source photo with the SAME camera. The projected state may change only by adding the photovoltaic installation.",
-    "Count panels only in the projected state. Count from pixels, never from captions.",
+    "Count panels only in the projected state. Count from pixels, never from captions. The visible count and rows × columns matrix must exactly match the project facts.",
     "The equipped roof plane and zone must match DP2. Modules must have credible real rectangular proportions, field scale and one coherent roof-plane perspective.",
+    "MODULE SHAPE HARD GATE: compare the visible panel geometry with the verified real module dimensions contained in the project facts. If the modules look square or near-square in a way the camera perspective does not physically justify, moduleShapeCorrect MUST be false. All modules must share the same physical rectangle and the same roof-plane projection; do not accept individually stretched or compressed tiles.",
     "Doors, windows, façade, roof, annexes, vegetation and surroundings must remain unchanged between source/initial/projected states apart from the PV installation.",
     "A discreet technical legend must accurately report the project facts.",
   ].join("\n");
@@ -133,7 +135,12 @@ async function inspect(apiKey: string, source: PiecePhotoInput, dp2: VisualRefer
 }
 
 function correctionPrompt(base: string, issues: string[], attempt: number) {
-  return [base, `DP4 AUTOMATIC CORRECTION PASS ${attempt}.`, ...issues.slice(0, 10).map((issue) => `- ${issue}`), "Correct these failures and return the complete corrected DP4 sheet."].join("\n\n");
+  return [
+    base,
+    `DP4 AUTOMATIC CORRECTION PASS ${attempt}.`,
+    ...issues.slice(0, 10).map((issue) => `- ${issue}`),
+    "Keep the successful DP4 layout unchanged: initial photo left, projected photo right, same camera and crop, legend below. Correct only the rejected photovoltaic details and return the complete corrected DP4 sheet.",
+  ].join("\n\n");
 }
 
 export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): Promise<DpPieceOutput> {
@@ -153,18 +160,19 @@ export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): P
   const orientedHeight = orientation === "portrait" ? module.heightMm : module.widthMm;
   const fieldWidth = columns * orientedWidth + Math.max(0, columns - 1) * 20;
   const fieldHeight = rows * orientedHeight + Math.max(0, rows - 1) * 20;
-  const facts = `Project: ${module.manufacturer} ${module.canonicalReference}; real module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; exactly ${panelCount} modules; ${rows} × ${columns}; ${orientation}; complete field ${fieldWidth} × ${fieldHeight} mm before perspective.`;
+  const moduleAspectRatio = Math.max(module.widthMm, module.heightMm) / Math.min(module.widthMm, module.heightMm);
+  const facts = `Project: ${module.manufacturer} ${module.canonicalReference}; real module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; long-side/short-side ratio ${moduleAspectRatio.toFixed(3)}; exactly ${panelCount} modules; ${rows} × ${columns}; ${orientation}; complete field ${fieldWidth} × ${fieldHeight} mm before perspective.`;
 
   const basePrompt = [
     "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",
     "Reason as a photovoltaic installer performing a photographic insertion, not as a generic image generator.",
     "Image 1 is the immutable real source. Image 2 is the accepted DP2 and identifies the equipped roof plane and installation zone.",
     facts,
-    "Produce a clean two-part sheet: LEFT = the original source state, RIGHT = the projected state from EXACTLY the same camera and crop.",
+    "TEMPLATE LOCK — KEEP THE SUCCESSFUL PILOTPAPER DP4 DESIGN: one title line; two equal side-by-side photo frames; left labeled 'ÉTAT INITIAL'; right labeled 'ÉTAT PROJETÉ'; technical legend beneath the photos. Do not replace this with a collage, a new camera, a different page structure or another visual style.",
     "The LEFT side must remain visually faithful to Image 1. The RIGHT side must be the same photo with only the photovoltaic array added.",
-    `On the projected side insert exactly ${panelCount} modules in ${rows} visible rows × ${columns} visible columns.`,
-    `Each module is a real ${module.widthMm} × ${module.heightMm} mm rectangle, ${module.thicknessMm} mm thick. In ${orientation}, its array footprint is ${orientedWidth} × ${orientedHeight} mm. The complete field is ${fieldWidth} × ${fieldHeight} mm before projection.`,
-    "Use those dimensions as physical geometry: do not make square tiles, do not stretch individual modules and do not arbitrarily enlarge/shrink the field to fill the roof.",
+    `On the projected side insert exactly ${panelCount} modules in ${rows} visible rows × ${columns} visible columns. Count the visible modules before returning the image.`,
+    `Each module is a real ${module.widthMm} × ${module.heightMm} mm rectangle, ${module.thicknessMm} mm thick, with long-side/short-side ratio ${moduleAspectRatio.toFixed(3)}. In ${orientation}, its array footprint is ${orientedWidth} × ${orientedHeight} mm. The complete field is ${fieldWidth} × ${fieldHeight} mm before projection.`,
+    "Use those dimensions as physical geometry: do not make square or near-square tiles, do not stretch individual modules and do not arbitrarily enlarge/shrink the field to fill the roof. The complete array must be formed from identical physical rectangles under one single projective transform on the roof plane.",
     "Use one coherent perspective on one continuous roof plane. Respect ridge, eaves, edges, chimneys, skylights and visible obstacles.",
     "Do not change any door, window, façade, roof tile pattern, annex, tree, fence, driveway, ground or sky. No beautification.",
     "Add a discreet technical legend outside the important architecture with module reference, exact quantity, matrix, orientation, real module dimensions and calculated field dimensions.",
@@ -188,6 +196,7 @@ export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): P
         base64: candidate,
         sourceSummary: [
           "DP4 générée en mode retouche photovoltaïque spécialisée",
+          "Composition DP4 validée verrouillée : état initial / état projeté / légende",
           "Photo initiale et caméra verrouillées",
           "DP2 utilisée comme verrou du pan et de la zone physique",
           `Dimensions fabricant : ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm`,
@@ -211,7 +220,7 @@ export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): P
       ...(!judge.pvOnlyChange ? ["Des éléments autres que les panneaux ont changé."] : []),
       ...(!exact ? [`La matrice visible n'est pas exactement ${rows} × ${columns} = ${panelCount}.`] : []),
       ...(!judge.sameDp2RoofPlane ? ["Le pan/zone équipé ne correspond pas à DP2."] : []),
-      ...(!judge.moduleShapeCorrect || !judge.moduleScalePlausible || !judge.projectiveConsistency ? ["La géométrie physique des panneaux ou leur projection est incorrecte."] : []),
+      ...(!judge.moduleShapeCorrect || !judge.moduleScalePlausible || !judge.projectiveConsistency ? [`Les panneaux doivent conserver la géométrie réelle ${module.widthMm} × ${module.heightMm} mm (ratio ${moduleAspectRatio.toFixed(3)}) et une projection cohérente ; les formes carrées sont rejetées.`] : []),
       ...(!judge.projectFactsVisible ? ["La légende ne reporte pas correctement les informations du formulaire."] : []),
     ];
   }
