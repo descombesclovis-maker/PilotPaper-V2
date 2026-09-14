@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Clock3, Layers3, Sparkles, SunMedium, Zap } from "lucide-react";
+import { ChevronDown, ChevronUp, Clock3, Layers3, Sparkles, SunMedium, Zap } from "lucide-react";
 import type { DPNumber } from "@/lib/pilotpaper-image2-types";
 import styles from "./solar-generation-ui.module.css";
 
