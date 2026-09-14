@@ -2,13 +2,12 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
   Download,
   FileImage,
-  LoaderCircle,
   MapPinned,
   RotateCcw,
   Sparkles,
@@ -16,6 +15,16 @@ import {
 } from "lucide-react";
 import { DP_PIECE_CONTRACTS, type DpPieceField } from "@/lib/dp-piece-contract";
 import type { DPNumber, DpPieceOutput, PhotoRole, VisualReference } from "@/lib/pilotpaper-image2-types";
+import {
+  deletePersistedDpPiece,
+  loadPersistedDpPieces,
+  persistDpPiece,
+} from "@/lib/pilotpaper-image2-persistence";
+import {
+  GenerationDock,
+  SolarGenerationStage,
+  type GenerationJobView,
+} from "./solar-generation-ui";
 import styles from "./dp-piece-workbench.module.css";
 
 type PhotoValue = {
@@ -42,8 +51,14 @@ type Draft = {
 };
 
 type HistoryState = Partial<Record<DPNumber, { tests: number; lastPassed: boolean }>>;
-
+type ResultsState = Partial<Record<DPNumber, DpPieceOutput>>;
 type ApiFailure = { error?: string };
+type QueueTask = {
+  id: string;
+  dp: DPNumber;
+  draft: Draft;
+  photos: Partial<Record<PhotoRole, PhotoValue>>;
+};
 
 const defaultDraft: Draft = {
   address: "",
@@ -137,22 +152,32 @@ export function DpPieceWorkbench() {
   const [selectedDp, setSelectedDp] = useState<DPNumber | null>(null);
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [photos, setPhotos] = useState<Partial<Record<PhotoRole, PhotoValue>>>({});
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<DpPieceOutput | null>(null);
   const [history, setHistory] = useState<HistoryState>(initialHistory);
-  const [visualResults, setVisualResults] = useState<Partial<Record<2 | 3 | 4 | 5, DpPieceOutput>>>({});
+  const [resultsByDp, setResultsByDp] = useState<ResultsState>({});
+  const [jobs, setJobs] = useState<GenerationJobView[]>([]);
+  const resultsRef = useRef<ResultsState>({});
+  const queueRef = useRef<QueueTask[]>([]);
+  const processingRef = useRef(false);
 
   const contract = useMemo(() => DP_PIECE_CONTRACTS.find((piece) => piece.dp === selectedDp) ?? null, [selectedDp]);
-  const previewUrl = useMemo(() => {
-    if (!result?.base64) return "";
-    return `data:${result.mimeType};base64,${result.base64}`;
-  }, [result]);
+  const result = contract ? resultsByDp[contract.dp] ?? null : null;
+  const currentJob = contract ? jobs.find((job) => job.dp === contract.dp && (job.status === "queued" || job.status === "running")) ?? null : null;
+  const previewUrl = useMemo(() => result?.base64 ? `data:${result.mimeType};base64,${result.base64}` : "", [result]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPersistedDpPieces().then((stored) => {
+      if (cancelled) return;
+      resultsRef.current = stored;
+      setResultsByDp(stored);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   function update<K extends keyof Draft>(key: K, value: Draft[K]) {
     const next = { ...draft, [key]: value };
     setDraft(next);
-    setResult(null);
     setError("");
     try { localStorage.setItem("pilotpaper-image2-draft", JSON.stringify(next)); } catch { /* ignore */ }
   }
@@ -162,7 +187,6 @@ export function DpPieceWorkbench() {
     try {
       const value = await fileToPhoto(file, role);
       setPhotos((current) => ({ ...current, [role]: value }));
-      setResult(null);
       setError("");
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "Photo invalide.");
@@ -171,76 +195,114 @@ export function DpPieceWorkbench() {
 
   function openPiece(dp: DPNumber) {
     setSelectedDp(dp);
-    setResult(null);
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function resetPiece() {
-    setResult(null);
+  async function resetPiece() {
+    if (!contract) return;
+    if (!window.confirm(`Effacer le résultat sauvegardé de la DP${contract.dp} et recommencer ?`)) return;
+    await deletePersistedDpPiece(contract.dp).catch(() => undefined);
+    const next = { ...resultsRef.current };
+    delete next[contract.dp];
+    resultsRef.current = next;
+    setResultsByDp(next);
     setError("");
   }
 
-  function referencesFor(dp: DPNumber): VisualReference[] {
+  function referencesFor(dp: DPNumber, source = resultsRef.current): VisualReference[] {
     return referenceOrder(dp).flatMap((referenceDp) => {
-      const candidate = visualResults[referenceDp];
+      const candidate = source[referenceDp];
       if (!candidate?.base64) return [];
       if (!["image/png", "image/jpeg", "image/webp"].includes(candidate.mimeType)) return [];
-      return [{
-        dp: referenceDp,
-        mimeType: candidate.mimeType as VisualReference["mimeType"],
-        base64: candidate.base64,
-      }];
+      return [{ dp: referenceDp, mimeType: candidate.mimeType as VisualReference["mimeType"], base64: candidate.base64 }];
     });
   }
 
-  async function generate() {
-    if (!contract) return;
-    setBusy(true);
-    setError("");
-    setResult(null);
-    try {
-      const payload = {
-        dp: contract.dp,
-        address: draft.address,
-        moduleReference: draft.moduleReference,
-        panelCount: numeric(draft.panelCount),
-        rows: numeric(draft.rows),
-        columns: numeric(draft.columns),
-        orientation: draft.orientation,
-        placement: draft.placement,
-        instructions: draft.instructions,
-        roofWidthMm: numeric(draft.roofWidthMm),
-        roofSlopeLengthMm: numeric(draft.roofSlopeLengthMm),
-        roofSlopeDeg: numeric(draft.roofSlopeDeg),
-        gutterClearanceMm: numeric(draft.gutterClearanceMm),
-        interPanelGapMm: numeric(draft.interPanelGapMm),
-        photos: Object.values(photos),
-        references: referencesFor(contract.dp),
-      };
-      const response = await fetch("/api/dp-piece", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = await response.json().catch(() => null) as DpPieceOutput | ApiFailure | null;
-      if (!response.ok || !body || !("dp" in body)) throw new Error((body as ApiFailure | null)?.error || `Génération impossible (${response.status}).`);
-      setResult(body);
+  function patchJob(id: string, patch: Partial<GenerationJobView>) {
+    setJobs((current) => current.map((job) => job.id === id ? { ...job, ...patch } : job));
+  }
 
-      if (body.dp >= 2 && body.dp <= 5 && body.base64) {
-        setVisualResults((current) => ({ ...current, [body.dp]: body }));
+  async function processQueue() {
+    if (processingRef.current) return;
+    processingRef.current = true;
+
+    while (queueRef.current.length) {
+      const task = queueRef.current.shift();
+      if (!task) break;
+      patchJob(task.id, { status: "running", startedAt: Date.now(), error: undefined });
+
+      try {
+        const payload = {
+          dp: task.dp,
+          address: task.draft.address,
+          moduleReference: task.draft.moduleReference,
+          panelCount: numeric(task.draft.panelCount),
+          rows: numeric(task.draft.rows),
+          columns: numeric(task.draft.columns),
+          orientation: task.draft.orientation,
+          placement: task.draft.placement,
+          instructions: task.draft.instructions,
+          roofWidthMm: numeric(task.draft.roofWidthMm),
+          roofSlopeLengthMm: numeric(task.draft.roofSlopeLengthMm),
+          roofSlopeDeg: numeric(task.draft.roofSlopeDeg),
+          gutterClearanceMm: numeric(task.draft.gutterClearanceMm),
+          interPanelGapMm: numeric(task.draft.interPanelGapMm),
+          photos: Object.values(task.photos),
+          references: referencesFor(task.dp),
+        };
+
+        const response = await fetch("/api/dp-piece", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await response.json().catch(() => null) as DpPieceOutput | ApiFailure | null;
+        if (!response.ok || !body || !("dp" in body)) {
+          throw new Error((body as ApiFailure | null)?.error || `Génération impossible (${response.status}).`);
+        }
+
+        const nextResults = { ...resultsRef.current, [body.dp]: body };
+        resultsRef.current = nextResults;
+        setResultsByDp(nextResults);
+        await persistDpPiece(body);
+
+        setHistory((current) => {
+          const previous = current[body.dp];
+          const next = { ...current, [body.dp]: { tests: (previous?.tests ?? 0) + 1, lastPassed: body.inspector.passed } };
+          try { localStorage.setItem("pilotpaper-image2-history", JSON.stringify(next)); } catch { /* ignore */ }
+          return next;
+        });
+        patchJob(task.id, { status: "done", finishedAt: Date.now() });
+      } catch (generationError) {
+        const message = generationError instanceof Error ? generationError.message : "La génération a échoué.";
+        patchJob(task.id, { status: "failed", finishedAt: Date.now(), error: message });
+        if (selectedDp === task.dp) setError(message);
       }
-      setHistory((current) => {
-        const previous = current[body.dp];
-        const next = { ...current, [body.dp]: { tests: (previous?.tests ?? 0) + 1, lastPassed: body.inspector.passed } };
-        try { localStorage.setItem("pilotpaper-image2-history", JSON.stringify(next)); } catch { /* ignore */ }
-        return next;
-      });
-    } catch (generationError) {
-      setError(generationError instanceof Error ? generationError.message : "La génération a échoué.");
-    } finally {
-      setBusy(false);
     }
+
+    processingRef.current = false;
+  }
+
+  function generate() {
+    if (!contract) return;
+    const duplicate = jobs.some((job) => job.dp === contract.dp && (job.status === "queued" || job.status === "running"));
+    if (duplicate) {
+      setError(`La DP${contract.dp} est déjà en cours ou dans la file d’attente.`);
+      return;
+    }
+
+    const id = `${contract.dp}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const task: QueueTask = {
+      id,
+      dp: contract.dp,
+      draft: { ...draft },
+      photos: { ...photos },
+    };
+    queueRef.current.push(task);
+    setJobs((current) => [...current, { id, dp: contract.dp, status: "queued", createdAt: Date.now() }]);
+    setError("");
+    void processQueue();
   }
 
   function downloadResult() {
@@ -304,7 +366,7 @@ export function DpPieceWorkbench() {
 
   if (!contract) {
     return (
-      <main className={styles.app}>
+      <main className={styles.app} data-pilotpaper-image2-workbench>
         <header className={styles.topbar}>
           <div className={styles.brand}><img src="/pilotpaper-dp.svg" alt="dP" /><div><strong>PilotPaper</strong><span>Image-2 · Atelier de validation</span></div></div>
           <div className={styles.testBadge}><span /> MODE TEST · NON VALIDÉ</div>
@@ -316,24 +378,30 @@ export function DpPieceWorkbench() {
         <section className={styles.grid}>
           {DP_PIECE_CONTRACTS.map((piece) => {
             const state = history[piece.dp];
+            const saved = resultsByDp[piece.dp];
+            const active = jobs.find((job) => job.dp === piece.dp && (job.status === "running" || job.status === "queued"));
             return (
               <button className={styles.pieceCard} key={piece.dp} onClick={() => openPiece(piece.dp)}>
-                <div className={styles.cardTop}><span className={styles.dpNumber}>DP{piece.dp}</span>{state ? <span className={state.lastPassed ? styles.passDot : styles.failDot}>{state.tests} test{state.tests > 1 ? "s" : ""}</span> : <span className={styles.newDot}>À tester</span>}</div>
+                <div className={styles.cardTop}>
+                  <span className={styles.dpNumber}>DP{piece.dp}</span>
+                  {active ? <span className={styles.queueDot}>{active.status === "running" ? "En cours" : "En attente"}</span> : saved ? <span className={styles.passDot}>Sauvegardée</span> : state ? <span className={state.lastPassed ? styles.passDot : styles.failDot}>{state.tests} test{state.tests > 1 ? "s" : ""}</span> : <span className={styles.newDot}>À tester</span>}
+                </div>
                 <h2>{piece.title}</h2><p>{piece.purpose}</p>
                 <div className={styles.pipelineTags}>{piece.generatedByImage2 ? <span>ChatGPT Image-2</span> : <span>Photo originale</span>}{piece.usesInspector ? <span>Inspector</span> : null}</div>
-                <span className={styles.openLabel}>Ouvrir l'atelier →</span>
+                <span className={styles.openLabel}>{saved ? "Rouvrir le résultat →" : "Ouvrir l’atelier →"}</span>
               </button>
             );
           })}
         </section>
+        <GenerationDock jobs={jobs} onOpenDp={openPiece} />
       </main>
     );
   }
 
-  const references = referencesFor(contract.dp);
+  const references = referencesFor(contract.dp, resultsByDp);
 
   return (
-    <main className={styles.app}>
+    <main className={styles.app} data-pilotpaper-image2-workbench>
       <header className={styles.topbar}>
         <button className={styles.back} onClick={() => setSelectedDp(null)}><ArrowLeft size={18} /> Toutes les pièces</button>
         <div className={styles.brandCompact}><img src="/pilotpaper-dp.svg" alt="dP" /><strong>PilotPaper Image-2</strong></div>
@@ -343,7 +411,7 @@ export function DpPieceWorkbench() {
       <section className={styles.workspaceHeader}>
         <div className={styles.dpHeroNumber}>DP{contract.dp}</div>
         <div><span className={styles.eyebrow}>{contract.generatedByImage2 ? "CHATGPT IMAGE-2 DIRECT" : "PHOTO ORIGINALE"}</span><h1>{contract.title}</h1><p>{contract.purpose}</p></div>
-        <button className={styles.reset} onClick={resetPiece}><RotateCcw size={16} /> Refaire</button>
+        <button className={styles.reset} onClick={() => void resetPiece()} disabled={!result || Boolean(currentJob)}><RotateCcw size={16} /> Effacer et recommencer</button>
       </section>
 
       <div className={styles.workspace}>
@@ -355,25 +423,27 @@ export function DpPieceWorkbench() {
             <div className={styles.sources}>
               <strong>Cohérence inter-DP</strong>
               <span>{references.length ? `Références déjà disponibles : ${references.map((ref) => `DP${ref.dp}`).join(", ")}` : "Aucune DP antérieure en mémoire pour l'instant."}</span>
-              <span>Pour la meilleure cohérence, teste dans l'ordre DP2 → DP3 → DP4 → DP5 → DP6.</span>
+              <span>Les générations antérieures restent sauvegardées et sont réutilisées automatiquement pour maintenir le même projet.</span>
             </div>
           ) : null}
 
           {error ? <div className={styles.error}><TriangleAlert size={19} /><span>{error}</span></div> : null}
 
-          <button className={styles.generate} disabled={busy} onClick={() => void generate()}>
-            {busy ? <><LoaderCircle className={styles.spin} size={19} /> ChatGPT Image génère DP{contract.dp}…</> : contract.generatedByImage2 ? <>Générer DP{contract.dp} avec ChatGPT Image <span>TEST</span></> : <>Utiliser la photo originale DP{contract.dp}</>}
+          <button className={styles.generate} disabled={Boolean(currentJob)} onClick={generate}>
+            {currentJob ? <>{currentJob.status === "running" ? `DP${contract.dp} en génération réelle…` : `DP${contract.dp} ajoutée à la file d’attente`}</> : contract.generatedByImage2 ? <>Générer DP{contract.dp} avec ChatGPT Image <span>TEST</span></> : <>Utiliser la photo originale DP{contract.dp}</>}
           </button>
-          <p className={styles.modeNote}>Le générateur est volontairement libre dans son interprétation visuelle, mais les faits du formulaire restent stricts : quantité, matrice, modèle de panneau et cohérence du même projet.</p>
+          <p className={styles.modeNote}>Tu peux quitter cette DP immédiatement après le lancement : le job continue dans le dock latéral. Les lancements suivants sont mis en file d’attente et les résultats restent enregistrés jusqu’à suppression explicite.</p>
         </section>
 
         <section className={styles.previewPanel}>
           <div className={styles.panelHeading}>
             <div><span>RÉSULTAT</span><h2>Contrôle visuel</h2></div>
-            {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
+            {result && !currentJob ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
 
-          {result ? (
+          {currentJob ? (
+            <SolarGenerationStage job={currentJob} />
+          ) : result ? (
             <>
               <div className={styles.previewCanvas}>{previewUrl ? <img src={previewUrl} alt={`Résultat DP${contract.dp}`} /> : null}</div>
               <div className={result.inspector.passed ? styles.inspectorPass : styles.inspectorFail}>
@@ -382,6 +452,7 @@ export function DpPieceWorkbench() {
                 {result.inspector.issues.map((issue) => <p key={issue}>⚠ {issue}</p>)}
               </div>
               <div className={styles.sources}><strong>Pipeline utilisé</strong>{result.sourceSummary.map((source) => <span key={source}>{source}</span>)}</div>
+              <div className={styles.persistNotice}><CheckCircle2 size={16} /><span>Cette DP est sauvegardée localement. Elle restera disponible en changeant de page ou après relance de PilotPaper, jusqu’à « Effacer et recommencer ».</span></div>
             </>
           ) : (
             <div className={styles.emptyPreview}>
@@ -392,6 +463,7 @@ export function DpPieceWorkbench() {
           )}
         </section>
       </div>
+      <GenerationDock jobs={jobs} onOpenDp={openPiece} />
     </main>
   );
 }
