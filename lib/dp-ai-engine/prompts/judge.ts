@@ -90,7 +90,7 @@ GLOBAL PROJECT CHECKS:
 FATAL rejection codes include:
 WRONG_DP_DOCUMENT_TYPE, INSUFFICIENT_SOURCE_EVIDENCE, MISSING_REQUIRED_DP_CONTENT, MISSING_INITIAL_PROJECTED_STATES, WRONG_PANEL_COUNT, WRONG_GRID_SHAPE, WRONG_FACE_ALLOCATION, ARRAY_CROSSES_RIDGE, ARRAY_CROSSES_HIP, WRONG_ROOF_FACE, ARRAY_OUTSIDE_ALLOCATED_FACE, ARRAY_OUTSIDE_SELECTED_ROOF_FACE, PANEL_OVER_OBSTACLE, BUILDING_GEOMETRY_CHANGED, OBSTACLE_REMOVED, SUPPORT_STRUCTURE_CHANGED, INVENTED_DIMENSION, INVENTED_CADASTRAL_GEOMETRY.
 
-For DP4, DP5 and DP6, photorealism is a HARD acceptance criterion. For DP1-DP3, judge the correct planning-document form instead of demanding photographic realism.
+For DP4, DP5 and DP6, photorealism is a HARD acceptance criterion. Reject any failure of edge integration, photographic texture match, lighting/reflection/shadow coherence, local sharpness/noise/compression match, or distance realism appropriate to the source framing. For DP1-DP3, judge the correct planning-document form instead of demanding photographic realism.
 Exact millimetric clearance may only be certified from authoritative metric evidence. Never infer millimetres from appearance alone.
 Return only the requested JSON object.`;
 }
