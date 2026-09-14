@@ -12,6 +12,7 @@ function extension(mimeType: string) {
 }
 
 function sourceOrder(dp: DPNumber): InputPhoto["role"][] {
+  if (dp === 1) return ["satellite", "satellite_mass", "roof", "near", "front", "left_oblique", "right_oblique", "far"];
   if (dp === 2) return ["satellite_mass", "satellite", "roof", "near", "front", "left_oblique", "right_oblique", "far"];
   if (dp === 3) return ["roof", "near", "front", "left_oblique", "right_oblique", "far", "satellite_mass", "satellite"];
   if (dp === 6) return ["far", "near", "roof", "front", "left_oblique", "right_oblique", "satellite_mass", "satellite"];
@@ -29,9 +30,8 @@ function chooseBasePhoto(dp: DPNumber, photos: InputPhoto[]) {
 
 function referencePhotos(dp: DPNumber, photos: InputPhoto[], base: InputPhoto) {
   // DP3-DP6 intentionally use one real source image. This mirrors the direct
-  // ChatGPT image-edit workflow: understand this photograph, preserve it and
-  // apply the requested project. Extra satellite/roof images can introduce a
-  // second geometry and make the model drift to another roof plane.
+  // ChatGPT edit process and prevents aerial evidence from pulling a photo
+  // insertion toward another roof geometry.
   if (dp >= 3 && dp <= 6) return [];
 
   const remaining = photos.filter((photo) => photo !== base);
@@ -45,12 +45,7 @@ function referencePhotos(dp: DPNumber, photos: InputPhoto[], base: InputPhoto) {
   return ordered.slice(0, 2);
 }
 
-/**
- * Direct semantic image editor: same product behavior expected from ChatGPT
- * image editing. The complete real source image is supplied intact and GPT
- * Image is allowed to understand the site before rendering the requested DP
- * visual. No precomputed mask can force a wrong placement.
- */
+/** Direct semantic image editor: complete source image, no precomputed module mask. */
 export class OpenAISemanticImageEditor implements ImageEditor {
   readonly mode = "semantic-direct" as const;
 
@@ -83,10 +78,10 @@ export class OpenAISemanticImageEditor implements ImageEditor {
       );
     }
 
-    // Only DP2 may perform one corrective aerial retry. Photo insertions never
-    // feed a generated candidate back as a new source because that compounds
-    // reconstruction errors and can alter the original house.
-    if (dp === 2 && previous?.base64) {
+    // Aerial pieces may use one previous candidate as corrective evidence.
+    // Photo-native DP3-DP6 never feed a generated reconstruction back into the
+    // source stack because it can compound changes to the real house.
+    if ((dp === 1 || dp === 2) && previous?.base64) {
       data.append("image[]", base64ToBlob(previous.base64, previous.mimeType), "previous-candidate.png");
     }
 
