@@ -97,7 +97,7 @@ test("an L-shaped building is cut through the selected wing instead of its bound
   assert.ok(upperWing.widthM > 4.8 && upperWing.widthM < 5.2);
 });
 
-test("isolated DP3 now uses direct ChatGPT Image from one real house photo and refuses invented dimensions", () => {
+test("isolated DP3 now uses one real house photo through one-shot gpt-image-2 and refuses invented dimensions", () => {
   assert.match(route, /case 3:/);
   assert.match(route, /generateDirectChatGptDp\(\{ \.\.\.input, dp: 3 \}\)/);
   assert.doesNotMatch(route, /generateDp3Piece/);
@@ -112,9 +112,11 @@ test("isolated DP3 now uses direct ChatGPT Image from one real house photo and r
   assert.match(dp3Block, /output: "image"/);
   assert.match(dp3Block, /allowsGenerativeRefinement: true/);
 
-  assert.match(direct, /DP3 ChatGPT Image/);
+  assert.match(direct, /const PHOTO_IMAGE_MODEL = "gpt-image-2"/);
   assert.match(direct, /has\("roof", "near"\)/);
-  assert.match(direct, /No cadastre, Solar segment, aerial image or/);
+  assert.match(direct, /photos = \[\.\.\.userPhotos\]/);
+  assert.match(direct, /DP\$\{input\.dp\} : une photo réelle \+ configuration minimale -> \$\{PHOTO_IMAGE_MODEL\} -> Inspector spécialisé/);
+  assert.match(direct, /const maxRetries = input\.dp <= 2 \?[^;]+: 0;/);
   assert.match(prompt, /Infer the real roof plane and roof type directly from the supplied real photograph/);
   assert.match(prompt, /Never invent a height, slope, setback or dimension/);
   assert.match(prompt, /architectural section/);
