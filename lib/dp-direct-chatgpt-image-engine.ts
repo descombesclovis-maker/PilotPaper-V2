@@ -90,7 +90,9 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   const panelHeight = orientation === "portrait" ? pvModule.heightMm : pvModule.widthMm;
   const fieldWidthMm = columns * panelWidth + Math.max(0, columns - 1) * gap;
   const fieldHeightMm = rows * panelHeight + Math.max(0, rows - 1) * gap;
-  const roofFace = input.roofFace?.trim() || "pan sélectionné";
+  const roofFace = input.dp === 2
+    ? input.roofFace?.trim() || "zone de toiture sélectionnée sur la vue aérienne"
+    : "pan de toiture à identifier directement sur la photographie réelle fournie";
   const gutter = Math.max(0, finite(input.gutterClearanceMm, 300));
   const roofWidthMm = finite(input.roofWidthMm, 0);
   const roofSlopeLengthMm = finite(input.roofSlopeLengthMm, 0);
@@ -137,7 +139,9 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     `Orientation : ${orientation}.`,
     `Champ théorique : ${fieldWidthMm} × ${fieldHeightMm} mm, jeu ${gap} mm.`,
     `Recul bas préféré : ${gutter} mm ; il ne doit pas forcer un panneau sur un obstacle.`,
-    `Pan/support demandé : ${roofFace}.`,
+    input.dp === 2
+      ? `Zone/pan demandé depuis la vue aérienne : ${roofFace}.`
+      : "Le pan cible et les obstacles doivent être compris directement depuis la photographie réelle ; aucune sélection de pan satellite ne fait autorité pour cette pièce.",
   ];
   if (roofWidthMm > 0) facts.push(`Largeur métrique fournie du pan : ${roofWidthMm} mm.`);
   if (roofSlopeLengthMm > 0) facts.push(`Rampant métrique fourni : ${roofSlopeLengthMm} mm.`);
@@ -153,7 +157,7 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     fieldHeightMm,
     roof: {
       selectedFaceDescription: roofFace,
-      confidence: 0.8,
+      confidence: input.dp === 2 ? 0.8 : 0.95,
       obstacles: [],
       perspectiveNotes: [],
       uncertainties: [],
@@ -172,13 +176,13 @@ function validatePhotoEvidence(dp: DirectDpNumber, userPhotos: InputPhoto[]) {
     throw new Error("DP3 ChatGPT Image : ajoutez au minimum une vue toiture ou une vue proche du bâtiment.");
   }
   if (dp === 4 && !has("roof", "near", "front", "left_oblique", "right_oblique")) {
-    throw new Error("DP4 ChatGPT Image : une vue réelle lisible de la façade/toiture est requise.");
+    throw new Error("DP4 ChatGPT Image : une vraie photo lisible de la façade/toiture est requise.");
   }
   if (dp === 5 && !has("roof", "near")) {
-    throw new Error("DP5 ChatGPT Image : une vue toiture ou une vue proche est requise pour représenter l'aspect extérieur.");
+    throw new Error("DP5 ChatGPT Image : une vraie photo toiture ou vue proche est requise.");
   }
   if (dp === 6 && !has("far")) {
-    throw new Error("DP6 ChatGPT Image : une vue lointaine réelle est requise pour l'insertion dans l'environnement.");
+    throw new Error("DP6 ChatGPT Image : une vraie vue lointaine est requise pour l'insertion dans l'environnement.");
   }
 }
 
@@ -202,8 +206,8 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   if (!contract) throw new Error(`Contrat DP${input.dp} introuvable.`);
   if (!input.address?.trim()) throw new Error("L'adresse exacte du projet est requise.");
 
-  // Property identity remains deterministic even though the visual rendering is
-  // deliberately delegated to ChatGPT Image.
+  // Property identity remains deterministic, but it must not force a satellite
+  // roof choice onto photo-based pieces.
   const property = await lockSiteTwinProperty(input.address);
   const [longitude, latitude] = property.addressPoint;
   const parcelReference = property.parcel.reference;
@@ -214,18 +218,46 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   const userPhotos: InputPhoto[] = (input.photos ?? []).map((photo) => ({ ...photo }));
   validatePhotoEvidence(input.dp, userPhotos);
 
-  const [situation, mass] = await Promise.all([
-    fetchIgnImage("satellite", longitude, latitude),
-    fetchIgnImage("satellite_mass", longitude, latitude),
-  ]);
-  const photos: InputPhoto[] = [situation, mass, ...userPhotos];
+  let photos: InputPhoto[];
+  if (input.dp === 2) {
+    // DP2 is the satellite/cadastral piece. It is the only direct DP that gets
+    // the IGN aerial context and therefore the only one that consumes the
+    // user's satellite roof-zone selection.
+    const [situation, mass] = await Promise.all([
+      fetchIgnImage("satellite", longitude, latitude),
+      fetchIgnImage("satellite_mass", longitude, latitude),
+    ]);
+    photos = [mass, situation, ...userPhotos];
+  } else {
+    // DP3-DP6 must reason from the real project photo(s). Feeding the aerial
+    // selector into these edits made GPT inherit an imprecise satellite target
+    // instead of understanding the visible roof like ChatGPT does in chat.
+    photos = [...userPhotos];
+  }
 
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
   const editor = new OpenAISemanticImageEditor(config.openaiApiKey, config.imageModel);
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);
-  const generator = new AIVisualGenerator(editor, judge, Math.max(0, config.maxRetries), config.testFast === true);
+
+  // Photo pieces are deliberately one-shot: one real source image, one direct
+  // ChatGPT Image edit, then one Inspector pass. The previous 5-retry loop could
+  // turn a single click into several minutes and could progressively drift away
+  // from the original house. DP2 keeps at most one corrective retry because the
+  // plan is aerial rather than a photorealistic insertion.
+  const maxRetries = input.dp === 2 ? Math.min(1, Math.max(0, config.maxRetries)) : 0;
+  const generator = new AIVisualGenerator(editor, judge, maxRetries, config.testFast === true);
   const result = await generator.generate(input.dp, form, context, photos);
+
+  const sourceSummary = [
+    `Property Lock : ${property.normalizedAddress} · parcelle ${parcelReference}`,
+    input.dp === 2
+      ? "DP2 : vue IGN orthophoto/cadastre + sélection de zone toiture satellite"
+      : "DP photo : aucune sélection de pan satellite ; ChatGPT Image comprend directement le toit sur la photographie réelle",
+    "ChatGPT Image direct — image complète, aucun masque de panneaux imposé en amont",
+    input.dp === 2 ? "Maximum 2 rendus pour DP2" : "Un seul rendu image pour cette pièce photo",
+    "PilotPaper Inspector — contrôle indépendant après génération",
+  ];
 
   return {
     dp: input.dp,
@@ -234,12 +266,7 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
     mimeType: result.asset.mimeType,
     base64: result.asset.base64,
     text: result.asset.text,
-    sourceSummary: [
-      `Property Lock : ${property.normalizedAddress} · parcelle ${parcelReference}`,
-      "IGN orthophoto/cadastre utilisé comme référence de site",
-      "ChatGPT Image direct — image complète, aucun masque de panneaux imposé en amont",
-      "PilotPaper Inspector — contrôle indépendant après génération",
-    ],
+    sourceSummary,
     inspector: inspector(result.quality),
   };
 }
