@@ -1,5 +1,7 @@
 "use client";
 
+import type { MouseEvent } from "react";
+
 export type RoofFaceChoice = {
   id: string;
   label: string;
@@ -32,103 +34,110 @@ export function RoofFaceSelector({
   disabled = false,
 }: RoofFaceSelectorProps) {
   const selected = new Set(selectedFaceIds);
-  const selectedFace = selectedFaceIds.length ? faces.find((face) => selected.has(face.id)) : undefined;
-  const compatibleCount = faces.filter((face) => face.compatible !== false).length;
+  const selectedFaces = faces.filter((face) => selected.has(face.id));
+  const selectedIncompatibleCount = selectedFaces.filter((face) => face.compatible === false).length;
 
-  function visibleFaceId(face: RoofFaceChoice) {
-    return (face.displayFaceId ?? face.label.replace(/^Pan\s+/i, "").trim()) || "?";
+  function toggle(face: RoofFaceChoice) {
+    if (disabled) return;
+    const next = new Set(selectedFaceIds);
+    if (next.has(face.id)) next.delete(face.id);
+    else next.add(face.id);
+    onChange(faces.filter((candidate) => next.has(candidate.id)).map((candidate) => candidate.id));
   }
 
-  function select(face: RoofFaceChoice) {
-    if (disabled || face.compatible === false) return;
-    onChange(selected.has(face.id) ? [] : [face.id]);
+  function closestFace(event: MouseEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return undefined;
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    const aspect = rect.width / rect.height;
+    const ranked = faces
+      .map((face) => {
+        const dx = (face.centerNormalized.x - x) * aspect;
+        const dy = face.centerNormalized.y - y;
+        return { face, distance: Math.hypot(dx, dy) };
+      })
+      .sort((a, b) => a.distance - b.distance);
+    const best = ranked[0];
+    return best && best.distance <= 0.24 ? best.face : undefined;
+  }
+
+  function onImageClick(event: MouseEvent<HTMLDivElement>) {
+    if (disabled) return;
+    const face = closestFace(event);
+    if (face) toggle(face);
   }
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-zinc-900">Choisissez le pan à équiper</p>
+          <p className="text-sm font-semibold text-zinc-900">Cliquez sur le ou les pans que vous souhaitez équiper</p>
           <p className="mt-1 text-xs leading-5 text-zinc-500">
-            Tous les pans physiques détectés restent visibles. Les pans incompatibles avec la configuration demandée sont grisés, jamais supprimés.
+            Aucun numéro n&apos;est affiché sur la toiture. Cliquez directement sur les zones de toit concernées ; recliquez pour désélectionner.
           </p>
         </div>
         <div className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600">
-          {selectedFace
-            ? `${selectedFace.label} sélectionné`
-            : `${faces.length} pan${faces.length > 1 ? "s" : ""} physique${faces.length > 1 ? "s" : ""} · ${compatibleCount} compatible${compatibleCount > 1 ? "s" : ""}`}
+          {selectedFaces.length
+            ? `${selectedFaces.length} pan${selectedFaces.length > 1 ? "s" : ""} sélectionné${selectedFaces.length > 1 ? "s" : ""}`
+            : "Aucun pan sélectionné"}
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-100 shadow-sm">
+      <div
+        className={`relative overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-100 shadow-sm ${disabled ? "cursor-wait" : "cursor-crosshair"}`}
+        onClick={onImageClick}
+        role="group"
+        aria-label="Vue aérienne interactive : cliquez directement sur le ou les pans de toiture à équiper"
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imageUrl}
-          alt="Vue aérienne IGN de la maison cible avec tous les pans physiques détectés"
+          alt="Vue aérienne IGN centrée sur la parcelle du projet"
           className="block h-auto w-full select-none"
           draggable={false}
         />
+
         {faces.map((face) => {
           const isSelected = selected.has(face.id);
-          const isCompatible = face.compatible !== false;
-          const title = isCompatible
-            ? `${face.label}${face.areaMeters2 ? ` · ${face.areaMeters2.toFixed(1)} m²` : ""}`
-            : `${face.label} · incompatible${face.incompatibilityReason ? ` · ${face.incompatibilityReason}` : ""}`;
           return (
             <button
               key={face.stableKey ?? face.id}
               type="button"
-              disabled={disabled || !isCompatible}
+              disabled={disabled}
               aria-pressed={isSelected}
-              aria-label={isCompatible
-                ? `${isSelected ? "Désélectionner" : "Sélectionner"} ${face.label}`
-                : `${face.label} incompatible avec la configuration demandée`}
-              title={title}
-              onClick={() => select(face)}
-              className={`absolute grid size-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 text-sm font-black shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-cyan-200 ${
+              aria-label={`${isSelected ? "Désélectionner" : "Sélectionner"} un pan de toiture${face.compatible === false ? " actuellement incompatible avec la configuration" : ""}`}
+              title={face.compatible === false
+                ? face.incompatibilityReason || "Ce pan est détecté mais la configuration demandée n'y tient pas actuellement."
+                : "Cliquez pour sélectionner ce pan"}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggle(face);
+              }}
+              className={`absolute size-14 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 transition-all focus:outline-none focus:ring-4 focus:ring-cyan-200 ${
                 isSelected
-                  ? "scale-110 border-white bg-cyan-600 text-white ring-4 ring-cyan-200/70"
-                  : isCompatible
-                    ? "border-white bg-zinc-950/85 text-white hover:scale-110 hover:bg-cyan-600"
-                    : "cursor-not-allowed border-white bg-zinc-400/85 text-white opacity-75"
+                  ? "border-white bg-cyan-500/20 ring-4 ring-cyan-300/80 shadow-[0_0_0_2px_rgba(8,145,178,.9)]"
+                  : "border-transparent bg-transparent hover:border-white/90 hover:bg-cyan-300/15 hover:ring-2 hover:ring-cyan-300/70"
               }`}
               style={{
                 left: `${Math.max(3, Math.min(97, face.centerNormalized.x * 100))}%`,
                 top: `${Math.max(4, Math.min(96, face.centerNormalized.y * 100))}%`,
               }}
             >
-              {visibleFaceId(face)}
+              <span className="sr-only">Pan de toiture</span>
             </button>
           );
         })}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {faces.map((face) => {
-          const isSelected = selected.has(face.id);
-          const isCompatible = face.compatible !== false;
-          return (
-            <button
-              key={face.stableKey ?? face.id}
-              type="button"
-              disabled={disabled || !isCompatible}
-              onClick={() => select(face)}
-              title={!isCompatible ? face.incompatibilityReason || "Configuration incompatible avec ce pan." : undefined}
-              className={`rounded-full border px-3 py-2 text-xs font-medium transition-colors ${
-                isSelected
-                  ? "border-cyan-600 bg-cyan-50 text-cyan-800"
-                  : isCompatible
-                    ? "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300"
-                    : "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400"
-              }`}
-            >
-              {face.label}
-              {face.areaMeters2 ? ` · ${face.areaMeters2.toFixed(1)} m²` : ""}
-              {face.pitchDegrees != null ? ` · ${face.pitchDegrees.toFixed(0)}°` : ""}
-              {!isCompatible ? " · incompatible" : ""}
-            </button>
-          );
-        })}
+      <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs leading-5 text-zinc-600">
+        {selectedFaces.length === 0 ? (
+          <>Sélectionnez d&apos;abord la zone que vous voulez réellement équiper. PilotPaper vérifiera ensuite si la quantité demandée tient sur ce ou ces pans.</>
+        ) : selectedIncompatibleCount > 0 ? (
+          <>{selectedIncompatibleCount} pan{selectedIncompatibleCount > 1 ? "s" : ""} sélectionné{selectedIncompatibleCount > 1 ? "s sont" : " est"} actuellement incompatible{selectedIncompatibleCount > 1 ? "s" : ""} avec la matrice demandée. La sélection reste conservée afin que PilotPaper puisse expliquer ou répartir le calepinage au lieu de masquer le toit.</>
+        ) : (
+          <>Sélection enregistrée. Vous pouvez choisir plusieurs pans si le projet doit être réparti sur plusieurs zones de toiture.</>
+        )}
       </div>
     </div>
   );
