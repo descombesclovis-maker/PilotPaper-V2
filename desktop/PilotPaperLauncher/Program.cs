@@ -11,8 +11,8 @@ namespace PilotPaperLauncher;
 
 internal static class Program
 {
-    private const string MutexName = "Local\\PilotPaper-V1-KParK-SingleInstance";
-    private const string PipeName = "PilotPaper-V1-KParK-Activate";
+    private const string MutexName = "Local\\PilotPaper-V1-Image2-SingleInstance";
+    private const string PipeName = "PilotPaper-V1-Image2-Activate";
 
     [STAThread]
     private static void Main()
@@ -42,7 +42,7 @@ internal static class Program
         }
         catch
         {
-            // A second click must never launch another server or browser window.
+            // A second click must never create a second PilotPaper instance.
         }
     }
 
@@ -78,13 +78,11 @@ internal static class Program
 internal sealed class PilotPaperWindow : Form
 {
     private const string AppUrl = "http://127.0.0.1:5174/";
-    private const string GeometryHealthUrl = "http://127.0.0.1:8765/health";
     private const string ReleaseApiUrl = "https://api.github.com/repos/descombesclovis-maker/PilotPaper-V2/releases/tags/pilotpaper-v1-test-latest";
     private const string SetupAssetName = "PilotPaper-V1-Setup.exe";
 
     private readonly string _installRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     private readonly string _currentAppDir;
-    private readonly string _geometryEngineDir;
     private readonly string _runtimeDir;
     private readonly string _logPath;
     private readonly string _buildMarkerPath;
@@ -93,20 +91,18 @@ internal sealed class PilotPaperWindow : Form
     private readonly Label _startupTitle;
     private readonly Label _startupDetail;
     private Process? _server;
-    private Process? _geometryServer;
     private bool _closing;
     private bool _updateInProgress;
 
     public PilotPaperWindow()
     {
         _currentAppDir = Path.Combine(_installRoot, "app", "current");
-        _geometryEngineDir = Path.Combine(_installRoot, "geometry-engine");
         _runtimeDir = Path.Combine(_installRoot, ".pilotpaper-runtime");
         _logPath = Path.Combine(_runtimeDir, "pilotpaper-v1.log");
         _buildMarkerPath = Path.Combine(_installRoot, "PILOTPAPER-BUILD.txt");
         Directory.CreateDirectory(_runtimeDir);
 
-        Text = "PilotPaper V1 — Validation K-par-K";
+        Text = "PilotPaper V1 — ChatGPT Image-2";
         StartPosition = FormStartPosition.CenterScreen;
         Width = 1460;
         Height = 930;
@@ -125,9 +121,9 @@ internal sealed class PilotPaperWindow : Form
         _startupPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(247, 248, 249) };
         _startupTitle = new Label
         {
-            Text = "PilotPaper V1",
+            Text = "PilotPaper Image-2",
             AutoSize = false,
-            Width = 520,
+            Width = 560,
             Height = 55,
             Font = new Font("Segoe UI", 27, FontStyle.Bold),
             ForeColor = Color.FromArgb(21, 39, 66),
@@ -135,9 +131,9 @@ internal sealed class PilotPaperWindow : Form
         };
         _startupDetail = new Label
         {
-            Text = "Démarrage des moteurs PilotPaper…",
+            Text = "Démarrage du moteur local…",
             AutoSize = false,
-            Width = 520,
+            Width = 560,
             Height = 34,
             Font = new Font("Segoe UI", 11, FontStyle.Regular),
             ForeColor = Color.FromArgb(104, 113, 125),
@@ -168,21 +164,12 @@ internal sealed class PilotPaperWindow : Form
             CenterStartupLabels();
             EnsureInstalledPayload();
             EnsureOpenAiKey();
-            EnsureGoogleSolarKey();
             SyncDevVarsToWorkerProject();
 
-            _startupDetail.Text = "Démarrage du moteur géométrique…";
-            if (!await IsGeometryReadyAsync())
-            {
-                StartGeometryEngine();
-                if (!await WaitUntilGeometryReadyAsync(TimeSpan.FromMinutes(2)))
-                    throw new InvalidOperationException("PilotPaper Geometry Engine n'a pas répondu dans le délai prévu.");
-            }
-
-            _startupDetail.Text = "Démarrage du moteur local V1…";
+            _startupDetail.Text = "Démarrage de PilotPaper…";
             StartServer();
             if (!await WaitUntilReadyAsync(TimeSpan.FromMinutes(2)))
-                throw new InvalidOperationException("Le moteur local n'a pas répondu dans le délai prévu.");
+                throw new InvalidOperationException("Le moteur local PilotPaper n'a pas répondu dans le délai prévu.");
 
             _startupDetail.Text = "Ouverture de l'atelier DP1 → DP8…";
             var webViewData = Path.Combine(_runtimeDir, "webview2");
@@ -221,9 +208,8 @@ internal sealed class PilotPaperWindow : Form
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
         var vite = Path.Combine(_currentAppDir, "node_modules", "vite", "bin", "vite.js");
         var config = Path.Combine(_currentAppDir, "vite.config.ts");
-        var geometry = Path.Combine(_geometryEngineDir, "PilotPaper-GeometryEngine.exe");
-        if (!File.Exists(node) || !File.Exists(vite) || !File.Exists(config) || !File.Exists(geometry))
-            throw new InvalidOperationException("Le dossier V1 installé est incomplet. Réinstallez PilotPaper V1.");
+        if (!File.Exists(node) || !File.Exists(vite) || !File.Exists(config))
+            throw new InvalidOperationException("Le dossier PilotPaper installé est incomplet. Réinstallez PilotPaper V1.");
     }
 
     private string VarsPath => Path.Combine(_installRoot, ".dev.vars");
@@ -232,8 +218,7 @@ internal sealed class PilotPaperWindow : Form
     {
         if (!File.Exists(VarsPath)) return null;
         var prefix = name + "=";
-        var line = File.ReadAllLines(VarsPath)
-            .FirstOrDefault(candidate => candidate.StartsWith(prefix, StringComparison.Ordinal));
+        var line = File.ReadAllLines(VarsPath).FirstOrDefault(candidate => candidate.StartsWith(prefix, StringComparison.Ordinal));
         return line?.Split('=', 2).ElementAtOrDefault(1)?.Trim();
     }
 
@@ -247,7 +232,7 @@ internal sealed class PilotPaperWindow : Form
         File.WriteAllLines(VarsPath, lines, new UTF8Encoding(false));
     }
 
-    private string? PromptForLocalSecret(string title, string description, string saveLabel, string cancelLabel)
+    private string? PromptForLocalSecret(string title, string description)
     {
         using var form = new Form
         {
@@ -260,14 +245,10 @@ internal sealed class PilotPaperWindow : Form
             MinimizeBox = false,
             ShowInTaskbar = false,
         };
-        var label = new Label
-        {
-            Left = 22, Top = 20, Width = 535, Height = 62,
-            Text = description,
-        };
+        var label = new Label { Left = 22, Top = 20, Width = 535, Height = 62, Text = description };
         var input = new TextBox { Left = 22, Top = 88, Width = 535, UseSystemPasswordChar = true };
-        var save = new Button { Text = saveLabel, Left = 405, Top = 136, Width = 152, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = cancelLabel, Left = 285, Top = 136, Width = 108, DialogResult = DialogResult.Cancel };
+        var save = new Button { Text = "Enregistrer", Left = 405, Top = 136, Width = 152, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = "Annuler", Left = 285, Top = 136, Width = 108, DialogResult = DialogResult.Cancel };
         form.Controls.AddRange([label, input, save, cancel]);
         form.AcceptButton = save;
         form.CancelButton = cancel;
@@ -280,71 +261,22 @@ internal sealed class PilotPaperWindow : Form
         if (!string.IsNullOrWhiteSpace(ReadLocalVar("OPENAI_API_KEY"))) return;
         var key = PromptForLocalSecret(
             "PilotPaper V1 — Configuration OpenAI",
-            "Clé API OpenAI du poste de test. Elle est enregistrée uniquement dans le dossier local PilotPaper V1 et n'est jamais envoyée dans GitHub.",
-            "Enregistrer",
-            "Annuler");
+            "Clé API OpenAI du poste de test. Elle permet la génération directe DP1 à DP6 avec ChatGPT Image-2 et reste uniquement sur ce poste.");
         if (string.IsNullOrWhiteSpace(key)) throw new OperationCanceledException("Configuration OpenAI annulée.");
         if (key.Length < 20 || key.Contains('\n') || key.Contains('\r')) throw new InvalidOperationException("La clé OpenAI saisie n'est pas valide.");
         WriteLocalVar("OPENAI_API_KEY", key);
     }
 
-    private void EnsureGoogleSolarKey()
-    {
-        if (!string.IsNullOrWhiteSpace(ReadLocalVar("GOOGLE_SOLAR_API_KEY"))) return;
-        var key = PromptForLocalSecret(
-            "PilotPaper V1 — Google Solar API",
-            "Clé Google Cloud avec Solar API activée et facturation associée. Elle permet le placement automatique des panneaux. La clé reste uniquement sur ce poste. Vous pouvez choisir Plus tard : le Roof Designer restera disponible.",
-            "Activer l'AUTO",
-            "Plus tard");
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            AppendLog("Google Solar API key not configured; DP2 automatic provider will use reviewed fallback.");
-            return;
-        }
-        if (key.Length < 20 || key.Contains('\n') || key.Contains('\r')) throw new InvalidOperationException("La clé Google Solar API saisie n'est pas valide.");
-        WriteLocalVar("GOOGLE_SOLAR_API_KEY", key);
-    }
-
     private void SyncDevVarsToWorkerProject()
     {
-        var persistentVars = Path.Combine(_installRoot, ".dev.vars");
-        var workerVars = Path.Combine(_currentAppDir, ".dev.vars");
-        if (!File.Exists(persistentVars)) throw new InvalidOperationException("Configuration locale PilotPaper introuvable.");
-        File.Copy(persistentVars, workerVars, overwrite: true);
-    }
-
-    private void StartGeometryEngine()
-    {
-        var geometryExe = Path.Combine(_geometryEngineDir, "PilotPaper-GeometryEngine.exe");
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = geometryExe,
-            WorkingDirectory = _geometryEngineDir,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        startInfo.Environment["PILOTPAPER_GEOMETRY_HOST"] = "127.0.0.1";
-        startInfo.Environment["PILOTPAPER_GEOMETRY_PORT"] = "8765";
-
-        _geometryServer = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        _geometryServer.OutputDataReceived += (_, args) => AppendLog(args.Data is null ? null : $"GEOMETRY {args.Data}");
-        _geometryServer.ErrorDataReceived += (_, args) => AppendLog(args.Data is null ? null : $"GEOMETRY {args.Data}");
-        _geometryServer.Exited += (_, _) =>
-        {
-            if (!_closing) AppendLog("GEOMETRY engine exited unexpectedly.");
-        };
-        if (!_geometryServer.Start()) throw new InvalidOperationException("Impossible de lancer PilotPaper Geometry Engine.");
-        _geometryServer.BeginOutputReadLine();
-        _geometryServer.BeginErrorReadLine();
+        if (!File.Exists(VarsPath)) throw new InvalidOperationException("Configuration locale PilotPaper introuvable.");
+        File.Copy(VarsPath, Path.Combine(_currentAppDir, ".dev.vars"), overwrite: true);
     }
 
     private void StartServer()
     {
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
         var vite = Path.Combine(_currentAppDir, "node_modules", "vite", "bin", "vite.js");
-        var varsPath = Path.Combine(_installRoot, ".dev.vars");
         var startInfo = new ProcessStartInfo
         {
             FileName = node,
@@ -362,19 +294,14 @@ internal sealed class PilotPaperWindow : Form
         startInfo.ArgumentList.Add("--strictPort");
 
         startInfo.Environment["DP_TEST_EXPORT"] = "true";
-        startInfo.Environment["DP_TEST_FAST"] = "false";
-        startInfo.Environment["DP_MAX_RETRIES"] = "5";
-        startInfo.Environment["DP_QA_PASS_SCORE"] = "0.96";
-        startInfo.Environment["DP_REALISM_PASS_SCORE"] = "0.97";
-        startInfo.Environment["PILOTPAPER_GEOMETRY_ENGINE_URL"] = "http://127.0.0.1:8765";
+        startInfo.Environment["DP_IMAGE_MODEL"] = "gpt-image-2";
         startInfo.Environment["NODE_ENV"] = "development";
-        if (File.Exists(varsPath))
+        if (File.Exists(VarsPath))
         {
-            foreach (var line in File.ReadAllLines(varsPath))
+            foreach (var line in File.ReadAllLines(VarsPath))
             {
                 var split = line.Split('=', 2);
-                if (split.Length == 2 && !string.IsNullOrWhiteSpace(split[0]))
-                    startInfo.Environment[split[0].Trim()] = split[1];
+                if (split.Length == 2 && !string.IsNullOrWhiteSpace(split[0])) startInfo.Environment[split[0].Trim()] = split[1];
             }
         }
 
@@ -408,7 +335,7 @@ internal sealed class PilotPaperWindow : Form
         try
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("PilotPaper-V1-Updater/1.0");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("PilotPaper-V1-Updater/2.0");
             client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
             using var releaseResponse = await client.GetAsync(ReleaseApiUrl);
@@ -437,9 +364,8 @@ internal sealed class PilotPaperWindow : Form
             }
 
             PostUpdateStatus("available", "Une nouvelle V1 est disponible.");
-            var choice = MessageBox.Show(
-                this,
-                "Une mise à jour PilotPaper V1 est disponible.\n\nElle ne sera installée que maintenant, à votre demande.\n\nTélécharger et installer ?",
+            var choice = MessageBox.Show(this,
+                "Une mise à jour PilotPaper V1 est disponible.\n\nTélécharger et installer maintenant ?",
                 "Mise à jour PilotPaper",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Information);
@@ -473,7 +399,6 @@ internal sealed class PilotPaperWindow : Form
             }
 
             PostUpdateStatus("installing", "Mise à jour vérifiée. Lancement de l'installeur…");
-            AppendLog($"UPDATE installing target={targetCommit}");
             Process.Start(new ProcessStartInfo(updatePath) { UseShellExecute = true });
             BeginInvoke(Close);
         }
@@ -481,8 +406,7 @@ internal sealed class PilotPaperWindow : Form
         {
             AppendLog($"UPDATE ERROR: {ex}");
             PostUpdateStatus("error", "La mise à jour n'a pas pu être vérifiée.");
-            MessageBox.Show(
-                this,
+            MessageBox.Show(this,
                 $"La mise à jour n'a pas pu être effectuée.\n\n{ex.Message}\n\nPilotPaper reste sur la version actuelle.",
                 "Mise à jour PilotPaper",
                 MessageBoxButtons.OK,
@@ -519,37 +443,12 @@ internal sealed class PilotPaperWindow : Form
         catch { return false; }
     }
 
-    private static async Task<bool> IsGeometryReadyAsync()
-    {
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-            using var response = await client.GetAsync(GeometryHealthUrl);
-            if (response.StatusCode != HttpStatusCode.OK) return false;
-            var payload = await response.Content.ReadAsStringAsync();
-            return payload.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase)
-                || payload.Contains("\"ok\": true", StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
-    }
-
     private static async Task<bool> WaitUntilReadyAsync(TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var until = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < until)
         {
             if (await IsReadyAsync()) return true;
-            await Task.Delay(700);
-        }
-        return false;
-    }
-
-    private static async Task<bool> WaitUntilGeometryReadyAsync(TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await IsGeometryReadyAsync()) return true;
             await Task.Delay(500);
         }
         return false;
@@ -558,27 +457,21 @@ internal sealed class PilotPaperWindow : Form
     private void AppendLog(string? line)
     {
         if (string.IsNullOrWhiteSpace(line)) return;
-        try { File.AppendAllText(_logPath, $"{DateTime.Now:O} {line}{Environment.NewLine}"); } catch { }
+        try
+        {
+            Directory.CreateDirectory(_runtimeDir);
+            File.AppendAllText(_logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {line}{Environment.NewLine}", Encoding.UTF8);
+        }
+        catch { }
     }
 
-    private void OnClosing(object? sender, FormClosingEventArgs args)
+    private void OnClosing(object? sender, FormClosingEventArgs e)
     {
-        if (_closing) return;
         _closing = true;
         try
         {
             if (_server is { HasExited: false }) _server.Kill(entireProcessTree: true);
         }
         catch { }
-        try { _server?.Dispose(); } catch { }
-        _server = null;
-
-        try
-        {
-            if (_geometryServer is { HasExited: false }) _geometryServer.Kill(entireProcessTree: true);
-        }
-        catch { }
-        try { _geometryServer?.Dispose(); } catch { }
-        _geometryServer = null;
     }
 }
