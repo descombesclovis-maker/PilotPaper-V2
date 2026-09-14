@@ -54,7 +54,11 @@ test("DP7 and DP8 preserve original photos", async () => {
 test("Windows build no longer bundles or starts the Geometry Engine", async () => {
   const workflow = await source(".github/workflows/build-v1-k-par-k-windows.yml");
   const launcher = await source("desktop/PilotPaperLauncher/Program.cs");
+  const installer = await source("desktop/PilotPaperInstaller.iss");
   assert.doesNotMatch(workflow, /Build bundled Geometry Engine|Smoke-test bundled Geometry Engine|PilotPaper-GeometryEngine/);
   assert.doesNotMatch(launcher, /GeometryHealthUrl|StartGeometryEngine|PILOTPAPER_GEOMETRY_ENGINE_URL|GOOGLE_SOLAR_API_KEY/);
   assert.match(launcher, /DP_IMAGE_MODEL/);
+  assert.match(installer, /\[InstallDelete\]/);
+  assert.match(installer, /\{app\}\\geometry-engine/);
+  assert.match(installer, /\{app\}\\app\\current/);
 });
