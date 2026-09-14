@@ -14,7 +14,7 @@ const IMAGE_HEIGHT = 1000;
 const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
 const PHOTO_IMAGE_MODEL = "gpt-image-2";
 
-type DirectDpNumber = 2 | 3 | 4 | 5 | 6;
+type DirectDpNumber = 1 | 2 | 3 | 4 | 5 | 6;
 
 function positiveInteger(value: unknown, label: string) {
   const parsed = Number(value);
@@ -85,19 +85,16 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   if (rows * columns !== panelCount) {
     throw new Error(`${rows} × ${columns} ne correspond pas à ${panelCount} panneaux.`);
   }
+
   const orientation = input.orientation === "landscape" ? "landscape" : "portrait";
   const gap = Math.max(0, finite(input.interPanelGapMm, 20));
   const panelWidth = orientation === "portrait" ? pvModule.widthMm : pvModule.heightMm;
   const panelHeight = orientation === "portrait" ? pvModule.heightMm : pvModule.widthMm;
   const fieldWidthMm = columns * panelWidth + Math.max(0, columns - 1) * gap;
   const fieldHeightMm = rows * panelHeight + Math.max(0, rows - 1) * gap;
-  const roofFace = input.dp === 2
+  const roofFace = input.dp <= 2
     ? input.roofFace?.trim() || "zone de toiture sélectionnée sur la vue aérienne"
-    : "pan de toiture à identifier directement sur la photographie réelle fournie";
-  const gutter = Math.max(0, finite(input.gutterClearanceMm, 300));
-  const roofWidthMm = finite(input.roofWidthMm, 0);
-  const roofSlopeLengthMm = finite(input.roofSlopeLengthMm, 0);
-  const roofSlopeDeg = finite(input.roofSlopeDeg, 0);
+    : "pan de toiture à comprendre directement depuis la photographie réelle fournie";
 
   const form: ProjectForm = {
     projectId: `direct-dp${input.dp}-${crypto.randomUUID()}`,
@@ -119,15 +116,9 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
       roofFace,
       placement: input.placement ?? "centered",
       layoutMode: "fixed",
-      gutterClearanceMm: gutter,
+      gutterClearanceMm: Math.max(0, finite(input.gutterClearanceMm, 300)),
       interPanelGapMm: gap,
     },
-    roofGeometry: roofWidthMm > 0 && roofSlopeLengthMm > 0 ? {
-      widthMm: roofWidthMm,
-      slopeLengthMm: roofSlopeLengthMm,
-      slopeDeg: roofSlopeDeg > 0 ? roofSlopeDeg : undefined,
-      source: "form",
-    } : undefined,
     support: { topology: "pitched", covering: "unknown", existingStructure: true },
   };
 
@@ -136,17 +127,13 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     ...(parcelReference ? [`Parcelle cadastrale verrouillée : ${parcelReference}.`] : []),
     `Module : ${pvModule.canonicalReference} — ${pvModule.widthMm} × ${pvModule.heightMm} mm.`,
     `Quantité exacte : ${panelCount} modules.`,
-    `Matrice demandée : ${rows} × ${columns}.`,
+    `Matrice exacte : ${rows} × ${columns}.`,
     `Orientation : ${orientation}.`,
-    `Champ théorique : ${fieldWidthMm} × ${fieldHeightMm} mm, jeu ${gap} mm.`,
-    `Recul bas préféré : ${gutter} mm ; il ne doit jamais forcer un panneau sur un obstacle.`,
-    input.dp === 2
-      ? `Zone/pan demandé depuis la vue aérienne : ${roofFace}.`
-      : "Le pan cible, la perspective et tous les obstacles doivent être compris directement depuis la photographie réelle ; aucune sélection satellite ne fait autorité pour cette pièce.",
+    `Dimensions calculées du champ photovoltaïque : ${fieldWidthMm} × ${fieldHeightMm} mm avec jeu inter-module ${gap} mm.`,
+    input.dp <= 2
+      ? `Maison/pan demandé depuis la sélection aérienne : ${roofFace}.`
+      : "La photographie réelle est la vérité visuelle pour le pan, la forme du bâtiment, les obstacles et la perspective ; aucune sélection satellite ne fait autorité pour cette pièce.",
   ];
-  if (roofWidthMm > 0) facts.push(`Largeur métrique fournie du pan : ${roofWidthMm} mm.`);
-  if (roofSlopeLengthMm > 0) facts.push(`Rampant métrique fourni : ${roofSlopeLengthMm} mm.`);
-  if (roofSlopeDeg > 0) facts.push(`Pente métrique fournie : ${roofSlopeDeg}°.`);
 
   const context: ProjectContext = {
     projectId: form.projectId,
@@ -158,12 +145,11 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     fieldHeightMm,
     roof: {
       selectedFaceDescription: roofFace,
-      confidence: input.dp === 2 ? 0.8 : 0.95,
+      confidence: input.dp <= 2 ? 0.8 : 0.95,
       obstacles: [],
       perspectiveNotes: [],
       uncertainties: [],
     },
-    roofGeometry: form.roofGeometry,
     support: form.support,
     immutableFacts: facts,
   };
@@ -172,18 +158,18 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
 
 function validatePhotoEvidence(dp: DirectDpNumber, userPhotos: InputPhoto[]) {
   const has = (...roles: InputPhoto["role"][]) => userPhotos.some((photo) => roles.includes(photo.role));
-  if (dp === 2) return;
+  if (dp <= 2) return;
   if (dp === 3 && !has("roof", "near")) {
-    throw new Error("DP3 ChatGPT Image : ajoutez une vraie photo lisible de la maison et de sa toiture.");
+    throw new Error("DP3 : ajoutez une photo lisible de la maison permettant de comprendre son volume et sa toiture.");
   }
   if (dp === 4 && !has("roof", "near", "front", "left_oblique", "right_oblique")) {
-    throw new Error("DP4 ChatGPT Image : une vraie photo lisible de la maison et de sa toiture est requise.");
+    throw new Error("DP4 : ajoutez une photo lisible de la façade et de la toiture concernées.");
   }
-  if (dp === 5 && !has("roof", "near")) {
-    throw new Error("DP5 ChatGPT Image : une vraie photo lisible de la maison et de sa toiture est requise.");
+  if (dp === 5 && !has("roof", "near", "front", "left_oblique", "right_oblique")) {
+    throw new Error("DP5 : ajoutez une photo rapprochée montrant la façade et le pan à équiper.");
   }
   if (dp === 6 && !has("far")) {
-    throw new Error("DP6 ChatGPT Image : une vraie vue contextualisée est requise pour l'insertion dans l'environnement.");
+    throw new Error("DP6 : ajoutez une vue contextualisée montrant la maison dans son environnement.");
   }
 }
 
@@ -213,11 +199,9 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   let normalizedAddress = input.address.trim();
   let parcelReference: string | undefined;
   let photos: InputPhoto[];
-  let propertySummary = "Adresse conservée comme métadonnée du dossier ; aucun verrouillage cadastral requis avant l'édition photo.";
+  let propertySummary = "Adresse conservée comme métadonnée ; aucune donnée satellite ne participe à cette pièce.";
 
-  if (input.dp === 2) {
-    // DP2 is the only direct image piece whose visual source of truth is aerial.
-    // It therefore keeps Property Lock + IGN + the user's satellite roof choice.
+  if (input.dp <= 2) {
     const property = await lockSiteTwinProperty(input.address);
     const [longitude, latitude] = property.addressPoint;
     normalizedAddress = property.normalizedAddress;
@@ -226,37 +210,33 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
       fetchIgnImage("satellite", longitude, latitude),
       fetchIgnImage("satellite_mass", longitude, latitude),
     ]);
-    photos = [mass, situation, ...userPhotos];
+    photos = input.dp === 1 ? [situation, mass] : [mass, situation];
     propertySummary = `Property Lock : ${normalizedAddress} · parcelle ${parcelReference}`;
   } else {
-    // Exact chat-like path for DP3-DP6: the real photograph is sufficient to
-    // understand the visible roof. No cadastre, Solar segment, aerial image or
-    // Site Twin call is allowed to delay or override the photographic edit.
     photos = [...userPhotos];
   }
 
   const { form, context } = buildFormAndContext(input, normalizedAddress, parcelReference);
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
-  const imageModel = input.dp >= 3 && input.dp <= 6 ? PHOTO_IMAGE_MODEL : config.imageModel;
-  const editor = new OpenAISemanticImageEditor(config.openaiApiKey, imageModel);
+
+  const editor = new OpenAISemanticImageEditor(config.openaiApiKey, PHOTO_IMAGE_MODEL);
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);
 
-  // Exact chat-like flow for photographic pieces:
-  // 1 real image + form choices -> one GPT Image edit -> one independent QA pass.
-  // No satellite roof selection, no precomputed mask and no autonomous retry loop.
-  const maxRetries = input.dp === 2 ? Math.min(1, Math.max(0, config.maxRetries)) : 0;
+  // One generation for photo-native pieces. Aerial planning pieces may perform
+  // one corrective retry because cadastral/site identity can be checked without
+  // feeding a photographic house reconstruction back into the model.
+  const maxRetries = input.dp <= 2 ? Math.min(1, Math.max(0, config.maxRetries)) : 0;
   const generator = new AIVisualGenerator(editor, judge, maxRetries, config.testFast === true);
   const result = await generator.generate(input.dp, form, context, photos);
 
   const sourceSummary = [
     propertySummary,
-    input.dp === 2
-      ? "DP2 : vue IGN orthophoto/cadastre + sélection de zone toiture satellite"
-      : `DP${input.dp} : une photo réelle + configuration formulaire -> ${PHOTO_IMAGE_MODEL} -> Inspector indépendant`,
-    "ChatGPT Image direct — image complète, aucun masque de panneaux imposé en amont",
-    input.dp === 2 ? "Maximum 2 rendus pour DP2" : "Un seul rendu image avant contrôle de conformité",
-    "PilotPaper Inspector — contrôle indépendant après génération",
+    input.dp <= 2
+      ? `DP${input.dp} : IGN orthophoto/cadastre + maison/pan sélectionné sur la vue aérienne`
+      : `DP${input.dp} : une photo réelle + configuration minimale -> ${PHOTO_IMAGE_MODEL} -> Inspector spécialisé`,
+    `Mission IA dédiée DP${input.dp} — aucune réutilisation du rôle administratif d'une autre pièce`,
+    input.dp <= 2 ? "Maximum 2 rendus aériens avant décision Inspector" : "Un seul rendu image avant contrôle indépendant",
   ];
 
   return {
