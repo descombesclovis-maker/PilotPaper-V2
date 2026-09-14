@@ -129,6 +129,7 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
     `Quantité exacte : ${panelCount} modules.`,
     `Matrice exacte : ${rows} × ${columns}.`,
     `Orientation : ${orientation}.`,
+    `Placement demandé : ${form.array.placement}.`,
     `Dimensions calculées du champ photovoltaïque : ${fieldWidthMm} × ${fieldHeightMm} mm avec jeu inter-module ${gap} mm.`,
     input.dp <= 2
       ? `Maison/pan demandé depuis la sélection aérienne : ${roofFace}.`
@@ -178,6 +179,9 @@ function inspector(quality: QualityReport) {
     passed: quality.passed,
     score: quality.score,
     checks: [
+      `Type de pièce DP correct : ${quality.documentTypeCorrect ? "oui" : "non"}`,
+      `Contenu administratif requis présent : ${quality.requiredContentPresent ? "oui" : "non"}`,
+      `Preuves visuelles suffisantes : ${quality.sourceEvidenceSufficient ? "oui" : "non"}`,
       `Bâtiment/site préservé : ${quality.buildingPreserved ? "oui" : "non"}`,
       `Échelle cohérente : ${quality.scaleCoherent ? "oui" : "non"}`,
       `Placement cohérent : ${quality.placementCoherent ? "oui" : "non"}`,
@@ -223,9 +227,6 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   const editor = new OpenAISemanticImageEditor(config.openaiApiKey, PHOTO_IMAGE_MODEL);
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);
 
-  // One generation for photo-native pieces. Aerial planning pieces may perform
-  // one corrective retry because cadastral/site identity can be checked without
-  // feeding a photographic house reconstruction back into the model.
   const maxRetries = input.dp <= 2 ? Math.min(1, Math.max(0, config.maxRetries)) : 0;
   const generator = new AIVisualGenerator(editor, judge, maxRetries, config.testFast === true);
   const result = await generator.generate(input.dp, form, context, photos);
