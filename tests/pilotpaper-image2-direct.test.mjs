@@ -112,12 +112,12 @@ test("provider wording is removed case-insensitively from the visible interface"
   const client = await source("components/dp-piece-workbench-client.tsx");
   assert.match(client, /sanitizeVisibleProviderWording/);
   assert.match(client, /PilotPaper Vision/);
-  assert.match(client, /chatgpt\\s\*image/);
-  assert.match(client, /\/gi/);
-  assert.match(client, /openai\/gi/);
+  assert.equal(client.includes(".replace(/chatgpt"), true);
+  assert.equal(client.includes("/gi"), true);
+  assert.equal(client.includes(".replace(/openai/gi"), true);
 });
 
-test("visual generations stay sequential, persistent and reopenable", async () => {
+test("visual generations stay sequential, persistent and reopenable without covering finished documents", async () => {
   const ui = await source("components/dp-piece-workbench.tsx");
   const generationUi = await source("components/solar-generation-ui.tsx");
   assert.match(ui, /queueRef/);
@@ -130,6 +130,8 @@ test("visual generations stay sequential, persistent and reopenable", async () =
   assert.match(generationUi, /PILOTPAPER LIVE/);
   assert.match(generationUi, /FILE D’ATTENTE/);
   assert.match(generationUi, /Aucun faux pourcentage/);
+  assert.match(generationUi, /const collapsed = !running && !expanded/);
+  assert.match(generationUi, /Ouvrir PilotPaper Live/);
 });
 
 test("DP7 and DP8 preserve original photos", async () => {
