@@ -27,7 +27,7 @@ export class OpenAIQualityJudge implements QualityJudge {
     const candidate = `data:${generated.mimeType};base64,${generated.base64}`;
     const imageDataUrls=[...originalPhotos.map(toDataUrl), candidate];
     let prompt=judgePrompt(dp, form, context);
-    const requiresPhotorealism = dp === 4 || dp === 6;
+    const requiresPhotorealism = dp === 4 || dp === 5 || dp === 6;
     const requiresPerspective = ![2, 3].includes(dp);
     const requiresExactVisibleCount = dp !== 3;
     const requiresGridShape = dp !== 3;
@@ -50,12 +50,25 @@ export class OpenAIQualityJudge implements QualityJudge {
     });
 
     const fatalCode = report.issues.some(i => i.severity === "fatal" || [
-      "ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE","ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","SUPPORT_STRUCTURE_CHANGED","INVENTED_DIMENSION","INVENTED_CADASTRAL_GEOMETRY"
+      "WRONG_PANEL_COUNT","WRONG_GRID_SHAPE","ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE","ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","PANEL_OVER_OBSTACLE","SUPPORT_STRUCTURE_CHANGED","INVENTED_DIMENSION","INVENTED_CADASTRAL_GEOMETRY"
     ].includes(i.code));
+    const expectedRows = context.facePlacements?.[0]?.rows ?? context.array.rows;
+    const expectedColumns = context.facePlacements?.[0]?.columns ?? context.array.columns;
+    const singleAllocation = (context.facePlacements?.length ?? 0) <= 1;
+
+    // Fail closed: a visual cannot be accepted when the independent Inspector
+    // cannot actually count the requested modules/matrix. "Unknown" is not a
+    // conformity result.
+    const visibleCountUnknownOrWrong = requiresExactVisibleCount && (
+      report.panelCountObserved == null || report.panelCountObserved !== context.exactPanelCount
+    );
+    const gridUnknownOrWrong = requiresGridShape && singleAllocation && (
+      report.rowsObserved == null || report.columnsObserved == null ||
+      report.rowsObserved !== expectedRows || report.columnsObserved !== expectedColumns
+    );
+
     const hardMismatch =
-      (requiresExactVisibleCount && report.panelCountObserved != null && report.panelCountObserved !== context.exactPanelCount) ||
-      (requiresGridShape && (context.facePlacements?.length ?? 0) <= 1 && report.rowsObserved != null && report.rowsObserved !== (context.facePlacements?.[0]?.rows ?? context.array.rows)) ||
-      (requiresGridShape && (context.facePlacements?.length ?? 0) <= 1 && report.columnsObserved != null && report.columnsObserved !== (context.facePlacements?.[0]?.columns ?? context.array.columns)) ||
+      visibleCountUnknownOrWrong || gridUnknownOrWrong ||
       !report.buildingPreserved ||
       (requiresPerspective && !report.perspectiveCoherent) ||
       !report.scaleCoherent || !report.placementCoherent ||
