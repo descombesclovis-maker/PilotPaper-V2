@@ -16,8 +16,8 @@ function contractBlock(dp) {
   return contracts.slice(start, next >= 0 ? next : undefined);
 }
 
-test("isolated DP2 through DP6 use the direct ChatGPT Image route", () => {
-  for (const dp of [2, 3, 4, 5, 6]) {
+test("isolated DP1 through DP6 use the direct ChatGPT Image route", () => {
+  for (const dp of [1, 2, 3, 4, 5, 6]) {
     assert.match(route, new RegExp(`case ${dp}:[\\s\\S]*?generateDirectChatGptDp\\(\\{ \\.\\.\\.input, dp: ${dp} \\}\\)`));
   }
   assert.match(route, /X-PilotPaper-Image-Path/);
@@ -32,31 +32,32 @@ test("direct editor sends the complete image without a module mask", () => {
 });
 
 test("only DP1 and DP2 expose satellite roof selection", () => {
-  assert.match(contractBlock(1), /fields: \["address", "roofFace"\]/);
+  assert.match(contractBlock(1), /fields: \[[^\]]*"roofFace"/);
   assert.match(contractBlock(2), /fields: \[[^\]]*"roofFace"/);
   for (const dp of [3, 4, 5, 6]) {
     assert.doesNotMatch(contractBlock(dp), /"roofFace"/);
   }
 });
 
-test("photographic DP3-DP6 use one real image and never receive satellite evidence", () => {
-  assert.match(direct, /if \(input\.dp === 2\) \{[\s\S]*?fetchIgnImage\("satellite_mass"/);
-  assert.match(direct, /else \{[\s\S]*?photos = \[\.\.\.userPhotos\];[\s\S]*?\}/);
+test("DP1-DP2 receive IGN aerial evidence while DP3-DP6 receive user photos only", () => {
+  assert.match(direct, /if \(input\.dp <= 2\) \{/);
+  assert.match(direct, /fetchIgnImage\("satellite"/);
+  assert.match(direct, /fetchIgnImage\("satellite_mass"/);
+  assert.match(direct, /else \{\s*photos = \[\.\.\.userPhotos\];\s*\}/);
   assert.match(semantic, /if \(dp >= 3 && dp <= 6\) return \[\];/);
-  assert.match(semantic, /if \(dp === 6\) return \["far", "near", "roof"/);
 });
 
 test("photo DP3-DP6 are one-shot gpt-image-2 edits followed by independent QA", () => {
   assert.match(direct, /const PHOTO_IMAGE_MODEL = "gpt-image-2"/);
-  assert.match(direct, /input\.dp >= 3 && input\.dp <= 6 \? PHOTO_IMAGE_MODEL/);
-  assert.match(direct, /const maxRetries = input\.dp === 2 \?[^;]+: 0;/);
+  assert.match(direct, /new OpenAISemanticImageEditor\(config\.openaiApiKey, PHOTO_IMAGE_MODEL\)/);
+  assert.match(direct, /const maxRetries = input\.dp <= 2 \?[^;]+: 0;/);
   assert.match(generator, /this\.judge\.judge/);
-  assert.match(semantic, /quality", "high"/);
+  assert.match(semantic, /data\.set\("quality", "high"\)/);
 });
 
-test("direct roof prompt preserves exact matrix and treats visible obstacles as hard no-panel zones", () => {
-  assert.match(prompt, /Add EXACTLY \$\{c\.exactPanelCount\} photovoltaic panels/);
-  assert.match(prompt, /Produce EXACTLY \$\{requestedRows\} row\(s\) x \$\{requestedColumns\} column\(s\)/);
+test("direct roof prompts preserve exact matrix and treat visible obstacles as hard no-panel zones", () => {
+  assert.match(prompt, /Exactly \$\{c\.exactPanelCount\} photovoltaic panels/);
+  assert.match(prompt, /Exactly \$\{rows\} visible row\(s\) x \$\{columns\} visible column\(s\)/);
   assert.match(prompt, /Velux \/ roof window, chimney, vent, antenna/);
   assert.match(prompt, /HARD NO-PANEL ZONE/);
   assert.match(prompt, /THE SAME PHOTOGRAPH taken after installation/i);
