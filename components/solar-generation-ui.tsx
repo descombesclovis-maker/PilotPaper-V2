@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { CheckCircle2, Clock3, Layers3, Sparkles, SunMedium, Zap } from "lucide-react";
 import type { DPNumber } from "@/lib/pilotpaper-image2-types";
 import styles from "./solar-generation-ui.module.css";
@@ -15,7 +15,7 @@ export type GenerationJobView = {
   error?: string;
 };
 
-function elapsedLabel(startedAt?: number, active = false) {
+function useElapsedLabel(startedAt?: number, active = false) {
   const [, forceTick] = useState(0);
 
   useEffect(() => {
@@ -36,7 +36,7 @@ function SolarCore({ compact = false }: { compact?: boolean }) {
       <div className={styles.sun}><SunMedium /></div>
       <div className={styles.orbit}><span /><span /><span /></div>
       <div className={styles.roofPlane}>
-        {Array.from({ length: 12 }, (_, index) => <i key={index} style={{ "--panel-index": index } as React.CSSProperties} />)}
+        {Array.from({ length: 12 }, (_, index) => <i key={index} style={{ "--panel-index": index } as CSSProperties} />)}
       </div>
       <div className={styles.energyLine} />
       <div className={styles.energyNode}><Zap /></div>
@@ -45,7 +45,7 @@ function SolarCore({ compact = false }: { compact?: boolean }) {
 }
 
 export function SolarGenerationStage({ job }: { job: GenerationJobView }) {
-  const elapsed = elapsedLabel(job.startedAt, job.status === "running");
+  const elapsed = useElapsedLabel(job.startedAt, job.status === "running");
   const queued = job.status === "queued";
 
   return (
@@ -71,7 +71,7 @@ export function GenerationDock({ jobs, onOpenDp }: { jobs: GenerationJobView[]; 
   const visibleJobs = useMemo(() => jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "done").slice(-8).reverse(), [jobs]);
   const running = jobs.find((job) => job.status === "running");
   const queuedCount = jobs.filter((job) => job.status === "queued").length;
-  const elapsed = elapsedLabel(running?.startedAt, Boolean(running));
+  const elapsed = useElapsedLabel(running?.startedAt, Boolean(running));
 
   if (!visibleJobs.length) return null;
 
