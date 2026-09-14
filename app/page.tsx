@@ -1,11 +1,11 @@
 import { DpPieceWorkbenchClient } from "@/components/dp-piece-workbench-client";
 import { PilotPaperUpdateButton } from "@/components/pilotpaper-update-button";
-import { SiteTwinDebugger } from "@/components/site-twin-debugger";
+import { SiteTwinAddressBridge } from "@/components/site-twin-address-bridge";
 
 export default function Page() {
   return (
     <>
-      <SiteTwinDebugger />
+      <SiteTwinAddressBridge />
       <DpPieceWorkbenchClient />
       <PilotPaperUpdateButton />
     </>

@@ -78,11 +78,13 @@ internal static class Program
 internal sealed class PilotPaperWindow : Form
 {
     private const string AppUrl = "http://127.0.0.1:5174/";
+    private const string GeometryHealthUrl = "http://127.0.0.1:8765/health";
     private const string ReleaseApiUrl = "https://api.github.com/repos/descombesclovis-maker/PilotPaper-V2/releases/tags/pilotpaper-v1-test-latest";
     private const string SetupAssetName = "PilotPaper-V1-Setup.exe";
 
     private readonly string _installRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     private readonly string _currentAppDir;
+    private readonly string _geometryEngineDir;
     private readonly string _runtimeDir;
     private readonly string _logPath;
     private readonly string _buildMarkerPath;
@@ -91,12 +93,14 @@ internal sealed class PilotPaperWindow : Form
     private readonly Label _startupTitle;
     private readonly Label _startupDetail;
     private Process? _server;
+    private Process? _geometryServer;
     private bool _closing;
     private bool _updateInProgress;
 
     public PilotPaperWindow()
     {
         _currentAppDir = Path.Combine(_installRoot, "app", "current");
+        _geometryEngineDir = Path.Combine(_installRoot, "geometry-engine");
         _runtimeDir = Path.Combine(_installRoot, ".pilotpaper-runtime");
         _logPath = Path.Combine(_runtimeDir, "pilotpaper-v1.log");
         _buildMarkerPath = Path.Combine(_installRoot, "PILOTPAPER-BUILD.txt");
@@ -131,7 +135,7 @@ internal sealed class PilotPaperWindow : Form
         };
         _startupDetail = new Label
         {
-            Text = "Démarrage du moteur local…",
+            Text = "Démarrage des moteurs PilotPaper…",
             AutoSize = false,
             Width = 520,
             Height = 34,
@@ -166,6 +170,15 @@ internal sealed class PilotPaperWindow : Form
             EnsureOpenAiKey();
             EnsureGoogleSolarKey();
             SyncDevVarsToWorkerProject();
+
+            _startupDetail.Text = "Démarrage du moteur géométrique…";
+            if (!await IsGeometryReadyAsync())
+            {
+                StartGeometryEngine();
+                if (!await WaitUntilGeometryReadyAsync(TimeSpan.FromMinutes(2)))
+                    throw new InvalidOperationException("PilotPaper Geometry Engine n'a pas répondu dans le délai prévu.");
+            }
+
             _startupDetail.Text = "Démarrage du moteur local V1…";
             StartServer();
             if (!await WaitUntilReadyAsync(TimeSpan.FromMinutes(2)))
@@ -208,7 +221,8 @@ internal sealed class PilotPaperWindow : Form
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
         var vite = Path.Combine(_currentAppDir, "node_modules", "vite", "bin", "vite.js");
         var config = Path.Combine(_currentAppDir, "vite.config.ts");
-        if (!File.Exists(node) || !File.Exists(vite) || !File.Exists(config))
+        var geometry = Path.Combine(_geometryEngineDir, "PilotPaper-GeometryEngine.exe");
+        if (!File.Exists(node) || !File.Exists(vite) || !File.Exists(config) || !File.Exists(geometry))
             throw new InvalidOperationException("Le dossier V1 installé est incomplet. Réinstallez PilotPaper V1.");
     }
 
@@ -299,6 +313,33 @@ internal sealed class PilotPaperWindow : Form
         File.Copy(persistentVars, workerVars, overwrite: true);
     }
 
+    private void StartGeometryEngine()
+    {
+        var geometryExe = Path.Combine(_geometryEngineDir, "PilotPaper-GeometryEngine.exe");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = geometryExe,
+            WorkingDirectory = _geometryEngineDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.Environment["PILOTPAPER_GEOMETRY_HOST"] = "127.0.0.1";
+        startInfo.Environment["PILOTPAPER_GEOMETRY_PORT"] = "8765";
+
+        _geometryServer = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        _geometryServer.OutputDataReceived += (_, args) => AppendLog(args.Data is null ? null : $"GEOMETRY {args.Data}");
+        _geometryServer.ErrorDataReceived += (_, args) => AppendLog(args.Data is null ? null : $"GEOMETRY {args.Data}");
+        _geometryServer.Exited += (_, _) =>
+        {
+            if (!_closing) AppendLog("GEOMETRY engine exited unexpectedly.");
+        };
+        if (!_geometryServer.Start()) throw new InvalidOperationException("Impossible de lancer PilotPaper Geometry Engine.");
+        _geometryServer.BeginOutputReadLine();
+        _geometryServer.BeginErrorReadLine();
+    }
+
     private void StartServer()
     {
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
@@ -325,6 +366,7 @@ internal sealed class PilotPaperWindow : Form
         startInfo.Environment["DP_MAX_RETRIES"] = "5";
         startInfo.Environment["DP_QA_PASS_SCORE"] = "0.96";
         startInfo.Environment["DP_REALISM_PASS_SCORE"] = "0.97";
+        startInfo.Environment["PILOTPAPER_GEOMETRY_ENGINE_URL"] = "http://127.0.0.1:8765";
         startInfo.Environment["NODE_ENV"] = "development";
         if (File.Exists(varsPath))
         {
@@ -477,6 +519,20 @@ internal sealed class PilotPaperWindow : Form
         catch { return false; }
     }
 
+    private static async Task<bool> IsGeometryReadyAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var response = await client.GetAsync(GeometryHealthUrl);
+            if (response.StatusCode != HttpStatusCode.OK) return false;
+            var payload = await response.Content.ReadAsStringAsync();
+            return payload.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase)
+                || payload.Contains("\"ok\": true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
     private static async Task<bool> WaitUntilReadyAsync(TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -484,6 +540,17 @@ internal sealed class PilotPaperWindow : Form
         {
             if (await IsReadyAsync()) return true;
             await Task.Delay(700);
+        }
+        return false;
+    }
+
+    private static async Task<bool> WaitUntilGeometryReadyAsync(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await IsGeometryReadyAsync()) return true;
+            await Task.Delay(500);
         }
         return false;
     }
@@ -505,5 +572,13 @@ internal sealed class PilotPaperWindow : Form
         catch { }
         try { _server?.Dispose(); } catch { }
         _server = null;
+
+        try
+        {
+            if (_geometryServer is { HasExited: false }) _geometryServer.Kill(entireProcessTree: true);
+        }
+        catch { }
+        try { _geometryServer?.Dispose(); } catch { }
+        _geometryServer = null;
     }
 }

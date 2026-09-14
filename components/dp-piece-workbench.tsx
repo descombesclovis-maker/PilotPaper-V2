@@ -142,6 +142,7 @@ const ROOF_ANALYSIS_KEYS: Array<keyof Draft> = [
   "placement",
   "interPanelGapMm",
 ];
+const ROOF_FACE_SEPARATOR = ";;";
 
 function numeric(value: string) {
   const parsed = Number(value);
@@ -151,6 +152,10 @@ function numeric(value: string) {
 function positiveInteger(value: string) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function selectedRoofFaceIds(value: string) {
+  return value.split(ROOF_FACE_SEPARATOR).map((item) => item.trim()).filter(Boolean);
 }
 
 function initialDraft(): Draft {
@@ -281,7 +286,7 @@ export function DpPieceWorkbench() {
       });
       const body = await response.json().catch(() => null) as (RoofFaceMap & { error?: string }) | null;
       if (!response.ok || !body?.faces?.length || !body.imageDataUrl) {
-        throw new Error(body?.error || "Aucun pan compatible n'a pu être démontré sur le bâtiment cible.");
+        throw new Error(body?.error || "Aucun pan physique n'a pu être démontré sur le bâtiment cible.");
       }
       setRoofFaceMap(body);
       setRoofFaceMapState("ready");
@@ -360,8 +365,8 @@ export function DpPieceWorkbench() {
 
   async function generate(manualRoofDesign?: ManualRoofPayload) {
     if (!contract) return;
-    if (requiresRoofFace && !draft.roofFace && !manualRoofDesign) {
-      setError("Choisissez d'abord l'un des pans compatibles proposés dans RÉSULTAT.");
+    if (requiresRoofFace && selectedRoofFaceIds(draft.roofFace).length === 0 && !manualRoofDesign) {
+      setError("Cliquez d'abord directement sur le ou les pans de toiture que vous souhaitez équiper dans RÉSULTAT.");
       return;
     }
     setBusy(true);
@@ -540,7 +545,8 @@ export function DpPieceWorkbench() {
 
   const slopeReady = numeric(draft.roofSlopeDeg) != null && Number(draft.roofSlopeDeg) >= 0 && Number(draft.roofSlopeDeg) <= 75;
   const obstacleReviewReady = noObstaclesConfirmed || keepoutPolygons.length > 0;
-  const faceReady = !requiresRoofFace || Boolean(draft.roofFace);
+  const selectedFaceIds = selectedRoofFaceIds(draft.roofFace);
+  const faceReady = !requiresRoofFace || selectedFaceIds.length > 0;
 
   return (
     <main className={styles.app}>
@@ -598,7 +604,7 @@ export function DpPieceWorkbench() {
             </div>
           ) : (
             <button className={styles.generate} disabled={busy || !faceReady} onClick={() => void generate()}>
-              {busy ? <><LoaderCircle className={styles.spin} size={19} /> Génération DP{contract.dp}…</> : !faceReady ? <>Sélectionnez un pan compatible dans RÉSULTAT</> : <>Générer DP{contract.dp} <span>TEST</span></>}
+              {busy ? <><LoaderCircle className={styles.spin} size={19} /> Génération DP{contract.dp}…</> : !faceReady ? <>Cliquez sur le ou les pans à équiper dans RÉSULTAT</> : <>Générer DP{contract.dp} <span>TEST</span></>}
             </button>
           )}
           <p className={styles.modeNote}>Cette V1 ne peut produire qu'un résultat <strong>test_unverified</strong>. Aucun clic ne peut le transformer en document de production.</p>
@@ -606,7 +612,7 @@ export function DpPieceWorkbench() {
 
         <section className={styles.previewPanel}>
           <div className={styles.panelHeading}>
-            <div><span>RÉSULTAT</span><h2>{requiresRoofFace && !result ? "Analyse du bâtiment et des pans compatibles" : "Contrôle visuel"}</h2></div>
+            <div><span>RÉSULTAT</span><h2>{requiresRoofFace && !result ? "Analyse du bâtiment et sélection des pans" : "Contrôle visuel"}</h2></div>
             {result ? <button className={styles.download} onClick={downloadResult}><Download size={16} /> Exporter</button> : null}
           </div>
 
@@ -627,7 +633,7 @@ export function DpPieceWorkbench() {
               ) : !configurationReady ? (
                 <div className={styles.emptyPreview}><MapPinned size={34} /><strong>Adresse reçue · configuration à compléter</strong><span>Choisissez le module, le nombre de panneaux, les rangées, colonnes et l'orientation. L'analyse des pans se fera uniquement pour cette configuration.</span></div>
               ) : roofFaceMapState === "loading" ? (
-                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse du bâtiment cible…</strong><span>Parcelle cadastrale → bâtiment BD TOPO → pans Google Solar → test du calepinage → validation DP3.</span></div>
+                <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={34} /><strong>Analyse du bâtiment cible…</strong><span>Parcelle cadastrale → bâtiment concerné → pans physiques → capacité de la configuration.</span></div>
               ) : roofFaceMapState === "error" ? (
                 <div className={styles.emptyPreview}><TriangleAlert size={34} /><strong>Analyse automatique indisponible</strong><span>{roofFaceMapError}</span><button type="button" className={styles.download} onClick={() => void loadRoofFaces({ ...draft })}>Réessayer l'analyse automatique</button></div>
               ) : roofFaceMap ? (
@@ -635,21 +641,20 @@ export function DpPieceWorkbench() {
                   <RoofFaceSelector
                     imageUrl={roofFaceMap.imageDataUrl}
                     faces={roofFaceMap.faces}
-                    selectedFaceIds={draft.roofFace ? [draft.roofFace] : []}
+                    selectedFaceIds={selectedFaceIds}
                     onChange={(faceIds) => {
-                      const next = faceIds.at(-1) ?? "";
-                      setDraft((current) => ({ ...current, roofFace: next }));
+                      setDraft((current) => ({ ...current, roofFace: faceIds.join(ROOF_FACE_SEPARATOR) }));
                       setError("");
                       setResult(null);
                     }}
                     disabled={busy}
                   />
-                  {draft.roofFace ? (
-                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">Pan {draft.roofFace} sélectionné. Ce pan a déjà passé le contrôle du bâtiment cible, du calepinage demandé et de la coupe DP3.</div>
+                  {selectedFaceIds.length ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{selectedFaceIds.length} pan{selectedFaceIds.length > 1 ? "s" : ""} sélectionné{selectedFaceIds.length > 1 ? "s" : ""}. PilotPaper conservera exactement cette sélection pour la génération.</div>
                   ) : (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Seuls les pans capables d'accueillir cette configuration sont affichés. Choisissez celui à équiper.</div>
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Cliquez directement sur le ou les pans que vous souhaitez équiper. Les identifiants techniques restent invisibles.</div>
                   )}
-                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}{roofFaceMap.buildingId ? ` · bâtiment ${roofFaceMap.buildingId}` : ""}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces({ ...draft })} disabled={busy}>Réanalyser</button></div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-zinc-500"><span>{roofFaceMap.parcelReference ? `Parcelle ${roofFaceMap.parcelReference}` : "Parcelle identifiée"}{roofFaceMap.buildingId ? ` · bâtiment verrouillé` : ""}</span><button type="button" className="underline underline-offset-4" onClick={() => void loadRoofFaces({ ...draft })} disabled={busy}>Réanalyser</button></div>
                 </>
               ) : (
                 <div className={styles.emptyPreview}><LoaderCircle className={styles.spin} size={30} /><strong>Préparation de l'analyse</strong><span>PilotPaper attend la configuration complète.</span></div>
