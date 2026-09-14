@@ -101,12 +101,15 @@ async function inspectDp3(apiKey: string, source: PiecePhotoInput, reference: Vi
   const prompt = [
     "Inspect PilotPaper DP3. Image 1 is the real house source, image 2 is the accepted DP2 project reference, image 3 is the candidate DP3.",
     expectedFacts,
+    "The candidate must keep the established PilotPaper DP3 composition: a large lateral orthographic section, a smaller 3D axonometric repérage view, and a technical installation table. A redesign of that successful composition is not desirable.",
     "The candidate must contain a genuine lateral architectural section perpendicular to the ridge. A front elevation alone fails.",
     "A small 3D axonometric cutaway/inset is required to make the roof and photovoltaic installation understandable, but it must not replace the true section.",
-    "The building identity and equipped roof plane must agree with the real source and DP2. Do not require all modules to be individually visible in the orthographic cut; the project facts must be stated correctly and the 3D inset must remain coherent.",
+    "AXONOMETRIC PV COUNT LOCK: count the photovoltaic modules actually visible in the 3D axonometric inset from pixels, never from the legend. The inset must visibly contain EXACTLY the requested total number of modules in EXACTLY the requested rows × columns matrix stated in the project facts. If the inset shows a different count or matrix, pvGeometryCredible MUST be false and the candidate MUST fail.",
+    "The orthographic side section itself does not need to expose every individual module because modules may overlap in the viewing direction. The exact full matrix is mandatory in the 3D axonometric inset.",
+    "MODULE SHAPE LOCK: use the verified module dimensions in the project facts. The modules in the axonometric inset must read as elongated physical rectangles with the correct long-side/short-side relationship under perspective, not square or near-square decorative tiles. If their apparent geometry is incompatible with the stated real dimensions and camera perspective, pvGeometryCredible MUST be false.",
+    "The building identity and equipped roof plane must agree with the real source and DP2.",
     "Reject any invented numeric dimensions of the building, roof, walls, terrain or heights. Verified photovoltaic dimensions are allowed and expected.",
     "Reject invented rooms, openings or structural systems presented as factual. Neutral schematic cut lines are allowed.",
-    "Judge PV module proportions, orientation and field scale as physical objects, not decorative squares.",
     "The sheet must be professionally readable and useful in a French declaration-préalable dossier.",
   ].join("\n");
 
@@ -143,9 +146,9 @@ function correctionPrompt(basePrompt: string, issues: string[], attempt: number)
   return [
     basePrompt,
     `DP3 AUTOMATIC CORRECTION PASS ${attempt}.`,
-    "The previous drawing was rejected. Correct the concrete failures below while preserving the real building identity and accepted DP2 project.",
+    "The previous drawing was rejected. Correct the concrete failures below while preserving the real building identity, the accepted DP2 project and the established DP3 sheet composition.",
     ...issues.slice(0, 10).map((issue) => `- ${issue}`),
-    "Return the complete corrected DP3 sheet, not an explanation.",
+    "Do not redesign the sheet. Keep the large section + upper-right axonometric repérage + lower-right installation table. Correct only the rejected photovoltaic or factual details and return the complete corrected DP3 sheet.",
   ].join("\n\n");
 }
 
@@ -167,6 +170,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
   const orientedHeightMm = orientation === "portrait" ? module.heightMm : module.widthMm;
   const fieldWidthMm = columns * orientedWidthMm + Math.max(0, columns - 1) * 20;
   const fieldHeightMm = rows * orientedHeightMm + Math.max(0, rows - 1) * 20;
+  const moduleAspectRatio = Math.max(module.widthMm, module.heightMm) / Math.min(module.widthMm, module.heightMm);
 
   const sectionAnalysis = await analyzeDp3SectionSource({
     apiKey,
@@ -179,6 +183,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
     `Project address: ${input.address}.`,
     `Photovoltaic module: ${module.manufacturer} ${module.canonicalReference}.`,
     `Verified module dimensions: ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm.`,
+    `Verified module long-side/short-side ratio: ${moduleAspectRatio.toFixed(3)}.`,
     `Requested installation: exactly ${panelCount} modules, ${rows} rows × ${columns} columns, ${orientation} orientation.`,
     `Oriented module footprint in the array: ${orientedWidthMm} × ${orientedHeightMm} mm.`,
     `Calculated field footprint: ${fieldWidthMm} × ${fieldHeightMm} mm with 20 mm inter-module visual gaps.`,
@@ -190,16 +195,16 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
     "Image 1 is the real building source. Image 2 is the already accepted DP2 and defines the physical equipped roof plane and installation identity.",
     expectedFacts,
     sectionAnalysis ?? "Automatic source pre-analysis was unavailable. Infer only the non-numeric visible roof/building structure directly from the supplied images and continue; do not block generation.",
-    "OUTPUT LAYOUT: create one clean professional DP3 sheet on a white background.",
+    "TEMPLATE LOCK — KEEP THE SUCCESSFUL PILOTPAPER DP3 DESIGN: one large orthographic lateral section occupying the left/main area; one smaller 'AXONOMÉTRIE DE REPÉRAGE' of the same house in the upper-right; one 'INSTALLATION PHOTOVOLTAÏQUE' technical table in the lower-right; discreet note/footer. Do not redesign this composition or replace it with another document style.",
     "MAIN VIEW: a genuine orthographic LATERAL architectural section through the building, with the section plane perpendicular to the roof ridge. It must show natural ground, exterior walls, eaves/gutter, roof slopes, ridge, roof covering and the photovoltaic layer fixed above the relevant roof plane.",
-    "SECONDARY VIEW: add a smaller 3D axonometric cutaway/inset of the SAME building and SAME roof to make the relationship between roof plane, ridge, modules and section direction immediately understandable.",
+    `SECONDARY VIEW COUNT LOCK: the upper-right 3D axonometric repérage MUST visibly show EXACTLY ${panelCount} photovoltaic modules arranged as EXACTLY ${rows} rows × ${columns} columns on the same roof plane as DP2. Count them before returning the image. For this project, a ${rows} × ${columns} matrix means ${panelCount} individually distinguishable modules in the axonometric view, not ${rows} × ${Math.max(1, columns - 2)} or any simplified substitute.`,
     "Do not turn the main view into a front elevation. Do not invent a new house.",
     "Do not invent rooms, doors, windows, framing systems or hidden structural details as factual information. Use neutral schematic cut surfaces where hidden construction is unknown.",
     "NUMERIC DIMENSION RULE: never invent building/roof/terrain numeric dimensions. If a building dimension is not supplied from a verified source, omit the number rather than estimating it.",
-    `The following photovoltaic dimensions ARE verified and should be dimensioned clearly: one module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; complete field ${fieldWidthMm} × ${fieldHeightMm} mm; ${panelCount} modules; matrix ${rows} × ${columns}; orientation ${orientation}.`,
+    `The following photovoltaic dimensions ARE verified and should be dimensioned clearly: one module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; module aspect ratio ${moduleAspectRatio.toFixed(3)}; complete field ${fieldWidthMm} × ${fieldHeightMm} mm; ${panelCount} modules; matrix ${rows} × ${columns}; orientation ${orientation}.`,
     "Use dimension lines and a small technical legend for these verified PV values. Also label: terrain naturel, mur existant, égout/gouttière, couverture existante, faîtage, modules photovoltaïques.",
-    "The side section does not need to visually expose every module because modules overlap in the viewing direction. Do not fake a frontal 2×6 grid in the cut. The full 2×6 identity must instead remain explicit in the legend and coherent in the 3D inset.",
-    "The 3D inset must use rectangular modules with the real physical proportions and the same DP2 roof plane. Never use square decorative panels.",
+    `The side section does not need to visually expose all ${panelCount} modules because modules overlap in the viewing direction. Do not fake a frontal ${rows}×${columns} grid in the cut. The exact full ${rows}×${columns} matrix IS mandatory in the 3D axonometric inset and in the technical table.`,
+    `MODULE SHAPE LOCK: every module in the 3D inset is the same real ${module.widthMm} × ${module.heightMm} mm rectangle with long/short ratio ${moduleAspectRatio.toFixed(3)} before perspective. Preserve that elongated rectangular identity under one coherent roof-plane perspective. Never use square or near-square decorative panels merely to fit the roof.`,
     "Keep the drawing sober, architectural, legible and suitable for a French déclaration préalable. Title: 'DP3 — Plan en coupe'.",
   ].join("\n\n");
 
@@ -236,8 +241,10 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
         base64: candidate,
         sourceSummary: [
           "DP3 produite par la voie spécialisée coupe architecturale + photovoltaïque",
+          "Composition DP3 validée verrouillée : coupe + axonométrie + tableau technique",
           "Analyse visuelle préalable non bloquante de la maison réelle",
           "DP2 utilisée comme verrou de pan et d'identité de l'installation",
+          `Matrice PV exigée dans l'axonométrie : ${rows} × ${columns} = ${panelCount}`,
           `Cotes PV vérifiées : module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm · champ ${fieldWidthMm} × ${fieldHeightMm} mm`,
           "Aucune cote numérique de bâtiment inventée",
           `Inspector DP3 validé en ${attempt} tentative${attempt > 1 ? "s" : ""}`,
@@ -249,6 +256,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
             "Coupe latérale orthographique : conforme",
             "Coupe perpendiculaire au faîtage : conforme",
             "Lecture 3D axonométrique : présente",
+            `Matrice visible en axonométrie : ${rows} × ${columns} = ${panelCount}`,
             "Même bâtiment et même pan que DP2 : oui",
             "Cotes photovoltaïques vérifiées : reportées",
             "Cotes bâtiment inventées : aucune",
@@ -266,7 +274,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
       ...(!judge.sameBuildingIdentity ? ["Le bâtiment ne correspond pas assez à la source."] : []),
       ...(!judge.sameEquippedRoofPlane ? ["Le pan équipé ne correspond pas à la DP2."] : []),
       ...(!judge.projectFactsVisible ? ["Les données du formulaire ne sont pas toutes reportées dans la pièce."] : []),
-      ...(!judge.pvGeometryCredible ? ["Les modules ou le champ photovoltaïque n'ont pas une géométrie physique crédible."] : []),
+      ...(!judge.pvGeometryCredible ? [`La vue axonométrique doit montrer exactement ${panelCount} modules en ${rows} × ${columns}, avec les proportions rectangulaires réelles du module.`] : []),
       ...(judge.inventedNumericBuildingDimensions ? ["Des cotes numériques de bâtiment ont été inventées."] : []),
       ...(judge.inventedArchitecture ? ["Des éléments architecturaux non vérifiés ont été inventés."] : []),
       ...(!judge.professionalReadable ? ["La planche n'est pas suffisamment lisible/professionnelle."] : []),
