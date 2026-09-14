@@ -28,7 +28,7 @@ export class OpenAIQualityJudge implements QualityJudge {
     const candidate = `data:${generated.mimeType};base64,${generated.base64}`;
     const imageDataUrls=[...originalPhotos.map(toDataUrl), candidate];
     let prompt=judgePrompt(dp, form, context);
-    const requiresPhotorealism = dp === 5 || dp === 6;
+    const requiresPhotorealism = dp === 4 || dp === 5 || dp === 6;
     const requiresPerspective = dp === 5 || dp === 6;
     const requiresExactVisibleCount = dp !== 3;
     const requiresGridShape = dp !== 3;
