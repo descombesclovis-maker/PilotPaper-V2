@@ -7,13 +7,6 @@ export type DpPieceField =
   | "rows"
   | "columns"
   | "orientation"
-  | "placement"
-  | "instructions"
-  | "roofWidthMm"
-  | "roofSlopeLengthMm"
-  | "roofSlopeDeg"
-  | "gutterClearanceMm"
-  | "interPanelGapMm"
   | "nearPhoto"
   | "roofPhoto"
   | "farPhoto";
@@ -36,10 +29,6 @@ const commonPvFields: DpPieceField[] = [
   "rows",
   "columns",
   "orientation",
-  "placement",
-  "gutterClearanceMm",
-  "interPanelGapMm",
-  "instructions",
 ];
 
 export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
@@ -47,7 +36,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 1,
     title: "Plan de situation du terrain",
     shortTitle: "Situation",
-    purpose: "Vue aérienne/cadastrale officielle : la parcelle concernée est mise en évidence en bleu nuit, les autres parcelles restent en gris et leurs numéros sont préservés.",
+    purpose: "Vue aérienne et cadastrale officielle : la parcelle concernée est mise en évidence en bleu nuit, les autres parcelles restent en gris et les données cartographiques sont préservées.",
     fields: ["address"],
     generatedByImage2: true,
     preservesOriginalPhoto: false,
@@ -57,7 +46,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 2,
     title: "Plan de masse — implantation photovoltaïque",
     shortTitle: "Masse",
-    purpose: "Vue aérienne rapprochée réelle dans laquelle ChatGPT Image place librement mais exactement le champ photovoltaïque. Cette implantation devient la référence visuelle commune aux DP3 à DP6.",
+    purpose: "Vue aérienne rapprochée réelle : PilotPaper conserve le site et ajoute exactement la configuration photovoltaïque demandée. Cette implantation devient la référence commune du dossier.",
     fields: commonPvFields,
     generatedByImage2: true,
     preservesOriginalPhoto: false,
@@ -67,8 +56,8 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 3,
     title: "Plan en coupe de la construction",
     shortTitle: "Coupe",
-    purpose: "ChatGPT Image transforme la photo réelle en plan architectural de coupe professionnel, fidèle au volume de la maison et utilisant uniquement les vraies cotes connues.",
-    fields: [...commonPvFields, "nearPhoto", "roofWidthMm", "roofSlopeLengthMm", "roofSlopeDeg"],
+    purpose: "Plan architectural en coupe latérale, perpendiculaire au faîtage, fidèle au volume visible et sans cote de bâtiment inventée.",
+    fields: [...commonPvFields, "nearPhoto"],
     generatedByImage2: true,
     preservesOriginalPhoto: false,
     usesInspector: true,
@@ -77,7 +66,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 4,
     title: "État initial / état projeté",
     shortTitle: "Avant / après",
-    purpose: "ChatGPT Image crée une planche avant/après à partir de la vraie maison et insère le même champ photovoltaïque que sur la DP2.",
+    purpose: "Comparaison fidèle de la maison avant et après insertion, sans modification de l'architecture ni des alentours.",
     fields: [...commonPvFields, "nearPhoto"],
     generatedByImage2: true,
     preservesOriginalPhoto: false,
@@ -87,7 +76,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 5,
     title: "Aspect extérieur rapproché",
     shortTitle: "Vue rapprochée",
-    purpose: "ChatGPT Image invente une vue réaliste plus haute et plus rapprochée de la même maison afin de montrer les panneaux plus frontalement, sans changer leur emplacement physique.",
+    purpose: "Vue réaliste plus haute et plus rapprochée de la même maison, avec le même champ photovoltaïque et sans invention architecturale.",
     fields: [...commonPvFields, "roofPhoto"],
     generatedByImage2: true,
     preservesOriginalPhoto: false,
@@ -97,7 +86,7 @@ export const DP_PIECE_CONTRACTS: readonly DpPieceContract[] = [
     dp: 6,
     title: "Insertion du projet dans son environnement",
     shortTitle: "Insertion lointaine",
-    purpose: "À partir d'une vraie photo lointaine, ChatGPT Image insère le même champ photovoltaïque de manière photoréaliste et cohérente avec les DP2 à DP5.",
+    purpose: "La photo lointaine réelle reste la base : seul le champ photovoltaïque est ajouté sur le pan concerné, sans recomposer la maison ni son environnement.",
     fields: [...commonPvFields, "farPhoto"],
     generatedByImage2: true,
     preservesOriginalPhoto: false,
