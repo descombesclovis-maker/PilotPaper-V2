@@ -7,6 +7,13 @@ export type DpPieceField =
   | "rows"
   | "columns"
   | "orientation"
+  | "placement"
+  | "instructions"
+  | "roofWidthMm"
+  | "roofSlopeLengthMm"
+  | "roofSlopeDeg"
+  | "gutterClearanceMm"
+  | "interPanelGapMm"
   | "nearPhoto"
   | "roofPhoto"
   | "farPhoto";
