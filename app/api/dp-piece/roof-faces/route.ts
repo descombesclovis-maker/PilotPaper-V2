@@ -1,5 +1,10 @@
 import { fetchIgnRaster, orthophotoCandidates } from "@/lib/dp-ai-engine/context/ignRaster";
-import { fromWebMercator, toWebMercator, type MetricFrame } from "@/lib/dp-ai-engine/context/officialParcel";
+import {
+  fromWebMercator,
+  parcelRings,
+  toWebMercator,
+  type MetricFrame,
+} from "@/lib/dp-ai-engine/context/officialParcel";
 import { googleSolarConfigured } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { automaticRoofDesignFromGoogleSolar } from "@/lib/dp-ai-engine/site-model/googleSolarAutomaticRoof";
 import {
@@ -31,10 +36,23 @@ function finiteNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function frameAroundTarget(target: Pick<TargetRoofContext, "building" | "buildings">): MetricFrame {
-  const points = target.buildings.flatMap((building) => (
+function metricBounds(points: Array<{ x: number; y: number }>) {
+  return {
+    minX: Math.min(...points.map((point) => point.x)),
+    maxX: Math.max(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+    maxY: Math.max(...points.map((point) => point.y)),
+  };
+}
+
+function frameAroundParcel(target: Pick<TargetRoofContext, "parcel" | "building" | "buildings">): MetricFrame {
+  const parcelPoints = parcelRings(target.parcel.parcelGeometry)
+    .flatMap((ring) => ring.map(([longitude, latitude]) => toWebMercator(longitude, latitude)));
+  const buildingPoints = target.buildings.flatMap((building) => (
     building.polygon.map(([longitude, latitude]) => toWebMercator(longitude, latitude))
   ));
+  const points = parcelPoints.length >= 3 ? parcelPoints : buildingPoints;
+
   if (!points.length) {
     const [longitude, latitude] = target.building.centroid;
     const center = toWebMercator(longitude, latitude);
@@ -52,17 +70,19 @@ function frameAroundTarget(target: Pick<TargetRoofContext, "building" | "buildin
     };
   }
 
-  const minBuildingX = Math.min(...points.map((point) => point.x));
-  const maxBuildingX = Math.max(...points.map((point) => point.x));
-  const minBuildingY = Math.min(...points.map((point) => point.y));
-  const maxBuildingY = Math.max(...points.map((point) => point.y));
-  const buildingWidth = Math.max(4, maxBuildingX - minBuildingX);
-  const buildingHeight = Math.max(4, maxBuildingY - minBuildingY);
-  const widthMeters = Math.min(72, Math.max(28, buildingWidth * 1.8, (buildingHeight * 1.8) / IMAGE_ASPECT));
+  const bounds = metricBounds(points);
+  const contentWidth = Math.max(4, bounds.maxX - bounds.minX);
+  const contentHeight = Math.max(4, bounds.maxY - bounds.minY);
+  const padding = 1.28;
+  const widthMeters = Math.min(
+    120,
+    Math.max(30, contentWidth * padding, (contentHeight * padding) / IMAGE_ASPECT),
+  );
   const heightMeters = widthMeters * IMAGE_ASPECT;
-  const centerX = (minBuildingX + maxBuildingX) / 2;
-  const centerY = (minBuildingY + maxBuildingY) / 2;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
   const center = fromWebMercator(centerX, centerY);
+
   return {
     longitude: center.longitude,
     latitude: center.latitude,
@@ -111,10 +131,10 @@ export async function POST(request: Request) {
     const interPanelGapMeters = Math.max(0, finiteNumber(body.interPanelGapMm, 20)) / 1000;
 
     const target = await resolveTargetRoofContext(address);
-    const frame = frameAroundTarget(target);
+    const frame = frameAroundParcel(target);
     const raster = await fetchIgnRaster(
       orthophotoCandidates({ frame, widthPx: IMAGE_WIDTH, heightPx: IMAGE_HEIGHT, format: "image/png" }),
-      { purpose: "Inventaire des pans physiques du bâtiment adressé", minBytes: 2_000, required: true },
+      { purpose: "Sélection interactive des pans sur la parcelle cadastrale verrouillée", minBytes: 2_000, required: true },
     );
     if (!raster) throw new Error("La vue aérienne IGN rapprochée n'a pas pu être chargée.");
 
