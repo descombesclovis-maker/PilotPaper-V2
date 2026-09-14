@@ -2,24 +2,67 @@
 
 import { useEffect, useState, type ComponentType } from "react";
 
+function migrateMinimalDraft() {
+  const key = "pilotpaper-image2-draft";
+  try {
+    const current = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, unknown>;
+    const next = {
+      ...current,
+      placement: "centered",
+      instructions: "",
+      roofWidthMm: "",
+      roofSlopeLengthMm: "",
+      roofSlopeDeg: "",
+      gutterClearanceMm: "300",
+      interPanelGapMm: "20",
+    };
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    localStorage.setItem(key, JSON.stringify({
+      placement: "centered",
+      instructions: "",
+      roofWidthMm: "",
+      roofSlopeLengthMm: "",
+      roofSlopeDeg: "",
+      gutterClearanceMm: "300",
+      interPanelGapMm: "20",
+    }));
+  }
+}
+
+function sanitizeVisibleProviderWording(root: ParentNode = document) {
+  const workspace = root.querySelector?.("[data-pilotpaper-image2-workbench]") ?? document.querySelector("[data-pilotpaper-image2-workbench]");
+  if (!workspace) return;
+  const walker = document.createTreeWalker(workspace, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  for (const node of nodes) {
+    const original = node.nodeValue ?? "";
+    const cleaned = original
+      .replaceAll("ChatGPT Image-2", "PilotPaper Vision")
+      .replaceAll("ChatGPT Image", "PilotPaper Vision")
+      .replaceAll("ChatGPT", "PilotPaper")
+      .replaceAll("gpt-image-2", "moteur visuel")
+      .replaceAll("Image-2", "Vision");
+    if (cleaned !== original) node.nodeValue = cleaned;
+  }
+}
+
 export function DpPieceWorkbenchClient() {
   const [Workbench, setWorkbench] = useState<ComponentType | null>(null);
 
   useEffect(() => {
-    // The new Image-2 V1 must never treat old sample roof dimensions as real measurements.
-    // On the first launch of this architecture, pre-seed these optional DP3 values as empty.
-    const key = "pilotpaper-image2-draft";
-    if (!localStorage.getItem(key)) {
-      localStorage.setItem(key, JSON.stringify({
-        roofWidthMm: "",
-        roofSlopeLengthMm: "",
-        roofSlopeDeg: "",
-      }));
-    }
+    migrateMinimalDraft();
+
+    const observer = new MutationObserver(() => sanitizeVisibleProviderWording());
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     void import("@/components/dp-piece-workbench").then((module) => {
       setWorkbench(() => module.DpPieceWorkbench);
+      queueMicrotask(() => sanitizeVisibleProviderWording());
     });
+
+    return () => observer.disconnect();
   }, []);
 
   return Workbench ? <Workbench /> : null;
