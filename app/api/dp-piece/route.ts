@@ -1,4 +1,3 @@
-import { generateDp1Piece } from "@/lib/dp1-engine";
 import { decodeRoofFaceSelectionToken } from "@/lib/dp-ai-engine/site-model/googleSolarFaceSelection";
 import { generateDirectChatGptDp } from "@/lib/dp-direct-chatgpt-image-engine";
 import { generateDpPiece, type DpPieceInput, type DpPieceOutput } from "@/lib/dp-piece-engine";
@@ -29,8 +28,6 @@ function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
 
   if (!decoded.length) return raw;
 
-  // Physical tokens stay internal. ChatGPT Image only receives human labels,
-  // including multi-pan selections such as "A, C".
   const first = decoded[0]!.token;
   return {
     ...raw,
@@ -85,7 +82,7 @@ function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | unde
 async function generatePiece(input: PhysicalDpPieceInput): Promise<DpPieceOutput> {
   switch (input.dp) {
     case 1:
-      return generateDp1Piece(input);
+      return generateDirectChatGptDp({ ...input, dp: 1 });
     case 2:
       return generateDirectChatGptDp({ ...input, dp: 2 });
     case 3:
@@ -107,13 +104,11 @@ async function generatePiece(input: PhysicalDpPieceInput): Promise<DpPieceOutput
 export async function POST(request: Request) {
   try {
     const rawInput = await request.json() as DpPieceInput;
-    // Every user image is decoded, EXIF-corrected and re-encoded before any AI
-    // call. This removes malformed JPEG/WebP containers from the image path.
     const evidenceSafeInput = await normalizeEvidence(rawInput);
     const input = normalizeRoofSelection(evidenceSafeInput);
     const generated = await generatePiece(input);
     const result = hideInternalRoofToken(generated, rawInput.roofFace);
-    const directImagePath = input.dp >= 2 && input.dp <= 6;
+    const directImagePath = input.dp >= 1 && input.dp <= 6;
 
     return Response.json(result, {
       headers: {
