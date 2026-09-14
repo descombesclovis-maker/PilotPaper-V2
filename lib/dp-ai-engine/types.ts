@@ -38,9 +38,7 @@ export interface ArraySpec {
 }
 
 export interface RoofMetricGeometry {
-  /** Horizontal eave-to-eave width of the SELECTED roof face. */
   widthMm?: number;
-  /** Distance gutter -> ridge/high edge measured ON the selected roof plane. */
   slopeLengthMm?: number;
   slopeDeg?: number;
   eaveHeightMm?: number;
@@ -48,9 +46,7 @@ export interface RoofMetricGeometry {
 }
 
 export interface MetricPoint2D {
-  /** Local coordinate parallel to the low/eave edge. */
   xMm: number;
-  /** Local coordinate measured up the physical roof/support plane. */
   yMm: number;
 }
 
@@ -65,34 +61,19 @@ export interface RoofFaceMetricObstacle {
 export interface RoofFaceMetricGeometry extends RoofMetricGeometry {
   id: string;
   label?: string;
-  /**
-   * Exact local support polygon derived from the calibrated IGN close view.
-   * Coordinates are expressed in millimetres in the roof-plane basis.
-   */
   surfacePolygonMm?: MetricPoint2D[];
-  /** Exact obstacle footprints in the same local roof-plane basis. */
   obstaclePolygonsMm?: RoofFaceMetricObstacle[];
-  /**
-   * Stable physical identity anchor shown to the user in the satellite_mass
-   * selector. It allows later vision passes to preserve A/B/C across views.
-   */
   sourceCenterNormalized?: Point2D;
   sourceOriginalSegmentIndex?: number;
   identitySource?: "google-solar" | "ign-vision";
-  /**
-   * Transitional compatibility field used by the legacy capacity allocator.
-   * V1.2 must stop relying on it once polygon-aware placement is validated.
-   */
   blockedCells?: number;
 }
 
 export interface PhysicalModulePlacement {
-  /** Stable zero-based index inside the project layout. */
   index: number;
   faceId: string;
   row: number;
   column: number;
-  /** Bottom-left, bottom-right, top-right, top-left in roof-plane millimetres. */
   polygonMm: [MetricPoint2D, MetricPoint2D, MetricPoint2D, MetricPoint2D];
 }
 
@@ -110,7 +91,6 @@ export interface ProjectForm {
   parcelReference?: string;
   panel: PanelSpec;
   array: ArraySpec;
-  /** Primary quantity: user-requested panel count. Falls back to rows×columns for old forms. */
   requestedPanelCount?: number;
   roofGeometry?: RoofMetricGeometry;
   roofFaces?: RoofFaceMetricGeometry[];
@@ -148,7 +128,7 @@ export interface RoofObservation {
   ridgeLineNormalized?: [Point2D, Point2D];
   views?: RoofViewObservation[];
   faces?: RoofFaceObservation[];
-  obstacles: Array<{ type: string; description: string; polygonNormalized?: Point2D[] }>; // single-face compatibility
+  obstacles: Array<{ type: string; description: string; polygonNormalized?: Point2D[] }>;
   perspectiveNotes: string[];
   uncertainties: string[];
 }
@@ -161,18 +141,11 @@ export interface FacePlacement {
   columns: number;
   lastRowCount: number;
   resolvedGutterMm: number;
-  /** Resolved physical distance from the top of the PV field to the ridge/high edge. */
   resolvedRidgeMm?: number;
-  /** Resolved lateral origin of the full PV field on the roof plane. */
   resolvedLeftMm?: number;
-  /** Remaining clearance from the full PV field to the opposite lateral edge. */
   resolvedRightMm?: number;
   widthMm: number;
   slopeLengthMm: number;
-  /**
-   * Physical module polygons become the single source of truth once the V1.2
-   * polygon-aware layout path is promoted to production.
-   */
   modulePlacementsMm?: PhysicalModulePlacement[];
 }
 
@@ -202,7 +175,6 @@ export interface GeneratedAsset {
   text?: string;
   generationPrompt?: string;
   attempt: number;
-  /** DP7/DP8 can be immutable source photographs rather than AI edits. */
   sourceRole?: PhotoRole;
 }
 
@@ -216,6 +188,12 @@ export interface QualityIssue {
 export interface QualityReport {
   passed: boolean;
   score: number;
+  /** The candidate is actually the requested DP document type, not merely a solar image. */
+  documentTypeCorrect: boolean;
+  /** Mandatory visual/administrative content for this specific DP is present. */
+  requiredContentPresent: boolean;
+  /** The supplied evidence is sufficient and the candidate does not invent unsupported geometry. */
+  sourceEvidenceSufficient: boolean;
   panelCountObserved?: number;
   rowsObserved?: number;
   columnsObserved?: number;
@@ -229,7 +207,6 @@ export interface QualityReport {
   crossesRidge: boolean;
   arrayGeometryConsistent: boolean;
   expectedFaceAllocationsMatched?: boolean;
-  /** Dedicated photo-realism QA. These are intentionally independent from geometry. */
   photorealismScore?: number;
   materialRealistic?: boolean;
   lightingMatched?: boolean;
