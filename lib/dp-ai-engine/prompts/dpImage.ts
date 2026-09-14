@@ -14,7 +14,7 @@ function exactArrayFacts(c: ProjectContext) {
     rows,
     columns,
     orientation,
-    text: `EXACT PV CONFIGURATION:\n- Exactly ${c.exactPanelCount} photovoltaic panels.\n- Exactly ${rows} visible row(s) x ${columns} visible column(s) whenever the piece is a roof view.\n- Orientation: ${orientation}.\n- Real module size: ${c.panel.widthMm} x ${c.panel.heightMm} mm.\n- Exact theoretical field size: ${c.fieldWidthMm} x ${c.fieldHeightMm} mm.`,
+    text: `EXACT PV CONFIGURATION:\n- Exactly ${c.exactPanelCount} photovoltaic panels.\n- Exactly ${rows} visible row(s) x ${columns} visible column(s) whenever the piece is a roof view.\n- Orientation: ${orientation}.\n- Requested placement: ${c.array.placement}.\n- Real module size: ${c.panel.widthMm} x ${c.panel.heightMm} mm.\n- Exact theoretical field size: ${c.fieldWidthMm} x ${c.fieldHeightMm} mm.`,
   };
 }
 
@@ -27,6 +27,7 @@ ROOF / OBSTACLE RULES:
 - Every Velux / roof window, chimney, vent, antenna, ridge, hip, valley, gutter, parapet and visible obstruction is a HARD NO-PANEL ZONE.
 - Never erase, move, resize or cover an existing obstacle.
 - Keep every panel completely inside one physically coherent usable roof plane unless the authoritative project facts explicitly require several supports.
+- Respect the requested placement (${c.array.placement}) when physically compatible with the roof and obstacles.
 - Keep rows straight and parallel to the real roof plane.
 - If the requested matrix does not physically fit, do not invent extra roof area and do not deform the building. Preserve the real property; the Inspector must reject the candidate instead.`;
 }
@@ -39,11 +40,11 @@ export function dpImagePrompt(dp: DPNumber, c: ProjectContext, correction?: stri
     return `Create a French planning DP1 PLAN DE SITUATION from the supplied REAL official IGN aerial/cadastral imagery.
 
 ADMINISTRATIVE PURPOSE:
-- The document must first and foremost locate the exact project terrain unambiguously inside its surroundings.
+- The document must first and foremost locate the exact project terrain unambiguously inside its surroundings and municipality context.
 - Preserve the real geography, road network, parcel pattern, buildings and orientation from the source imagery. Never redraw, move or invent geography.
 - Use the close aerial reference and the user's selected roof zone to identify the correct project house.
 - Keep the broad situation view readable. Add a clear but restrained project marker on the correct property.
-- Add a small close-up project inset when useful so the roof can be recognised without losing the wider location context.
+- Add a small close-up project inset so the selected roof can be recognised without losing the wider location context.
 - On that close-up only, represent the requested photovoltaic field from above using dark panel rectangles with a BRIGHT WHITE OUTLINE so the modules remain visible on the aerial image.
 - Do not replace the situation plan with a beauty render. This is a planning map/document.
 - Do not invent street names, cadastral references, dimensions or labels that are not present in authoritative evidence.
@@ -53,7 +54,7 @@ ${array.text}
 AUTHORITATIVE PROJECT FACTS:
 ${projectFacts(c)}
 
-SUCCESS = the mairie can immediately identify the correct terrain and project house, while the small roof/project indication remains legible and does not alter the official geography.${correctionBlock}`;
+SUCCESS = the mairie can immediately identify the correct terrain and project house, while the close roof/project inset shows the exact selected roof and requested PV matrix without altering official geography.${correctionBlock}`;
   }
 
   if (dp === 2) {
@@ -64,7 +65,7 @@ ADMINISTRATIVE PURPOSE:
 - The user's selected roof zone is the authority for WHICH house and WHICH roof plane receives the project.
 - Preserve every real parcel boundary, road, neighbouring building and building footprint. Never move, resize or invent geography.
 - Add EXACTLY ${c.exactPanelCount} modules on the selected roof zone.
-- Produce EXACTLY ${array.rows} row(s) x ${array.columns} column(s), ${array.orientation}.
+- Produce EXACTLY ${array.rows} row(s) x ${array.columns} column(s), ${array.orientation}, placement ${c.array.placement}.
 - Render modules as dark aerial rectangles with a BRIGHT WHITE OUTLINE around every panel so the array is unmistakable from above.
 - Keep roof windows, chimneys and other visible obstacles free.
 - Do not invent cadastral references or numeric dimensions.
@@ -80,9 +81,10 @@ SUCCESS = same real property + correct selected building/roof + exact panel coun
 
 ADMINISTRATIVE PURPOSE:
 - Produce an architectural SECTION drawing, not a photorealistic edited photograph and not a perspective beauty render.
-- Reconstruct the visible building form faithfully from the source photo: terrain profile, exterior volume, roof type, roof slopes, ridge/eaves and the roof plane carrying the PV project.
+- Reconstruct the visible building form faithfully from the source photo: exterior volume, roof type, roof slopes, ridge/eaves and the roof plane carrying the PV project.
+- Represent a ground profile and the relationship between ground, exterior building volume and roof. For a roof-only photovoltaic project, do not invent earthworks: show existing and projected ground as unchanged/coincident unless authoritative facts say otherwise.
 - The source photo is visual evidence for SHAPE only. Do not fabricate hidden architecture that contradicts what is visible.
-- Show the photovoltaic installation attached to the correct roof plane in section/elevation logic.
+- Show the photovoltaic installation attached to the correct roof plane in section/elevation logic and respect requested placement ${c.array.placement}.
 - Dimension the PV installation using ONLY known facts: module dimensions and the exact computed field size ${c.fieldWidthMm} x ${c.fieldHeightMm} mm.
 - You may label module dimensions ${c.panel.widthMm} x ${c.panel.heightMm} mm and the PV field dimensions.
 - NEVER invent a building height, terrain elevation, roof length, roof angle, setback or any other numeric dimension that is absent from authoritative facts.
@@ -94,7 +96,7 @@ ${array.text}
 AUTHORITATIVE PROJECT FACTS:
 ${projectFacts(c)}
 
-SUCCESS = a recognisable and technically coherent section of the real house, with the PV installation represented and only provable dimensions written on the sheet.${correctionBlock}`;
+SUCCESS = a recognisable and technically coherent section of the real house, terrain and exterior volume, with the PV installation represented and only provable dimensions written on the sheet.${correctionBlock}`;
   }
 
   if (dp === 4) {
@@ -103,11 +105,11 @@ SUCCESS = a recognisable and technically coherent section of the real house, wit
 ADMINISTRATIVE PURPOSE:
 - This must be an architectural before/after presentation, clearly different from DP5 and DP6.
 - Build a clean two-state sheet: ETAT INITIAL and ETAT PROJETE.
-- Preserve the same facade composition, roof form, openings, shutters, doors, windows, chimneys, roof windows, gutters and visible materials from the source evidence.
+- Preserve the same evidenced facade composition, roof form, openings, shutters, doors, windows, chimneys, roof windows, gutters and visible materials from the source evidence.
 - In ETAT INITIAL, show the building without PV panels.
 - In ETAT PROJETE, add the exact PV configuration to the correct visible roof plane.
 - Do not turn this into a landscape/environment photomontage; DP6 has that role.
-- If the supplied photograph is insufficient to infer a facade that would need to be shown, do NOT invent a hidden facade. Keep to evidenced elevations and let the Inspector reject for insufficient evidence so PilotPaper can ask for one additional view.
+- If the supplied photograph is insufficient to infer a facade that would need to be shown, do NOT invent a hidden facade. Keep to evidenced elevations and let the Inspector reject for insufficient evidence so PilotPaper can request one additional view.
 
 ${hardRoofRules(c)}
 
