@@ -6,25 +6,40 @@ import { normalizeServerPhotos, type ServerPhotoInput } from "@/lib/site-twin-v2
 
 export const dynamic = "force-dynamic";
 
+const ROOF_FACE_SEPARATOR = ";;";
+
 type PhysicalDpPieceInput = DpPieceInput & {
   roofSegmentIndex?: number;
   roofBuildingId?: string;
   roofFaceStableKey?: string;
 };
 
-function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
-  const token = decodeRoofFaceSelectionToken(raw.roofFace);
-  if (!token) return raw;
+function rawRoofSelections(value: unknown) {
+  return String(value ?? "")
+    .split(ROOF_FACE_SEPARATOR)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
-  // The physical identity is retained alongside the form, but ChatGPT Image
-  // only receives the human label (A/B/C...). Never pollute a semantic prompt
-  // with the old encoded selector token.
+function normalizeRoofSelection(raw: DpPieceInput): PhysicalDpPieceInput {
+  const selections = rawRoofSelections(raw.roofFace);
+  const decoded = selections
+    .map((selection) => ({ selection, token: decodeRoofFaceSelectionToken(selection) }))
+    .filter((entry): entry is { selection: string; token: NonNullable<ReturnType<typeof decodeRoofFaceSelectionToken>> } => Boolean(entry.token));
+
+  if (!decoded.length) return raw;
+
+  // Physical tokens stay internal. ChatGPT Image only receives human labels,
+  // including multi-pan selections such as "A, C".
+  const first = decoded[0]!.token;
   return {
     ...raw,
-    roofFace: token.displayFaceId,
-    roofSegmentIndex: token.originalSegmentIndex,
-    roofBuildingId: token.buildingId,
-    roofFaceStableKey: `${token.buildingId}:${token.originalSegmentIndex}`,
+    roofFace: decoded.map((entry) => entry.token.displayFaceId).join(", "),
+    roofSegmentIndex: first.originalSegmentIndex,
+    roofBuildingId: first.buildingId,
+    roofFaceStableKey: decoded
+      .map((entry) => `${entry.token.buildingId}:${entry.token.originalSegmentIndex}`)
+      .join(";"),
   };
 }
 
@@ -43,10 +58,18 @@ async function normalizeEvidence(raw: DpPieceInput): Promise<DpPieceInput> {
 }
 
 function hideInternalRoofToken(result: DpPieceOutput, rawRoofFace: string | undefined) {
-  const token = decodeRoofFaceSelectionToken(rawRoofFace);
-  if (!token || !rawRoofFace) return result;
-  const visible = token.displayFaceId;
-  const clean = (value: string) => value.split(rawRoofFace).join(visible).split(rawRoofFace.toUpperCase()).join(visible);
+  const decoded = rawRoofSelections(rawRoofFace)
+    .map((selection) => ({ selection, token: decodeRoofFaceSelectionToken(selection) }))
+    .filter((entry) => Boolean(entry.token));
+  if (!decoded.length) return result;
+
+  const clean = (value: string) => decoded.reduce((current, entry) => {
+    const visible = entry.token?.displayFaceId ?? "pan sélectionné";
+    return current
+      .split(entry.selection).join(visible)
+      .split(entry.selection.toUpperCase()).join(visible);
+  }, value);
+
   return {
     ...result,
     text: result.text ? clean(result.text) : result.text,
