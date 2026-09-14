@@ -1,5 +1,5 @@
 #define MyAppName "PilotPaper V1"
-#define MyAppVersion "1.0.0-test"
+#define MyAppVersion "1.1.0-image2"
 #define MyAppPublisher "PilotPaper"
 #define MyAppExeName "PilotPaper-V1.exe"
 
@@ -21,6 +21,13 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no
+
+; Remove the superseded V1 application payload and Geometry Engine before copying
+; the new direct Image-2 runtime. Root .dev.vars is intentionally preserved.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\app\current"
+Type: filesandordirs; Name: "{app}\geometry-engine"
+Type: files; Name: "{app}\.pilotpaper-runtime\PilotPaper-V1-Update.exe"
 
 [Files]
 Source: "..\desktop-stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
