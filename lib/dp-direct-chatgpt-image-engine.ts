@@ -77,7 +77,7 @@ async function fetchIgnImage(role: "satellite" | "satellite_mass", longitude: nu
   } satisfies InputPhoto;
 }
 
-function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, parcelReference: string) {
+function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, parcelReference?: string) {
   const pvModule = requireVerifiedPvModule(input.moduleReference ?? "");
   const panelCount = positiveInteger(input.panelCount, "Le nombre de panneaux");
   const rows = positiveInteger(input.rows, "Le nombre de rangées");
@@ -102,7 +102,7 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   const form: ProjectForm = {
     projectId: `direct-dp${input.dp}-${crypto.randomUUID()}`,
     address: normalizedAddress,
-    parcelReference,
+    parcelReference: parcelReference || undefined,
     panel: {
       manufacturer: pvModule.manufacturer,
       model: pvModule.canonicalReference,
@@ -132,17 +132,17 @@ function buildFormAndContext(input: DpPieceInput, normalizedAddress: string, par
   };
 
   const facts = [
-    `Adresse verrouillée : ${normalizedAddress}.`,
-    `Parcelle cadastrale : ${parcelReference}.`,
+    `Adresse du dossier : ${normalizedAddress}.`,
+    ...(parcelReference ? [`Parcelle cadastrale verrouillée : ${parcelReference}.`] : []),
     `Module : ${pvModule.canonicalReference} — ${pvModule.widthMm} × ${pvModule.heightMm} mm.`,
     `Quantité exacte : ${panelCount} modules.`,
     `Matrice demandée : ${rows} × ${columns}.`,
     `Orientation : ${orientation}.`,
     `Champ théorique : ${fieldWidthMm} × ${fieldHeightMm} mm, jeu ${gap} mm.`,
-    `Recul bas préféré : ${gutter} mm ; il ne doit pas forcer un panneau sur un obstacle.`,
+    `Recul bas préféré : ${gutter} mm ; il ne doit jamais forcer un panneau sur un obstacle.`,
     input.dp === 2
       ? `Zone/pan demandé depuis la vue aérienne : ${roofFace}.`
-      : "Le pan cible et les obstacles doivent être compris directement depuis la photographie réelle ; aucune sélection de pan satellite ne fait autorité pour cette pièce.",
+      : "Le pan cible, la perspective et tous les obstacles doivent être compris directement depuis la photographie réelle ; aucune sélection satellite ne fait autorité pour cette pièce.",
   ];
   if (roofWidthMm > 0) facts.push(`Largeur métrique fournie du pan : ${roofWidthMm} mm.`);
   if (roofSlopeLengthMm > 0) facts.push(`Rampant métrique fourni : ${roofSlopeLengthMm} mm.`);
@@ -207,25 +207,35 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   if (!contract) throw new Error(`Contrat DP${input.dp} introuvable.`);
   if (!input.address?.trim()) throw new Error("L'adresse exacte du projet est requise.");
 
-  const property = await lockSiteTwinProperty(input.address);
-  const [longitude, latitude] = property.addressPoint;
-  const parcelReference = property.parcel.reference;
-  const { form, context } = buildFormAndContext(input, property.normalizedAddress, parcelReference);
-
   const userPhotos: InputPhoto[] = (input.photos ?? []).map((photo) => ({ ...photo }));
   validatePhotoEvidence(input.dp, userPhotos);
 
+  let normalizedAddress = input.address.trim();
+  let parcelReference: string | undefined;
   let photos: InputPhoto[];
+  let propertySummary = "Adresse conservée comme métadonnée du dossier ; aucun verrouillage cadastral requis avant l'édition photo.";
+
   if (input.dp === 2) {
+    // DP2 is the only direct image piece whose visual source of truth is aerial.
+    // It therefore keeps Property Lock + IGN + the user's satellite roof choice.
+    const property = await lockSiteTwinProperty(input.address);
+    const [longitude, latitude] = property.addressPoint;
+    normalizedAddress = property.normalizedAddress;
+    parcelReference = property.parcel.reference;
     const [situation, mass] = await Promise.all([
       fetchIgnImage("satellite", longitude, latitude),
       fetchIgnImage("satellite_mass", longitude, latitude),
     ]);
     photos = [mass, situation, ...userPhotos];
+    propertySummary = `Property Lock : ${normalizedAddress} · parcelle ${parcelReference}`;
   } else {
+    // Exact chat-like path for DP3-DP6: the real photograph is sufficient to
+    // understand the visible roof. No cadastre, Solar segment, aerial image or
+    // Site Twin call is allowed to delay or override the photographic edit.
     photos = [...userPhotos];
   }
 
+  const { form, context } = buildFormAndContext(input, normalizedAddress, parcelReference);
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
   const imageModel = input.dp >= 3 && input.dp <= 6 ? PHOTO_IMAGE_MODEL : config.imageModel;
@@ -240,7 +250,7 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   const result = await generator.generate(input.dp, form, context, photos);
 
   const sourceSummary = [
-    `Property Lock : ${property.normalizedAddress} · parcelle ${parcelReference}`,
+    propertySummary,
     input.dp === 2
       ? "DP2 : vue IGN orthophoto/cadastre + sélection de zone toiture satellite"
       : `DP${input.dp} : une photo réelle + configuration formulaire -> ${PHOTO_IMAGE_MODEL} -> Inspector indépendant`,
