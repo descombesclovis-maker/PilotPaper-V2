@@ -39,11 +39,12 @@ function sanitizeVisibleProviderWording(root: ParentNode = document) {
   for (const node of nodes) {
     const original = node.nodeValue ?? "";
     const cleaned = original
-      .replaceAll("ChatGPT Image-2", "PilotPaper Vision")
-      .replaceAll("ChatGPT Image", "PilotPaper Vision")
-      .replaceAll("ChatGPT", "PilotPaper")
-      .replaceAll("gpt-image-2", "moteur visuel")
-      .replaceAll("Image-2", "Vision");
+      .replace(/chatgpt\s*image-?2/gi, "PilotPaper Vision")
+      .replace(/chatgpt\s*image/gi, "PilotPaper Vision")
+      .replace(/chatgpt/gi, "PilotPaper")
+      .replace(/gpt-image-2/gi, "moteur visuel")
+      .replace(/openai/gi, "PilotPaper")
+      .replace(/image-2/gi, "Vision");
     if (cleaned !== original) node.nodeValue = cleaned;
   }
 }
@@ -59,7 +60,7 @@ export function DpPieceWorkbenchClient() {
 
     void import("@/components/dp-piece-workbench").then((module) => {
       setWorkbench(() => module.DpPieceWorkbench);
-      queueMicrotask(() => sanitizeVisibleProviderWording());
+      requestAnimationFrame(() => sanitizeVisibleProviderWording());
     });
 
     return () => observer.disconnect();
