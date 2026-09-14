@@ -74,12 +74,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           $geometryExe = (Resolve-Path "dist/PilotPaper-GeometryEngine/PilotPaper-GeometryEngine.exe").Path
           $geometryDir = Split-Path -Parent $geometryExe
-          $process = Start-Process -FilePath $geometryExe -WorkingDirectory $geometryDir -PassThru -WindowStyle Hidden
+          $stdout = Join-Path $env:RUNNER_TEMP "pilotpaper-geometry-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "pilotpaper-geometry-stderr.log"
+          Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $geometryExe -WorkingDirectory $geometryDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $ready = $false
+          $failure = $null
           try {
-            $ready = $false
             for ($attempt = 0; $attempt -lt 90; $attempt++) {
               if ($process.HasExited) {
-                throw "PilotPaper Geometry Engine exited before /health became available (exit $($process.ExitCode))."
+                $failure = "PilotPaper Geometry Engine exited before /health became available (exit $($process.ExitCode))."
+                break
               }
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
@@ -91,10 +96,18 @@ jobs:
               } catch { }
               Start-Sleep -Seconds 1
             }
-            if (-not $ready) { throw "PilotPaper Geometry Engine did not answer /health within 90 seconds." }
+            if (-not $ready -and -not $failure) {
+              $failure = "PilotPaper Geometry Engine did not answer /health within 90 seconds."
+            }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            Start-Sleep -Milliseconds 300
+            Write-Host "=== PilotPaper Geometry Engine stdout ==="
+            if (Test-Path $stdout) { Get-Content $stdout -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+            Write-Host "=== PilotPaper Geometry Engine stderr ==="
+            if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
           }
+          if (-not $ready) { throw $failure }
 
       - name: Build Windows icon from PilotPaper monogram
         shell: pwsh
