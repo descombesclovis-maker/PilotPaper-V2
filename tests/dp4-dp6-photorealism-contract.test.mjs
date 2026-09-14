@@ -8,22 +8,22 @@ const promptPath = fileURLToPath(new URL("../lib/dp-ai-engine/prompts/judge.ts",
 const judge = readFileSync(judgePath, "utf8");
 const prompt = readFileSync(promptPath, "utf8");
 
-test("DP4 and DP6 share the same hard photorealism gate", () => {
-  assert.match(judge, /const requiresPhotorealism = dp === 4 \|\| dp === 6/);
+test("DP4 DP5 and DP6 share the same hard photorealism gate", () => {
+  assert.match(judge, /const requiresPhotorealism = dp === 4 \|\| dp === 5 \|\| dp === 6/);
   assert.match(judge, /requiresPhotorealism && generated\.sourceRole/);
   assert.match(judge, /requiresPhotorealism && \(/);
   assert.doesNotMatch(judge, /dp===6 && generated\.sourceRole/);
   assert.doesNotMatch(judge, /\(dp===6 && \(/);
 });
 
-test("both project visuals receive local zoom evidence for seam and texture inspection", () => {
+test("photographic project visuals receive local zoom evidence when geometric crops are available", () => {
   assert.match(judge, /cropPngAroundPolygons\(base\.base64,polys,\.05\)/);
   assert.match(judge, /cropPngAroundPolygons\(generated\.base64,polys,\.05\)/);
   assert.match(judge, /mismatch of sharpness\/noise\/compression/);
 });
 
-test("quality prompt states photorealism is mandatory for DP4 and DP6", () => {
-  assert.match(prompt, /For DP4 and DP6, photorealism is a HARD acceptance criterion/);
+test("quality prompt states photorealism is mandatory for DP4 DP5 and DP6", () => {
+  assert.match(prompt, /For DP4, DP5 and DP6, photorealism is a HARD acceptance criterion/);
   assert.match(prompt, /edge integration/);
   assert.match(prompt, /photographic texture match/);
   assert.match(prompt, /distance realism/);
