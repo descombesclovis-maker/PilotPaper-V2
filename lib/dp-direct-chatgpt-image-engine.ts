@@ -12,6 +12,7 @@ const IGN_WMS_ENDPOINT = "https://data.geopf.fr/wms-r/wms";
 const IMAGE_WIDTH = 1400;
 const IMAGE_HEIGHT = 1000;
 const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
+const PHOTO_IMAGE_MODEL = "gpt-image-2";
 
 type DirectDpNumber = 2 | 3 | 4 | 5 | 6;
 
@@ -173,16 +174,16 @@ function validatePhotoEvidence(dp: DirectDpNumber, userPhotos: InputPhoto[]) {
   const has = (...roles: InputPhoto["role"][]) => userPhotos.some((photo) => roles.includes(photo.role));
   if (dp === 2) return;
   if (dp === 3 && !has("roof", "near")) {
-    throw new Error("DP3 ChatGPT Image : ajoutez au minimum une vue toiture ou une vue proche du bâtiment.");
+    throw new Error("DP3 ChatGPT Image : ajoutez une vraie photo lisible de la maison et de sa toiture.");
   }
   if (dp === 4 && !has("roof", "near", "front", "left_oblique", "right_oblique")) {
-    throw new Error("DP4 ChatGPT Image : une vraie photo lisible de la façade/toiture est requise.");
+    throw new Error("DP4 ChatGPT Image : une vraie photo lisible de la maison et de sa toiture est requise.");
   }
   if (dp === 5 && !has("roof", "near")) {
-    throw new Error("DP5 ChatGPT Image : une vraie photo toiture ou vue proche est requise.");
+    throw new Error("DP5 ChatGPT Image : une vraie photo lisible de la maison et de sa toiture est requise.");
   }
   if (dp === 6 && !has("far")) {
-    throw new Error("DP6 ChatGPT Image : une vraie vue lointaine est requise pour l'insertion dans l'environnement.");
+    throw new Error("DP6 ChatGPT Image : une vraie vue contextualisée est requise pour l'insertion dans l'environnement.");
   }
 }
 
@@ -206,45 +207,34 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
   if (!contract) throw new Error(`Contrat DP${input.dp} introuvable.`);
   if (!input.address?.trim()) throw new Error("L'adresse exacte du projet est requise.");
 
-  // Property identity remains deterministic, but it must not force a satellite
-  // roof choice onto photo-based pieces.
   const property = await lockSiteTwinProperty(input.address);
   const [longitude, latitude] = property.addressPoint;
   const parcelReference = property.parcel.reference;
   const { form, context } = buildFormAndContext(input, property.normalizedAddress, parcelReference);
 
-  // The API route is the single normalization gate. At this point every user
-  // image is already a decoded/re-encoded canonical JPEG.
   const userPhotos: InputPhoto[] = (input.photos ?? []).map((photo) => ({ ...photo }));
   validatePhotoEvidence(input.dp, userPhotos);
 
   let photos: InputPhoto[];
   if (input.dp === 2) {
-    // DP2 is the satellite/cadastral piece. It is the only direct DP that gets
-    // the IGN aerial context and therefore the only one that consumes the
-    // user's satellite roof-zone selection.
     const [situation, mass] = await Promise.all([
       fetchIgnImage("satellite", longitude, latitude),
       fetchIgnImage("satellite_mass", longitude, latitude),
     ]);
     photos = [mass, situation, ...userPhotos];
   } else {
-    // DP3-DP6 must reason from the real project photo(s). Feeding the aerial
-    // selector into these edits made GPT inherit an imprecise satellite target
-    // instead of understanding the visible roof like ChatGPT does in chat.
     photos = [...userPhotos];
   }
 
   const config = configFromEnv();
   if (!config.openaiApiKey) throw new Error("OPENAI_API_KEY absente du poste local.");
-  const editor = new OpenAISemanticImageEditor(config.openaiApiKey, config.imageModel);
+  const imageModel = input.dp >= 3 && input.dp <= 6 ? PHOTO_IMAGE_MODEL : config.imageModel;
+  const editor = new OpenAISemanticImageEditor(config.openaiApiKey, imageModel);
   const judge = new OpenAIQualityJudge(config.openaiApiKey, config.judgeModel, config.qaPassScore, config.realismPassScore);
 
-  // Photo pieces are deliberately one-shot: one real source image, one direct
-  // ChatGPT Image edit, then one Inspector pass. The previous 5-retry loop could
-  // turn a single click into several minutes and could progressively drift away
-  // from the original house. DP2 keeps at most one corrective retry because the
-  // plan is aerial rather than a photorealistic insertion.
+  // Exact chat-like flow for photographic pieces:
+  // 1 real image + form choices -> one GPT Image edit -> one independent QA pass.
+  // No satellite roof selection, no precomputed mask and no autonomous retry loop.
   const maxRetries = input.dp === 2 ? Math.min(1, Math.max(0, config.maxRetries)) : 0;
   const generator = new AIVisualGenerator(editor, judge, maxRetries, config.testFast === true);
   const result = await generator.generate(input.dp, form, context, photos);
@@ -253,9 +243,9 @@ export async function generateDirectChatGptDp(input: DpPieceInput & { dp: Direct
     `Property Lock : ${property.normalizedAddress} · parcelle ${parcelReference}`,
     input.dp === 2
       ? "DP2 : vue IGN orthophoto/cadastre + sélection de zone toiture satellite"
-      : "DP photo : aucune sélection de pan satellite ; ChatGPT Image comprend directement le toit sur la photographie réelle",
+      : `DP${input.dp} : une photo réelle + configuration formulaire -> ${PHOTO_IMAGE_MODEL} -> Inspector indépendant`,
     "ChatGPT Image direct — image complète, aucun masque de panneaux imposé en amont",
-    input.dp === 2 ? "Maximum 2 rendus pour DP2" : "Un seul rendu image pour cette pièce photo",
+    input.dp === 2 ? "Maximum 2 rendus pour DP2" : "Un seul rendu image avant contrôle de conformité",
     "PilotPaper Inspector — contrôle indépendant après génération",
   ];
 
