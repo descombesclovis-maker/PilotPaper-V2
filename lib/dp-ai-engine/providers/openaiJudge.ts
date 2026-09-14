@@ -10,6 +10,7 @@ const schema = {
   type: "object", additionalProperties: false,
   properties: {
     passed:{type:"boolean"}, score:{type:"number",minimum:0,maximum:1},
+    documentTypeCorrect:{type:"boolean"}, requiredContentPresent:{type:"boolean"}, sourceEvidenceSufficient:{type:"boolean"},
     panelCountObserved:{type:["integer","null"]}, rowsObserved:{type:["integer","null"]}, columnsObserved:{type:["integer","null"]},
     buildingPreserved:{type:"boolean"}, perspectiveCoherent:{type:"boolean"}, scaleCoherent:{type:"boolean"}, placementCoherent:{type:"boolean"},
     roofFaceCorrect:{type:"boolean"}, insideSelectedRoofFace:{type:"boolean"}, singleRoofPlane:{type:"boolean"}, crossesRidge:{type:"boolean"}, arrayGeometryConsistent:{type:"boolean"},
@@ -17,7 +18,7 @@ const schema = {
     issues:{type:"array",items:{type:"object",additionalProperties:false,properties:{code:{type:"string"},severity:{type:"string",enum:["warning","error","fatal"]},message:{type:"string"},correction:{type:"string"}},required:["code","severity","message","correction"]}},
     correctionPrompt:{type:"string"}
   },
-  required:["passed","score","panelCountObserved","rowsObserved","columnsObserved","buildingPreserved","perspectiveCoherent","scaleCoherent","placementCoherent","roofFaceCorrect","insideSelectedRoofFace","singleRoofPlane","crossesRidge","arrayGeometryConsistent","photorealismScore","materialRealistic","lightingMatched","reflectionsNatural","contactShadowsNatural","edgeIntegrationNatural","localSharpnessMatched","localNoiseCompressionMatched","cgiArtifactsAbsent","roofTexturePreserved","issues","correctionPrompt"]
+  required:["passed","score","documentTypeCorrect","requiredContentPresent","sourceEvidenceSufficient","panelCountObserved","rowsObserved","columnsObserved","buildingPreserved","perspectiveCoherent","scaleCoherent","placementCoherent","roofFaceCorrect","insideSelectedRoofFace","singleRoofPlane","crossesRidge","arrayGeometryConsistent","photorealismScore","materialRealistic","lightingMatched","reflectionsNatural","contactShadowsNatural","edgeIntegrationNatural","localSharpnessMatched","localNoiseCompressionMatched","cgiArtifactsAbsent","roofTexturePreserved","issues","correctionPrompt"]
 } as const;
 
 export class OpenAIQualityJudge implements QualityJudge {
@@ -27,8 +28,8 @@ export class OpenAIQualityJudge implements QualityJudge {
     const candidate = `data:${generated.mimeType};base64,${generated.base64}`;
     const imageDataUrls=[...originalPhotos.map(toDataUrl), candidate];
     let prompt=judgePrompt(dp, form, context);
-    const requiresPhotorealism = dp === 4 || dp === 5 || dp === 6;
-    const requiresPerspective = ![2, 3].includes(dp);
+    const requiresPhotorealism = dp === 5 || dp === 6;
+    const requiresPerspective = dp === 5 || dp === 6;
     const requiresExactVisibleCount = dp !== 3;
     const requiresGridShape = dp !== 3;
 
@@ -50,15 +51,16 @@ export class OpenAIQualityJudge implements QualityJudge {
     });
 
     const fatalCode = report.issues.some(i => i.severity === "fatal" || [
-      "WRONG_PANEL_COUNT","WRONG_GRID_SHAPE","ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE","ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","PANEL_OVER_OBSTACLE","SUPPORT_STRUCTURE_CHANGED","INVENTED_DIMENSION","INVENTED_CADASTRAL_GEOMETRY"
+      "WRONG_DP_DOCUMENT_TYPE","INSUFFICIENT_SOURCE_EVIDENCE","MISSING_REQUIRED_DP_CONTENT","MISSING_INITIAL_PROJECTED_STATES",
+      "WRONG_PANEL_COUNT","WRONG_GRID_SHAPE","ARRAY_CROSSES_RIDGE","ARRAY_CROSSES_HIP","WRONG_FACE_ALLOCATION","WRONG_ROOF_FACE",
+      "ARRAY_OUTSIDE_ALLOCATED_FACE","ARRAY_OUTSIDE_SELECTED_ROOF_FACE","BUILDING_GEOMETRY_CHANGED","OBSTACLE_REMOVED","PANEL_OVER_OBSTACLE",
+      "SUPPORT_STRUCTURE_CHANGED","INVENTED_DIMENSION","INVENTED_CADASTRAL_GEOMETRY"
     ].includes(i.code));
     const expectedRows = context.facePlacements?.[0]?.rows ?? context.array.rows;
     const expectedColumns = context.facePlacements?.[0]?.columns ?? context.array.columns;
     const singleAllocation = (context.facePlacements?.length ?? 0) <= 1;
 
-    // Fail closed: a visual cannot be accepted when the independent Inspector
-    // cannot actually count the requested modules/matrix. "Unknown" is not a
-    // conformity result.
+    // Fail closed: unknown is not conformity.
     const visibleCountUnknownOrWrong = requiresExactVisibleCount && (
       report.panelCountObserved == null || report.panelCountObserved !== context.exactPanelCount
     );
@@ -67,8 +69,13 @@ export class OpenAIQualityJudge implements QualityJudge {
       report.rowsObserved !== expectedRows || report.columnsObserved !== expectedColumns
     );
 
+    const administrativeMismatch =
+      report.documentTypeCorrect !== true ||
+      report.requiredContentPresent !== true ||
+      report.sourceEvidenceSufficient !== true;
+
     const hardMismatch =
-      visibleCountUnknownOrWrong || gridUnknownOrWrong ||
+      administrativeMismatch || visibleCountUnknownOrWrong || gridUnknownOrWrong ||
       !report.buildingPreserved ||
       (requiresPerspective && !report.perspectiveCoherent) ||
       !report.scaleCoherent || !report.placementCoherent ||
