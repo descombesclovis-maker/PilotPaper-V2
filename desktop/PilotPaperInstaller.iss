@@ -27,7 +27,6 @@ RestartApplications=no
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\app\current"
 Type: filesandordirs; Name: "{app}\geometry-engine"
-Type: files; Name: "{app}\.pilotpaper-runtime\PilotPaper-V1-Update.exe"
 
 [Files]
 Source: "..\desktop-stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
