@@ -117,9 +117,9 @@ test("isolated DP3 now uses one real house photo through one-shot gpt-image-2 an
   assert.match(direct, /photos = \[\.\.\.userPhotos\]/);
   assert.match(direct, /DP\$\{input\.dp\} : une photo réelle \+ configuration minimale -> \$\{PHOTO_IMAGE_MODEL\} -> Inspector spécialisé/);
   assert.match(direct, /const maxRetries = input\.dp <= 2 \?[^;]+: 0;/);
-  assert.match(prompt, /Infer the real roof plane and roof type directly from the supplied real photograph/);
-  assert.match(prompt, /Never invent a height, slope, setback or dimension/);
-  assert.match(prompt, /architectural section/);
+  assert.match(prompt, /Reconstruct the visible building form faithfully from the source photo/);
+  assert.match(prompt, /NEVER invent a building height, terrain elevation, roof length, roof angle, setback or any other numeric dimension/);
+  assert.match(prompt, /Produce an architectural SECTION drawing/);
 
   // The old exact section geometry remains unit-tested as a metric/reference
   // helper, but it is no longer the isolated user-facing rendering route.
