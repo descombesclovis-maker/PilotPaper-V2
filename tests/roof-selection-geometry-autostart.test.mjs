@@ -11,11 +11,13 @@ const dpRoute = await readFile(new URL("../app/api/dp-piece/route.ts", import.me
 const launcher = await readFile(new URL("../desktop/PilotPaperLauncher/Program.cs", import.meta.url), "utf8");
 const windowsWorkflow = await readFile(new URL("../.github/workflows/build-v1-k-par-k-windows.yml", import.meta.url), "utf8");
 
-test("roof selection is direct, label-free and supports several user-selected faces", () => {
-  assert.match(selector, /Cliquez sur le ou les pans que vous souhaitez équiper/);
-  assert.doesNotMatch(selector, />\s*\{visibleFaceId\(face\)\}\s*</);
+test("roof selection is click-native, marker-free and supports several user-selected faces", () => {
+  assert.match(selector, /Cliquez directement sur le ou les pans que vous souhaitez équiper/);
+  assert.match(selector, /Aucun numéro, cercle technique ou centre de pan n&apos;est affiché/);
+  assert.match(selector, /nearestFaceAt\(x, y, rect\)/);
+  assert.match(selector, /setLastClick\(\{ x, y \}\)/);
   assert.match(selector, /next\.add\(face\.id\)/);
-  assert.match(selector, /closestFace\(event/);
+  assert.doesNotMatch(selector, /faces\.map\(\(face\) => \{[\s\S]*?<button/);
   assert.match(workbench, /ROOF_FACE_SEPARATOR = ";;"/);
   assert.match(workbench, /faceIds\.join\(ROOF_FACE_SEPARATOR\)/);
   assert.match(dpRoute, /split\(ROOF_FACE_SEPARATOR\)/);
