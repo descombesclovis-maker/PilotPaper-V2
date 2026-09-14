@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { CheckCircle2, Clock3, Layers3, Sparkles, SunMedium, Zap } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, Clock3, Layers3, Sparkles, SunMedium, Zap } from "lucide-react";
 import type { DPNumber } from "@/lib/pilotpaper-image2-types";
 import styles from "./solar-generation-ui.module.css";
 
@@ -56,10 +56,10 @@ export function SolarGenerationStage({ job }: { job: GenerationJobView }) {
       <div className={styles.stageCopy}>
         <span className={styles.kicker}>{queued ? "FILE D’ATTENTE" : "GÉNÉRATION RÉELLE EN COURS"}</span>
         <h3>{queued ? `DP${job.dp} attend son tour` : `PilotPaper construit la DP${job.dp}`}</h3>
-        <p>{queued ? "La pièce démarrera automatiquement dès que la génération précédente sera terminée." : "Analyse de la source, interprétation photovoltaïque, génération Image-2 et contrôle de cohérence. Aucun faux pourcentage : cet écran disparaît uniquement quand la vraie DP est prête."}</p>
+        <p>{queued ? "La pièce démarrera automatiquement dès que la génération précédente sera terminée." : "Analyse de la source, raisonnement de pose photovoltaïque, génération visuelle et contrôle de cohérence. Aucun faux pourcentage : cet écran disparaît uniquement quand la vraie DP est prête."}</p>
         <div className={styles.liveMeta}>
           <span><Clock3 size={15} /> {elapsed}</span>
-          <span><Sparkles size={15} /> ChatGPT Image-2</span>
+          <span><Sparkles size={15} /> PilotPaper Vision</span>
           <span><Layers3 size={15} /> DP{job.dp}</span>
         </div>
       </div>
@@ -72,8 +72,29 @@ export function GenerationDock({ jobs, onOpenDp }: { jobs: GenerationJobView[]; 
   const running = jobs.find((job) => job.status === "running");
   const queuedCount = jobs.filter((job) => job.status === "queued").length;
   const elapsed = useElapsedLabel(running?.startedAt, Boolean(running));
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (running) setExpanded(true);
+  }, [running]);
 
   if (!visibleJobs.length) return null;
+
+  const collapsed = !running && !expanded;
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        className={styles.dock}
+        aria-label="Ouvrir PilotPaper Live"
+        title="Ouvrir PilotPaper Live"
+        onClick={() => setExpanded(true)}
+        style={{ width: 68, height: 68, padding: 7, borderRadius: 20, display: "grid", placeItems: "center", overflow: "hidden" }}
+      >
+        <div className={styles.dockIcon}><SolarCore compact /></div>
+      </button>
+    );
+  }
 
   return (
     <aside className={styles.dock} aria-label="Générations PilotPaper">
@@ -81,7 +102,17 @@ export function GenerationDock({ jobs, onOpenDp }: { jobs: GenerationJobView[]; 
       <div className={styles.dockHeader}>
         <div className={styles.dockIcon}><SolarCore compact /></div>
         <div><span>PILOTPAPER LIVE</span><strong>{running ? `DP${running.dp} en cours` : "Générations prêtes"}</strong></div>
-        {running ? <b className={styles.liveDot} /> : <CheckCircle2 className={styles.readyIcon} />}
+        {running ? <b className={styles.liveDot} /> : (
+          <button
+            type="button"
+            aria-label="Réduire PilotPaper Live"
+            title="Réduire"
+            onClick={() => setExpanded(false)}
+            style={{ border: 0, background: "transparent", color: "white", display: "grid", placeItems: "center", cursor: "pointer", padding: 4 }}
+          >
+            <ChevronDown size={18} />
+          </button>
+        )}
       </div>
 
       {running ? (
@@ -102,6 +133,15 @@ export function GenerationDock({ jobs, onOpenDp }: { jobs: GenerationJobView[]; 
           </button>
         ))}
       </div>
+      {!running ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          style={{ width: "100%", marginTop: 8, border: 0, borderRadius: 10, background: "rgba(255,255,255,.06)", color: "#dcecff", padding: "7px 9px", fontSize: 10, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+        >
+          <ChevronUp size={14} style={{ transform: "rotate(180deg)" }} /> Réduire
+        </button>
+      ) : null}
     </aside>
   );
 }
