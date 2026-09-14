@@ -64,7 +64,16 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --disable-pip-version-check -r geometry-engine/requirements.txt pyinstaller
-          python -m PyInstaller --noconfirm --clean --onedir --name PilotPaper-GeometryEngine --paths geometry-engine geometry-engine/run.py
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onedir `
+            --name PilotPaper-GeometryEngine `
+            --paths geometry-engine `
+            --hidden-import rasterio.serde `
+            --collect-all rasterio `
+            --collect-all pyproj `
+            geometry-engine/run.py
           $geometryExe = "dist/PilotPaper-GeometryEngine/PilotPaper-GeometryEngine.exe"
           if (-not (Test-Path $geometryExe)) { throw "PilotPaper Geometry Engine executable was not created" }
 
