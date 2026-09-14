@@ -10,6 +10,7 @@ on:
       - "app/**"
       - "components/**"
       - "lib/**"
+      - "geometry-engine/**"
       - "public/**"
       - "tests/**"
       - "worker/**"
@@ -28,7 +29,7 @@ concurrency:
 jobs:
   windows-v1:
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 80
     steps:
       - name: Checkout V1 branch
         uses: actions/checkout@v4
@@ -38,6 +39,13 @@ jobs:
         with:
           node-version: 22.23.2
           cache: npm
+
+      - name: Use Python 3.12 for Geometry Engine
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: geometry-engine/requirements.txt
 
       - name: Install locked dependencies
         shell: pwsh
@@ -50,6 +58,15 @@ jobs:
       - name: Run regressions
         shell: pwsh
         run: npm test
+
+      - name: Build bundled Geometry Engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check -r geometry-engine/requirements.txt pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --name PilotPaper-GeometryEngine --paths geometry-engine geometry-engine/run.py
+          $geometryExe = "dist/PilotPaper-GeometryEngine/PilotPaper-GeometryEngine.exe"
+          if (-not (Test-Path $geometryExe)) { throw "PilotPaper Geometry Engine executable was not created" }
 
       - name: Build Windows icon from PilotPaper monogram
         shell: pwsh
@@ -99,6 +116,7 @@ jobs:
           Copy-Item $launcher (Join-Path $stage "PilotPaper-V1.exe") -Force
           Copy-Item "desktop/pilotpaper.ico" (Join-Path $stage "pilotpaper.ico") -Force
           Copy-Item (Get-Command node.exe).Source (Join-Path $current "runtime/node.exe") -Force
+          Copy-Item "dist/PilotPaper-GeometryEngine" (Join-Path $stage "geometry-engine") -Recurse -Force
           Set-Content -Path (Join-Path $stage "PILOTPAPER-BUILD.txt") -Encoding ascii -Value "${{ github.sha }}"
 
           $tracked = git ls-files
@@ -121,6 +139,7 @@ jobs:
           =================================
           - Application locale Windows, une seule fenêtre.
           - DP1 à DP8 testées séparément.
+          - PilotPaper Geometry Engine est embarqué et démarré automatiquement.
           - Mode TEST / NON VALIDÉ verrouillé.
           - Double-clic répété : aucune seconde instance n'est créée.
           - Mise à jour uniquement sur action volontaire via le bouton PilotPaper.
@@ -131,6 +150,7 @@ jobs:
             (Join-Path $current "runtime/node.exe"),
             (Join-Path $current "node_modules/vite/bin/vite.js"),
             (Join-Path $current "vite.config.ts"),
+            (Join-Path $stage "geometry-engine/PilotPaper-GeometryEngine.exe"),
             (Join-Path $stage "PilotPaper-V1.exe"),
             (Join-Path $stage "PILOTPAPER-BUILD.txt")
           )) { if (-not (Test-Path $required)) { throw "V1 payload missing: $required" } }
