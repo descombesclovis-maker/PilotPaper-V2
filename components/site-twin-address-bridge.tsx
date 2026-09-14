@@ -20,24 +20,24 @@ export function SiteTwinAddressBridge() {
   const inFlightAddress = useRef("");
 
   useEffect(() => {
-    let stopped = false;
-
     async function synchronize() {
       const address = currentAddress();
       if (address.length < 8) return;
       if (address === lastRequestedAddress.current || address === inFlightAddress.current) return;
 
+      // One automatic reconstruction attempt per distinct address. A failure is
+      // surfaced later by the normal generation path instead of hammering the
+      // local geometry engine every second.
+      lastRequestedAddress.current = address;
       inFlightAddress.current = address;
       try {
-        const response = await fetch("/api/site-twin-v2/reconstruct", {
+        await fetch("/api/site-twin-v2/reconstruct", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ address }),
         });
-        if (!stopped && response.ok) lastRequestedAddress.current = address;
       } catch {
-        // Site Twin pre-warming must never block the user's form. The normal
-        // generation path will surface a precise recoverable error if needed.
+        // Pre-warming must never block the user's form.
       } finally {
         if (inFlightAddress.current === address) inFlightAddress.current = "";
       }
@@ -46,7 +46,6 @@ export function SiteTwinAddressBridge() {
     const initialTimer = window.setTimeout(() => { void synchronize(); }, 900);
     const interval = window.setInterval(() => { void synchronize(); }, 1200);
     return () => {
-      stopped = true;
       window.clearTimeout(initialTimer);
       window.clearInterval(interval);
     };
