@@ -18,8 +18,9 @@ test("direct engine keeps ChatGPT Image free while locking project facts", async
   assert.match(engine, /gpt-image-2/);
   assert.match(engine, /Use visual intelligence freely/);
   assert.match(engine, /automatically avoid chimneys, skylights\/Velux/);
-  assert.match(engine, /exactly \$\{spec\.panelCount\} panels arranged exactly/);
-  assert.match(engine, /No masks, Site Twin, camera registration or Geometry Engine/i);
+  assert.match(engine, /Exact installation: \$\{spec\.panelCount\} panels arranged exactly/);
+  assert.match(engine, /Do NOT use or draw masks/);
+  assert.match(engine, /Aucun masque, Site Twin, recalage caméra ou Geometry Engine/);
 });
 
 test("DP1 through DP6 missions match the new product contract", async () => {
