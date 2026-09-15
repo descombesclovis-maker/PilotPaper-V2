@@ -7,11 +7,11 @@ import styles from "./pilotpaper-home-hub.module.css";
 const dossierTypes = [
   {
     title: "Déclaration préalable",
-    description: "Photovoltaïque · dossier complet DP1 à DP8, Cerfa et contrôles de cohérence.",
+    description: "Photovoltaïque · dossier complet DP1 à DP8, génération de fond et cohérence K-par-k.",
     icon: FileCheck2,
     active: true,
   },
-  { title: "Permis de construire", description: "Construction neuve, extensions et projets soumis à permis.", icon: Construction },
+  { title: "Demande de construction", description: "Construction neuve, extensions et projets soumis à permis de construire.", icon: Construction },
   { title: "PLU & urbanisme", description: "Lecture des règles locales, zonage, prescriptions et servitudes.", icon: MapPinned },
   { title: "Certificat d’urbanisme", description: "Automatisation des demandes d’information et opérationnelles.", icon: LandPlot },
   { title: "Permis d’aménager", description: "Lotissements, divisions, aménagements et créations d’accès.", icon: Building2 },
@@ -34,7 +34,7 @@ export function PilotPaperHomeHub() {
           <p>PilotPaper transforme les démarches bâtiment en parcours guidés. La déclaration préalable photovoltaïque est le premier moteur disponible.</p>
           <div className={styles.heroActions}>
             <Link href="/declaration-prealable" className={styles.primaryAction}>Créer ma DP <ArrowUpRight /></Link>
-            <Link href="/declaration-prealable/k-par-k" className={styles.secondaryAction}>Ouvrir K-par-k</Link>
+            <Link href="/declaration-prealable/mes-dossiers" className={styles.secondaryAction}>Mes dossiers</Link>
           </div>
         </div>
         <div className={styles.heroMeta}>
@@ -49,7 +49,7 @@ export function PilotPaperHomeHub() {
             <span className={styles.sectionKicker}>Bibliothèque de dossiers</span>
             <h2>Choisissez la démarche à automatiser.</h2>
           </div>
-          <p>Les moteurs verrouillés sont déjà positionnés dans l’interface. Ils seront activés progressivement sans modifier votre manière de travailler.</p>
+          <p>Chaque type de dossier possède déjà son espace dans le menu. Les moteurs verrouillés seront activés progressivement avec le même principe : création complète et atelier K-par-k.</p>
         </header>
 
         <div className={styles.grid}>
@@ -71,7 +71,7 @@ export function PilotPaperHomeHub() {
               <article className={`${styles.card} ${styles.lockedCard}`} key={dossier.title} aria-disabled="true">
                 <div className={styles.cardTop}><span className={styles.icon}><Icon /></span><span className={styles.locked}><LockKeyhole /> Bientôt</span></div>
                 <div><small>0{index + 1}</small><h3>{dossier.title}</h3><p>{dossier.description}</p></div>
-                <span className={styles.future}>Moteur en préparation</span>
+                <span className={styles.future}>Création complète + K-par-k à venir</span>
               </article>
             );
           })}
