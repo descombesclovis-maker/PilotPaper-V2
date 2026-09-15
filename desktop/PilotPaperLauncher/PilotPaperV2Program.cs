@@ -26,6 +26,7 @@ internal static class PilotPaperV2Program
 internal sealed partial class PilotPaperV2Window : Form
 {
     private const string AppUrl = "http://127.0.0.1:5174/";
+    private const string GeometryEngineUrl = "http://127.0.0.1:8765";
 
     private readonly string _installRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     private readonly string _currentAppDir;
@@ -36,6 +37,7 @@ internal sealed partial class PilotPaperV2Window : Form
     private readonly Label _startupTitle;
     private readonly Label _startupDetail;
     private Process? _server;
+    private Process? _geometryEngine;
     private bool _closing;
     private GeometryEngineSession? _geometrySession;
 
@@ -116,6 +118,11 @@ internal sealed partial class PilotPaperV2Window : Form
             RemoveLegacyGeometrySecretsFromVars();
             SyncDevVarsToWorkerProject();
 
+            _startupDetail.Text = "Démarrage du moteur métrique…";
+            StartGeometryEngine();
+            if (!await WaitGeometryEngineReadyAsync(TimeSpan.FromSeconds(75)))
+                throw new InvalidOperationException("Le moteur métrique local n'a pas répondu dans le délai prévu.");
+
             _startupDetail.Text = "Démarrage de PilotPaper…";
             StartServer();
             if (!await WaitUntilReadyAsync(TimeSpan.FromMinutes(2)))
@@ -157,9 +164,10 @@ internal sealed partial class PilotPaperV2Window : Form
     private void EnsureInstalledPayload()
     {
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
+        var geometry = Path.Combine(_currentAppDir, "runtime", "PilotPaperGeometryEngine.exe");
         var vite = Path.Combine(_currentAppDir, "node_modules", "vite", "bin", "vite.js");
         var config = Path.Combine(_currentAppDir, "vite.config.ts");
-        if (!File.Exists(node) || !File.Exists(vite) || !File.Exists(config))
+        if (!File.Exists(node) || !File.Exists(geometry) || !File.Exists(vite) || !File.Exists(config))
             throw new InvalidOperationException("Le dossier PilotPaper V2 installé est incomplet. Réinstallez l'application.");
     }
 
@@ -231,6 +239,74 @@ internal sealed partial class PilotPaperV2Window : Form
         File.Copy(VarsPath, Path.Combine(_currentAppDir, ".dev.vars"), overwrite: true);
     }
 
+    private void StartGeometryEngine()
+    {
+        var executable = Path.Combine(_currentAppDir, "runtime", "PilotPaperGeometryEngine.exe");
+        var outputPath = Path.Combine(_runtimeDir, "geometry-engine.log");
+        var errorPath = Path.Combine(_runtimeDir, "geometry-engine-error.log");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = _currentAppDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.Environment["PILOTPAPER_GEOMETRY_HOST"] = "127.0.0.1";
+        startInfo.Environment["PILOTPAPER_GEOMETRY_PORT"] = "8765";
+
+        _geometryEngine = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        _geometryEngine.OutputDataReceived += (_, args) =>
+        {
+            if (string.IsNullOrWhiteSpace(args.Data)) return;
+            try { File.AppendAllText(outputPath, args.Data + Environment.NewLine, Encoding.UTF8); } catch { }
+            AppendLog($"GEOMETRY: {args.Data}");
+        };
+        _geometryEngine.ErrorDataReceived += (_, args) =>
+        {
+            if (string.IsNullOrWhiteSpace(args.Data)) return;
+            try { File.AppendAllText(errorPath, args.Data + Environment.NewLine, Encoding.UTF8); } catch { }
+            AppendLog($"GEOMETRY ERROR: {args.Data}");
+        };
+        _geometryEngine.Exited += (_, _) =>
+        {
+            if (!_closing && !IsDisposed)
+                BeginInvoke(() => _startupDetail.Text = "Le moteur métrique s'est arrêté. Consultez le journal.");
+        };
+        if (!_geometryEngine.Start()) throw new InvalidOperationException("Impossible de lancer le moteur métrique PilotPaper.");
+        _geometryEngine.BeginOutputReadLine();
+        _geometryEngine.BeginErrorReadLine();
+    }
+
+    private static async Task<bool> IsGeometryEngineReadyAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var response = await client.GetAsync($"{GeometryEngineUrl}/health");
+            if (response.StatusCode != HttpStatusCode.OK) return false;
+            var body = await response.Content.ReadAsStringAsync();
+            return body.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"ok\": true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> WaitGeometryEngineReadyAsync(TimeSpan timeout)
+    {
+        var until = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < until)
+        {
+            if (await IsGeometryEngineReadyAsync()) return true;
+            await Task.Delay(500);
+        }
+        return false;
+    }
+
     private void StartServer()
     {
         var node = Path.Combine(_currentAppDir, "runtime", "node.exe");
@@ -254,6 +330,7 @@ internal sealed partial class PilotPaperV2Window : Form
         startInfo.Environment["DP_TEST_EXPORT"] = "true";
         startInfo.Environment["DP_IMAGE_MODEL"] = "gpt-image-2";
         startInfo.Environment["NODE_ENV"] = "development";
+        startInfo.Environment["PILOTPAPER_GEOMETRY_ENGINE_URL"] = GeometryEngineUrl;
 
         if (File.Exists(VarsPath))
         {
@@ -333,6 +410,11 @@ internal sealed partial class PilotPaperV2Window : Form
         try
         {
             if (_server is { HasExited: false }) _server.Kill(entireProcessTree: true);
+        }
+        catch { }
+        try
+        {
+            if (_geometryEngine is { HasExited: false }) _geometryEngine.Kill(entireProcessTree: true);
         }
         catch { }
     }
