@@ -50,7 +50,12 @@ function changedIslandRatio(originalBase64: string, candidateBase64: string, pol
   return inside > 0 ? changed / inside : 0;
 }
 
-function insertionPrompt(input: DpPieceInput, context: SiteTwinDocumentContext, role: PiecePhotoInput["role"]) {
+function insertionPrompt(
+  input: DpPieceInput,
+  context: SiteTwinDocumentContext,
+  role: PiecePhotoInput["role"],
+  correction?: string,
+) {
   const module = requireVerifiedPvModule(input.moduleReference ?? "");
   const faceId = context.layout.selectedFaceIds[0];
   const face = context.siteTwin.roof.faces.find((candidate) => candidate.id === faceId);
@@ -64,7 +69,8 @@ function insertionPrompt(input: DpPieceInput, context: SiteTwinDocumentContext, 
     "Every module belongs to the same roof plane and must look like the same physical product under one camera perspective.",
     "Do not add labels, arrows, borders, masks, debug marks, people, tools or new architecture.",
     "Everything outside the editable islands is immutable and will be restored pixel-for-pixel by PilotPaper after generation.",
-  ].join("\n");
+    correction ? `VISUAL CORRECTION ONLY — geometry remains locked and cannot change:\n${correction}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 export type ConstrainedPhotoInsertion = {
@@ -85,6 +91,7 @@ export type ConstrainedPhotoInsertion = {
 export async function renderGeometryLockedPhotoInsertion(args: {
   input: DpPieceInput;
   photo: PiecePhotoInput;
+  correction?: string;
 }): Promise<ConstrainedPhotoInsertion> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("Clé du moteur visuel absente du poste local.");
@@ -109,7 +116,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
 
   const form = new FormData();
   form.set("model", IMAGE_MODEL);
-  form.set("prompt", insertionPrompt(args.input, context, args.photo.role));
+  form.set("prompt", insertionPrompt(args.input, context, args.photo.role, args.correction));
   form.set("quality", "high");
   form.append("image[]", base64ToBlob(projection.photoBase64, "image/png"), "immutable-source.png");
   form.set("mask", base64ToBlob(mask, "image/png"), "panel-islands-mask.png");
