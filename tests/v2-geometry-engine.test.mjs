@@ -54,6 +54,16 @@ test("V2 protected credential is bound to the current Windows user and setup ask
   assert.doesNotMatch(credentials, /PromptForPassword|Read-Host|username\s*=|email\s*=/i);
 });
 
+test("V2 startup validates visual access and rechecks the encrypted geometry session", async () => {
+  const bootstrap = await source("desktop/PilotPaperLauncher/PilotPaperV2Bootstrap.cs");
+  assert.match(bootstrap, /api\.openai\.com\/v1\/models/);
+  assert.match(bootstrap, /gpt-image-2/);
+  assert.match(bootstrap, /OPENAI_API_KEY/);
+  assert.match(bootstrap, /ProtectedData\.Unprotect/);
+  assert.match(bootstrap, /TryDeleteGeometryCredential/);
+  assert.match(bootstrap, /token du moteur géométrique/);
+});
+
 test("one-time migration promotes the existing session then removes clear environment values", async () => {
   const seal = await source("scripts/seal-geometry-credential.ps1");
   assert.match(seal, /is_machine_user/);
@@ -70,5 +80,5 @@ test("V2 installer is isolated from frozen V1", async () => {
   assert.match(installer, /PilotPaper-V2\.exe/);
   assert.doesNotMatch(installer, /DefaultDirName=.*\\V1/);
   assert.match(project, /<AssemblyName>PilotPaper-V2<\/AssemblyName>/);
-  assert.match(project, /<StartupObject>PilotPaperLauncher\.PilotPaperV2Program<\/StartupObject>/);
+  assert.match(project, /<StartupObject>PilotPaperLauncher\.PilotPaperV2Bootstrap<\/StartupObject>/);
 });
