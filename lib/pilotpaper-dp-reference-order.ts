@@ -3,6 +3,10 @@ import type { DPNumber, DpPieceOutput, VisualReference } from "@/lib/pilotpaper-
 /**
  * Single source of truth for PilotPaper project continuity.
  * Complete generation and K-par-k MUST use this exact order.
+ *
+ * Every reference also carries its Site Twin geometry receipt when available,
+ * so downstream pieces can prove that they reuse the exact same physical
+ * layout rather than merely looking visually similar.
  */
 export function dpReferenceOrder(dp: DPNumber): Array<2 | 3 | 4 | 5> {
   if (dp === 3) return [2];
@@ -24,6 +28,7 @@ export function referencesFromResults(
       dp: referenceDp,
       mimeType: candidate.mimeType as VisualReference["mimeType"],
       base64: candidate.base64,
+      geometryReceipt: candidate.geometryReceipt,
     }];
   });
 }
