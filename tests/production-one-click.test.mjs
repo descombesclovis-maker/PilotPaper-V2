@@ -21,17 +21,39 @@ test("Créer ma DP delegates the same K-par-k API to a persistent background man
   assert.match(experience, /La génération continue même si vous quittez cette page/);
 });
 
-test("complete generation reduces the critical path with two coherent parallel waves anchored on DP2", async () => {
+test("complete generation follows the exact K-par-k sequence instead of a divergent optimized graph", async () => {
   const manager = await source("lib/pilotpaper-complete-dossiers.ts");
-  assert.match(manager, /const dp1Promise = runPiece\(id, 1, \[\]\)/);
-  assert.match(manager, /const dp2Result = await runPiece\(id, 2, \[\]\)/);
-  assert.match(manager, /const dp3Promise = runPiece\(id, 3, \[dp2Reference\]\)/);
-  assert.match(manager, /const dp4Promise = runPiece\(id, 4, \[dp2Reference\]\)/);
-  assert.match(manager, /Promise\.all\(\[dp3Promise, dp4Promise\]\)/);
-  assert.match(manager, /const closeReferences = \[dp2Reference, dp4Reference\]/);
-  assert.match(manager, /runPiece\(id, 5, closeReferences\)/);
-  assert.match(manager, /runPiece\(id, 6, closeReferences\)/);
-  assert.match(manager, /Promise\.allSettled\(\[dp1Promise, dp7Promise, dp8Promise\]\)/);
+  const shared = await source("lib/pilotpaper-dp-reference-order.ts");
+  const kpark = await source("components/dp-piece-workbench.tsx");
+
+  assert.match(manager, /for \(const dp of PIECES\)/);
+  assert.match(manager, /await runPiece\(id, dp\)/);
+  assert.doesNotMatch(manager, /dp3Promise|dp4Promise|Promise\.all\(\[dp3Promise/);
+  assert.match(shared, /if \(dp === 3\) return \[2\]/);
+  assert.match(shared, /if \(dp === 4\) return \[2, 3\]/);
+  assert.match(shared, /if \(dp === 5\) return \[4, 2, 3\]/);
+  assert.match(shared, /if \(dp === 6\) return \[5, 4, 2\]/);
+  assert.match(kpark, /if \(dp === 3\) return \[2\]/);
+  assert.match(kpark, /if \(dp === 4\) return \[2, 3\]/);
+  assert.match(kpark, /if \(dp === 5\) return \[4, 2, 3\]/);
+  assert.match(kpark, /if \(dp === 6\) return \[5, 4, 2\]/);
+});
+
+test("test mode preserves a visible diagnostic result instead of hiding a rejected visual DP", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const fallback = await source("lib/pilotpaper-diagnostic-fallback.ts");
+  const manager = await source("lib/pilotpaper-complete-dossiers.ts");
+  const types = await source("lib/pilotpaper-image2-types.ts");
+
+  assert.match(types, /testMode\?: boolean/);
+  assert.match(manager, /testMode: true/);
+  assert.match(route, /generateDiagnosticFallback/);
+  assert.match(route, /input\.testMode !== false/);
+  assert.match(route, /pilotpaper-diagnostic-fallback/);
+  assert.match(fallback, /MODE DIAGNOSTIC NON VALIDÉ/);
+  assert.match(fallback, /Return the image even if some uncertainty remains/);
+  assert.match(fallback, /base64: generated \?\? source\.base64/);
+  assert.match(fallback, /passed: false/);
 });
 
 test("background dossiers persist and resume after navigation or application reopen", async () => {
@@ -84,7 +106,7 @@ test("saved installation preferences are not cosmetic: they enter DP2 geometry a
   assert.match(dp3, /Saved installer preferences inherited from DP2/);
 });
 
-test("production hides legacy dossier-control workflow while keeping internal quality rejection", async () => {
+test("production hides legacy dossier-control workflow while keeping internal quality diagnostics", async () => {
   const experience = await source("components/production/complete-dp-background-experience.tsx");
   assert.doesNotMatch(experience, /WorkspaceClient|layout-check|preflight|postflight|finalAttestation/);
   assert.match(experience, /L’Inspector reste actif uniquement en coulisses/);
