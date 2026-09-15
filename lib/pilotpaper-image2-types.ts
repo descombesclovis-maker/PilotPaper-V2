@@ -33,6 +33,8 @@ export type DpPieceInput = {
   mountingSystem?: string;
   photos?: PiecePhotoInput[];
   references?: VisualReference[];
+  /** In diagnostic test mode, rejected candidates should be preserved instead of hidden whenever a candidate exists. */
+  testMode?: boolean;
 };
 
 export type DpInspectorResult = {
