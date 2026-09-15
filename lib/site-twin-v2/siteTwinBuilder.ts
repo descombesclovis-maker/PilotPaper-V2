@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchGoogleSolarBuildingInsights } from "@/lib/dp-ai-engine/providers/googleSolar";
-import { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";
+import { resolveAdvancedRoofTruth, type AdvancedRoofFacet } from "@/lib/geometry/advanced-roof-truth";
 import { assertSiteTwinGeometry } from "./invariants";
 import { lockSiteTwinProperty } from "./propertyLock";
 import { assertTwinReadyForAutomaticDocuments } from "./policy";
@@ -14,7 +14,7 @@ import {
   reconstructRoofWithGeometryEngine,
   type GeometryEngineRoofResult,
 } from "./geometryEngineClient";
-import type { SiteTwin, SiteTwinEvidence, SiteTwinEvidenceSource } from "./types";
+import type { SiteTwin, SiteTwinEvidence, SiteTwinEvidenceSource, SiteTwinRoofFace } from "./types";
 
 function stableTwinId(parcelReference: string, buildingIds: string[]) {
   return `site-${createHash("sha256")
@@ -30,6 +30,71 @@ function sourceEvidence(
   notes: string[],
 ): SiteTwinEvidence {
   return { source, confidence, reference, notes };
+}
+
+function angularDistance(a: number, b: number) {
+  const delta = Math.abs((a - b) % 360);
+  return Math.min(delta, 360 - delta);
+}
+
+function facetPair(local: SiteTwinRoofFace, remote: AdvancedRoofFacet) {
+  const azimuthDelta = remote.azimuthDeg == null ? null : angularDistance(local.azimuthDeg, remote.azimuthDeg);
+  const slopeDelta = remote.slopeDeg == null ? null : Math.abs(local.slopeDeg - remote.slopeDeg);
+  const areaRelativeError = remote.areaM2 == null || remote.areaM2 <= 0
+    ? null
+    : Math.abs(local.areaM2 - remote.areaM2) / Math.max(local.areaM2, remote.areaM2);
+  const components = [
+    azimuthDelta == null ? null : azimuthDelta / 25,
+    slopeDelta == null ? null : slopeDelta / 10,
+    areaRelativeError == null ? null : areaRelativeError / 0.4,
+  ].filter((value): value is number => value !== null);
+  const score = components.length ? components.reduce((sum, value) => sum + value, 0) / components.length : Number.POSITIVE_INFINITY;
+  const close = components.length > 0
+    && (azimuthDelta == null || azimuthDelta <= 15)
+    && (slopeDelta == null || slopeDelta <= 7)
+    && (areaRelativeError == null || areaRelativeError <= 0.30);
+  return { azimuthDelta, slopeDelta, areaRelativeError, score, close, metricCount: components.length };
+}
+
+function compareAdvancedFacets(localFaces: SiteTwinRoofFace[], remoteFacets: AdvancedRoofFacet[]) {
+  const notes: string[] = [];
+  const unused = new Set(remoteFacets.map((_, index) => index));
+  let matched = 0;
+  let closeMatched = 0;
+  let metricMatches = 0;
+
+  for (const local of localFaces) {
+    let bestIndex: number | null = null;
+    let best = { score: Number.POSITIVE_INFINITY, close: false, metricCount: 0, azimuthDelta: null as number | null, slopeDelta: null as number | null, areaRelativeError: null as number | null };
+    for (const index of unused) {
+      const candidate = facetPair(local, remoteFacets[index]!);
+      if (candidate.score < best.score) {
+        bestIndex = index;
+        best = candidate;
+      }
+    }
+    if (bestIndex == null || !Number.isFinite(best.score)) continue;
+    unused.delete(bestIndex);
+    matched += 1;
+    metricMatches += best.metricCount > 0 ? 1 : 0;
+    if (best.close) closeMatched += 1;
+    const remote = remoteFacets[bestIndex]!;
+    notes.push([
+      `Pan ${local.displayLabel} ↔ facette distante ${remote.id}`,
+      best.azimuthDelta == null ? "azimut n/a" : `Δazimut ${best.azimuthDelta.toFixed(1)}°`,
+      best.slopeDelta == null ? "pente n/a" : `Δpente ${best.slopeDelta.toFixed(1)}°`,
+      best.areaRelativeError == null ? "surface n/a" : `Δsurface ${(best.areaRelativeError * 100).toFixed(0)} %`,
+      best.close ? "accord géométrique" : "écart à contrôler",
+    ].join(" · "));
+  }
+
+  const comparable = Math.min(localFaces.length, remoteFacets.length);
+  const closeRatio = comparable > 0 ? closeMatched / comparable : 0;
+  let confidenceDelta = 0;
+  if (metricMatches > 0 && localFaces.length === remoteFacets.length && closeRatio >= 0.75) confidenceDelta = 0.025;
+  if (metricMatches > 0 && (Math.abs(localFaces.length - remoteFacets.length) >= 2 || closeRatio < 0.4)) confidenceDelta = -0.04;
+
+  return { notes, matched, closeMatched, metricMatches, closeRatio, confidenceDelta };
 }
 
 async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSiteTwinProperty>>) {
@@ -56,6 +121,22 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
     failures.push(`Google DSM : ${error instanceof Error ? error.message : "échec inconnu"}`);
   }
 
+  // Reliable IGN fallback: the sampled MNX/MNS points are now a real geometry-engine input.
+  if (!geometry) {
+    try {
+      const samples = await sampleIgnLidarSurface(property);
+      lidarReference = "ign_lidar_hd_mnx_multi_wld";
+      geometry = await reconstructRoofWithGeometryEngine({
+        property,
+        source: "ign-mns",
+        sampledPoints: samples,
+      });
+    } catch (error) {
+      failures.push(`IGN MNX : ${error instanceof Error ? error.message : "échec inconnu"}`);
+    }
+  }
+
+  // COPC discovery remains the last source because remote range-reading availability varies by host.
   if (!geometry) {
     try {
       const tiles = await discoverIgnCopcTiles(property);
@@ -68,20 +149,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
       });
     } catch (error) {
       failures.push(`IGN COPC : ${error instanceof Error ? error.message : "échec inconnu"}`);
-    }
-  }
-
-  if (!geometry) {
-    try {
-      const samples = await sampleIgnLidarSurface(property);
-      lidarReference = "ign_lidar_hd_mnx_multi_wld";
-      geometry = await reconstructRoofWithGeometryEngine({
-        property,
-        source: "ign-mns",
-        sampledPoints: samples,
-      });
-    } catch (error) {
-      failures.push(`IGN MNX : ${error instanceof Error ? error.message : "échec inconnu"}`);
     }
   }
 
@@ -141,6 +208,11 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     ];
   }
 
+  const advancedComparison = advancedRoof.usable
+    ? compareAdvancedFacets(geometry.faces, advancedRoof.facets)
+    : { notes: [] as string[], matched: 0, closeMatched: 0, metricMatches: 0, closeRatio: 0, confidenceDelta: 0 };
+
+  const adjustedGeometryConfidence = Math.max(0, Math.min(0.99, geometry.confidence + advancedComparison.confidenceDelta));
   const tiles3d = await checkGooglePhotorealistic3dTiles();
   const primaryEvidenceSource: SiteTwinEvidenceSource = geometry.source === "google-dsm"
     ? "google-solar-dsm"
@@ -155,7 +227,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     sourceEvidence(
       primaryEvidenceSource,
       geometry.source,
-      geometry.confidence,
+      adjustedGeometryConfidence,
       [
         `Source géométrique primaire : ${geometry.source}.`,
         `Moteur géométrique : ${geometry.engineVersion}.`,
@@ -168,20 +240,27 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
   ];
 
   if (advancedRoof.available) {
-    const converges = advancedRoof.usable && advancedRoof.roofFacetCount === geometry.faces.length;
+    const countConverges = advancedRoof.usable && advancedRoof.roofFacetCount === geometry.faces.length;
+    const metricConverges = advancedComparison.metricMatches > 0 && advancedComparison.closeRatio >= 0.75;
     evidence.push(sourceEvidence(
       "advanced-roof-model",
       advancedRoof.projectId ? `advanced-project:${advancedRoof.projectId}` : "advanced-project",
-      advancedRoof.usable ? (converges ? 0.9 : 0.78) : 0.45,
+      advancedRoof.usable ? (countConverges && (advancedComparison.metricMatches === 0 || metricConverges) ? 0.92 : 0.74) : 0.45,
       [
         advancedRoof.usable
           ? `Modèle toiture distant exploitable : ${advancedRoof.roofFacetCount} pans.`
           : "Modèle toiture distant joignable mais sans facettes suffisamment exploitables.",
         advancedRoof.usable
-          ? (converges
-              ? `Contrôle indépendant convergent avec les ${geometry.faces.length} pans métriques PilotPaper.`
-              : `Contrôle indépendant divergent : ${advancedRoof.roofFacetCount} pans distants contre ${geometry.faces.length} pans métriques PilotPaper. La géométrie locale reste prioritaire jusqu'à résolution.`)
+          ? (countConverges
+              ? `Comptage indépendant convergent avec les ${geometry.faces.length} pans métriques PilotPaper.`
+              : `Comptage indépendant divergent : ${advancedRoof.roofFacetCount} pans distants contre ${geometry.faces.length} pans métriques PilotPaper.`)
           : "PilotPaper conserve sa reconstruction métrique locale comme vérité géométrique.",
+        ...(advancedComparison.notes.length ? advancedComparison.notes : ["Les propriétés facette par facette ne sont pas suffisamment structurées pour un rapprochement métrique complet."]),
+        advancedComparison.confidenceDelta > 0
+          ? "L'accord facette par facette renforce légèrement la confiance géométrique du Site Twin."
+          : advancedComparison.confidenceDelta < 0
+            ? "Le désaccord facette par facette réduit la confiance et doit être résolu avant automatisation aveugle."
+            : "Le contrôle distant reste neutre dans le score de confiance.",
         advancedRoof.autoDesignAvailable
           ? "Un modèle automatique de projet distant est disponible comme preuve secondaire."
           : "Aucun modèle automatique distant exploitable n'est encore disponible.",
@@ -233,7 +312,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
       advancedRoofAutoDesignAvailable: advancedRoof.autoDesignAvailable || undefined,
     },
     evidence,
-    confidence: geometry.confidence,
+    confidence: adjustedGeometryConfidence,
     revision: 1,
   };
 
