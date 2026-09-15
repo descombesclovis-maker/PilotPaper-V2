@@ -7,6 +7,7 @@ import { decodePng, strictCompositePng } from "@/lib/dp-ai-engine/utils/pngPixel
 import { fetchGoogleSolarDataLayers, downloadGoogleGeoTiff } from "./googleSolarDataLayers";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
 import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
+import { modulePolygonsToLonLat } from "./localGeoTransform";
 import type { SiteTwinDocumentContext } from "./documentContext";
 
 const IMAGE_MODEL = "gpt-image-2";
@@ -100,9 +101,12 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   const layers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 70, pixelSizeMeters: 0.1 });
   if (!layers.rgbUrl) throw new Error("La référence orthophotographique métrique requise pour le recalage photo n'est pas disponible.");
   const referenceGeoTiff = await downloadGoogleGeoTiff(layers.rgbUrl, "RGB");
+  const modulePolygonsLonLat = modulePolygonsToLonLat({
+    faces: context.siteTwin.roof.faces,
+    modules: context.layout.modules,
+  });
   const projection = await projectSiteTwinModulesToPhoto({
-    origin: context.siteTwin.roof.origin,
-    modulePolygonsLocalM: context.layout.modules.map((module) => module.polygonLocalM),
+    modulePolygonsLonLat,
     referenceGeoTiff,
     photo: Buffer.from(args.photo.base64, "base64"),
     photoMimeType: args.photo.mimeType,
