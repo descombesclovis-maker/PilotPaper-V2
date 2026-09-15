@@ -1,7 +1,8 @@
 "use client";
 
-import type { DPNumber, DpPieceOutput, PiecePhotoInput, VisualReference } from "@/lib/pilotpaper-image2-types";
+import type { DPNumber, DpPieceOutput, PiecePhotoInput } from "@/lib/pilotpaper-image2-types";
 import { persistDpPiece } from "@/lib/pilotpaper-image2-persistence";
+import { referencesFromResults } from "@/lib/pilotpaper-dp-reference-order";
 
 export type CompleteDossierStatus = "queued" | "generating" | "ready" | "error";
 export type CompletePieceStatus = "idle" | "running" | "done" | "error";
@@ -182,12 +183,6 @@ export function subscribeCompleteDossier(id: string, listener: (record: Complete
   };
 }
 
-function makeReference(output: DpPieceOutput): VisualReference | null {
-  if (!output.base64 || !["image/png", "image/jpeg", "image/webp"].includes(output.mimeType)) return null;
-  if (![2, 3, 4, 5].includes(output.dp)) return null;
-  return { dp: output.dp as 2 | 3 | 4 | 5, mimeType: output.mimeType as VisualReference["mimeType"], base64: output.base64 };
-}
-
 function projectPhotos(record: CompleteDossierRecord): PiecePhotoInput[] {
   const near = record.photos.near;
   return [
@@ -197,16 +192,27 @@ function projectPhotos(record: CompleteDossierRecord): PiecePhotoInput[] {
   ];
 }
 
-async function runPiece(id: string, dp: DPNumber, references: VisualReference[]) {
+function completedResults(record: CompleteDossierRecord): Partial<Record<DPNumber, DpPieceOutput>> {
+  const output: Partial<Record<DPNumber, DpPieceOutput>> = {};
+  for (const dp of PIECES) {
+    const result = record.pieces[dp].result;
+    if (result) output[dp] = result;
+  }
+  return output;
+}
+
+async function runPiece(id: string, dp: DPNumber) {
   const before = await getCompleteDossier(id);
   if (!before) throw new Error("Dossier introuvable.");
   if (before.pieces[dp].status === "done" && before.pieces[dp].result) return before.pieces[dp].result;
+
+  const references = referencesFromResults(dp, completedResults(before));
 
   await mutateRecord(id, (record) => {
     record.status = "generating";
     record.error = undefined;
     record.pieces[dp] = { status: "running", startedAt: Date.now() };
-    record.activeDps = [...new Set([...record.activeDps, dp])].sort((a, b) => a - b) as DPNumber[];
+    record.activeDps = [dp];
   });
 
   const current = await getCompleteDossier(id);
@@ -228,6 +234,7 @@ async function runPiece(id: string, dp: DPNumber, references: VisualReference[])
       mountingSystem: current.project.mountingSystem,
       photos: projectPhotos(current),
       references,
+      testMode: true,
     }),
   });
   const body = await response.json().catch(() => null) as DpPieceOutput | { error?: string } | null;
@@ -235,7 +242,7 @@ async function runPiece(id: string, dp: DPNumber, references: VisualReference[])
     const message = (body as { error?: string } | null)?.error || `DP${dp} : génération interrompue.`;
     await mutateRecord(id, (record) => {
       record.pieces[dp] = { status: "error", error: message, finishedAt: Date.now() };
-      record.activeDps = record.activeDps.filter((value) => value !== dp);
+      record.activeDps = [];
       record.error = message;
     });
     throw new Error(message);
@@ -244,7 +251,10 @@ async function runPiece(id: string, dp: DPNumber, references: VisualReference[])
   await persistDpPiece(body).catch(() => undefined);
   await mutateRecord(id, (record) => {
     record.pieces[dp] = { status: "done", result: body, finishedAt: Date.now() };
-    record.activeDps = record.activeDps.filter((value) => value !== dp);
+    record.activeDps = [];
+    if (!body.inspector.passed) {
+      record.error = `DP${dp} produite en mode diagnostic : résultat à corriger, conservé pour analyse.`;
+    }
   });
   return body;
 }
@@ -256,46 +266,35 @@ async function runJob(id: string) {
     await mutateRecord(id, (record) => {
       record.status = "generating";
       record.error = undefined;
+      record.activeDps = [];
     });
 
-    // Independent pieces start immediately while DP2 establishes the master physical placement.
-    const dp1Promise = runPiece(id, 1, []).catch(() => undefined);
-    const dp7Promise = runPiece(id, 7, []).catch(() => undefined);
-    const dp8Promise = runPiece(id, 8, []).catch(() => undefined);
-    const dp2Result = await runPiece(id, 2, []).catch(() => undefined);
-    const dp2Reference = dp2Result ? makeReference(dp2Result) : null;
-
-    if (dp2Reference) {
-      // Wave 1: DP3 and DP4 can be generated together because both depend only on the accepted DP2 anchor.
-      const dp3Promise = runPiece(id, 3, [dp2Reference]).catch(() => undefined);
-      const dp4Promise = runPiece(id, 4, [dp2Reference]).catch(() => undefined);
-      const [, dp4Result] = await Promise.all([dp3Promise, dp4Promise]);
-      const dp4Reference = dp4Result ? makeReference(dp4Result) : null;
-      const closeReferences = [dp2Reference, dp4Reference].filter((reference): reference is VisualReference => Boolean(reference));
-
-      // Wave 2: DP5 and DP6 run together, both inheriting DP2 and the accepted DP4 photographic identity when available.
-      await Promise.all([
-        runPiece(id, 5, closeReferences).catch(() => undefined),
-        runPiece(id, 6, closeReferences).catch(() => undefined),
-      ]);
-    } else {
-      await mutateRecord(id, (record) => {
-        for (const dp of [3, 4, 5, 6] as DPNumber[]) {
-          if (record.pieces[dp].status === "done") continue;
-          record.pieces[dp] = { status: "error", error: "La DP2 doit être produite avant cette pièce.", finishedAt: Date.now() };
-        }
-      });
+    // EXACTEMENT le même chemin logique que K-par-k : DP1 → DP2 → ... → DP8.
+    // Les références sont calculées par la même source de vérité partagée.
+    for (const dp of PIECES) {
+      try {
+        await runPiece(id, dp);
+      } catch {
+        // En mode test, on poursuit vers la pièce suivante quand c'est techniquement possible.
+        // Une pièce sans résultat ne sera simplement pas disponible comme référence.
+      }
     }
 
-    await Promise.allSettled([dp1Promise, dp7Promise, dp8Promise]);
     const finished = await getCompleteDossier(id);
     if (!finished) return;
-    const ready = PIECES.every((dp) => finished.pieces[dp].status === "done" && finished.pieces[dp].result);
+    const completedCount = PIECES.filter((dp) => finished.pieces[dp].status === "done" && finished.pieces[dp].result).length;
+    const allProduced = completedCount === PIECES.length;
     await mutateRecord(id, (record) => {
       record.activeDps = [];
-      record.status = ready ? "ready" : "error";
-      if (ready) record.error = undefined;
-      else record.error = record.error || "Une ou plusieurs pièces doivent être régénérées.";
+      record.status = allProduced ? "ready" : "error";
+      if (allProduced) {
+        const rejected = PIECES.filter((dp) => record.pieces[dp].result && !record.pieces[dp].result!.inspector.passed);
+        record.error = rejected.length
+          ? `Dossier test produit avec ${rejected.length} pièce${rejected.length > 1 ? "s" : ""} à corriger : ${rejected.map((dp) => `DP${dp}`).join(", ")}.`
+          : undefined;
+      } else {
+        record.error = `Dossier test incomplet : ${completedCount}/8 pièces produites. Les sorties disponibles sont conservées pour diagnostic.`;
+      }
     });
   } finally {
     running.delete(id);
