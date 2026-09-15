@@ -1,5 +1,5 @@
 import type { SiteTwinPropertyLock } from "./propertyLock";
-import type { SiteTwinRoofEdge, SiteTwinRoofFace, TwinLonLat } from "./types";
+import type { SiteTwinRoofEdge, SiteTwinRoofFace, TwinLonLat, TwinXY } from "./types";
 import type { IgnElevationPoint, IgnCopcTile } from "./ignLidar";
 import { SiteTwinError } from "./errors";
 
@@ -128,6 +128,7 @@ export type PhotoRegistrationResult = {
   reprojectionErrorPx: number;
   matches: number;
   inliers: number;
+  inlierRatio?: number;
   method: string;
   diagnostics: string[];
 };
@@ -162,6 +163,67 @@ export async function registerPhotoWithGeometryEngine(args: {
   const result = await response.json() as PhotoRegistrationResult;
   if (!Array.isArray(result.homography) || result.homography.length !== 9 || !Number.isFinite(result.reprojectionErrorPx)) {
     throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "Le moteur photo a renvoyé une homographie invalide.");
+  }
+  return result;
+}
+
+export type SiteTwinPhotoProjection = {
+  mimeType: "image/png";
+  photoBase64: string;
+  widthPx: number;
+  heightPx: number;
+  panelPolygonsNormalized: Array<Array<{ x: number; y: number }>>;
+  registration: PhotoRegistrationResult & { inlierRatio: number };
+};
+
+export async function projectSiteTwinModulesToPhoto(args: {
+  origin: TwinLonLat;
+  modulePolygonsLocalM: TwinXY[][];
+  referenceGeoTiff: Uint8Array;
+  photo: Uint8Array;
+  photoMimeType: string;
+}): Promise<SiteTwinPhotoProjection> {
+  if (!args.modulePolygonsLocalM.length || args.modulePolygonsLocalM.some((polygon) => polygon.length !== 4)) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photo exige quatre coins métriques par module.");
+  }
+  const data = new FormData();
+  data.set("origin_lon", String(args.origin[0]));
+  data.set("origin_lat", String(args.origin[1]));
+  data.set("module_polygons", JSON.stringify(args.modulePolygonsLocalM));
+  data.set("reference", new Blob([args.referenceGeoTiff], { type: "image/tiff" }), "site-reference.tif");
+  data.set("photo", new Blob([args.photo], { type: args.photoMimeType }), "project-photo");
+
+  let response: Response;
+  try {
+    response = await fetch(`${geometryEngineUrl()}/v1/site-twin/project-modules`, {
+      method: "POST",
+      body: data,
+      signal: AbortSignal.timeout(150_000),
+      cache: "no-store",
+    });
+  } catch (error) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection déterministe sur la photographie n'a pas répondu.", {
+      recoverable: true,
+      cause: error,
+    });
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new SiteTwinError(
+      "CAMERA_REGISTRATION_FAILED",
+      `Projection photographique refusée (${response.status})${body ? ` : ${body.slice(0, 500)}` : ""}.`,
+      { recoverable: true },
+    );
+  }
+  const result = await response.json() as SiteTwinPhotoProjection;
+  if (
+    result.mimeType !== "image/png"
+    || !result.photoBase64
+    || !Array.isArray(result.panelPolygonsNormalized)
+    || result.panelPolygonsNormalized.length !== args.modulePolygonsLocalM.length
+    || !Number.isFinite(result.registration?.reprojectionErrorPx)
+  ) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photographique a renvoyé un résultat incomplet.");
   }
   return result;
 }
