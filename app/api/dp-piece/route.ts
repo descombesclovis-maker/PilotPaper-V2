@@ -1,24 +1,25 @@
 import { generateDpPiece } from "@/lib/dp-piece-engine";
 import { generateOfficialDp1 } from "@/lib/pilotpaper-dp1-generator";
 import { generateSpecializedDp4 } from "@/lib/pilotpaper-dp4-generator";
-import { generatePreventiveDp } from "@/lib/pilotpaper-vision-engine";
 import { pilotPaperRunVisualJob } from "@/lib/pilotpaper-openai-resilience";
 import { generateDiagnosticFallback } from "@/lib/pilotpaper-diagnostic-fallback";
 import { generateDeterministicSiteTwinPiece } from "@/lib/site-twin-v2/dpPieceBridge";
+import { generateDeterministicDp2 } from "@/lib/site-twin-v2/constrainedDp2";
+import { generateGeometryLockedPhotographicDp } from "@/lib/site-twin-v2/constrainedPhotographicDp";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 
 export const dynamic = "force-dynamic";
 
 async function generateVisualPiece(input: DpPieceInput): Promise<DpPieceOutput> {
+  if (input.dp === 2) {
+    return generateDeterministicDp2(input as DpPieceInput & { dp: 2 });
+  }
   if (input.dp === 3) {
-    // DP3 is geometry, not creative imagery. It is generated directly from the
-    // canonical Site Twin so slope, ridge, section axis and dimensions cannot
-    // drift between attempts or be invented by an image model.
     return generateDeterministicSiteTwinPiece(input as DpPieceInput & { dp: 3 });
   }
   if (input.dp === 4) return generateSpecializedDp4(input as DpPieceInput & { dp: 4 });
-  if (input.dp >= 2 && input.dp <= 6) {
-    return generatePreventiveDp(input as DpPieceInput & { dp: 2 | 4 | 5 | 6 });
+  if (input.dp === 5 || input.dp === 6) {
+    return generateGeometryLockedPhotographicDp(input as DpPieceInput & { dp: 5 | 6 });
   }
   throw new Error(`Pièce visuelle DP non prise en charge : ${String(input.dp)}.`);
 }
@@ -48,13 +49,15 @@ export async function POST(request: Request) {
       ? "pilotpaper-diagnostic-fallback"
       : result.dp === 1
         ? "official-cadastre-deterministic"
-        : result.dp === 3
-          ? "site-twin-vector-section"
-          : result.dp === 4
-            ? "pilotpaper-dp4-specialized"
-            : result.dp <= 6
-              ? "pilotpaper-vision-preventive"
-              : "original-photo";
+        : result.dp === 2
+          ? "site-twin-georeferenced-plan"
+          : result.dp === 3
+            ? "site-twin-vector-section"
+            : result.dp === 4
+              ? "pilotpaper-dp4-specialized"
+              : result.dp === 5 || result.dp === 6
+                ? "site-twin-masked-photorealistic"
+                : "original-photo";
     return Response.json(result, {
       headers: {
         "Cache-Control": "no-store",
