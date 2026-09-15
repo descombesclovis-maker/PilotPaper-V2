@@ -3,7 +3,11 @@ import "server-only";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 import type { DpPieceInput, PiecePhotoInput } from "@/lib/pilotpaper-image2-types";
 import { buildPanelIslandsMaskForPng } from "@/lib/dp-ai-engine/utils/maskPng";
-import { decodePng, strictCompositePng } from "@/lib/dp-ai-engine/utils/pngPixels";
+import {
+  annotatePngWithPanelPolygons,
+  decodePng,
+  geometryLockedCompositePng,
+} from "@/lib/dp-ai-engine/utils/pngPixels";
 import { fetchGoogleSolarDataLayers, downloadGoogleGeoTiff } from "./googleSolarDataLayers";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
 import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
@@ -11,7 +15,9 @@ import { modulePolygonsToLonLat } from "./localGeoTransform";
 import type { SiteTwinDocumentContext } from "./documentContext";
 
 const IMAGE_MODEL = "gpt-image-2";
-const EDIT_PADDING = 0.0035;
+const AI_EDIT_PADDING = 0.004;
+const COMPOSITE_FEATHER_PIXELS = 4;
+const OUTSIDE_BLEND_MAX = 0.18;
 
 type Point = { x: number; y: number };
 
@@ -62,14 +68,15 @@ function insertionPrompt(
   const face = context.siteTwin.roof.faces.find((candidate) => candidate.id === faceId);
   return [
     "PILOTPAPER — GEOMETRY-LOCKED PHOTOVOLTAIC PHOTO EDIT.",
-    "The editable transparent islands already encode the exact physical projection of the photovoltaic modules. Do NOT move, resize, merge, delete or add islands.",
-    `Render exactly one realistic photovoltaic module inside each editable island. Total islands/modules: ${context.layout.modules.length}.`,
+    "The input photograph contains a deterministic dark-blue scaffold exactly on every physical photovoltaic footprint. Replace each scaffold with ONE realistic photovoltaic module without moving or resizing its four projected edges.",
+    "The transparent edit mask includes only the physical module footprints plus a very narrow integration halo. The halo is ONLY for anti-aliasing, contact shadow and reflection blending; never extend panel glass or frame into it.",
+    `Render exactly one realistic photovoltaic module for each scaffold. Total modules: ${context.layout.modules.length}.`,
     `Module: ${module.manufacturer} ${module.canonicalReference}; real dimensions ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; orientation ${context.layout.configuration.orientation}.`,
     `Physical roof face: ${face?.displayLabel ?? faceId}; slope ${face?.slopeDeg.toFixed(1) ?? "unknown"}°; azimuth ${face?.azimuthDeg.toFixed(1) ?? "unknown"}°; source role ${role}.`,
     "Keep the panel glass, frame, cell pattern, reflections, local lighting, roof contact and subtle shadows photorealistic and consistent with the existing photograph.",
     "Every module belongs to the same roof plane and must look like the same physical product under one camera perspective.",
     "Do not add labels, arrows, borders, masks, debug marks, people, tools or new architecture.",
-    "Everything outside the editable islands is immutable and will be restored pixel-for-pixel by PilotPaper after generation.",
+    "Everything beyond the narrow edit halo is immutable; PilotPaper will restore it pixel-for-pixel after generation.",
     correction ? `VISUAL CORRECTION ONLY — geometry remains locked and cannot change:\n${correction}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -115,14 +122,16 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   if (polygons.length !== context.layout.configuration.panelCount) {
     throw new Error(`Projection photo incomplète : ${polygons.length}/${context.layout.configuration.panelCount} modules.`);
   }
-  const mask = buildPanelIslandsMaskForPng(projection.photoBase64, polygons, EDIT_PADDING);
+
+  const geometryGuide = annotatePngWithPanelPolygons(projection.photoBase64, polygons);
+  const mask = buildPanelIslandsMaskForPng(projection.photoBase64, polygons, AI_EDIT_PADDING);
   if (!mask) throw new Error("Le masque géométrique des panneaux n'a pas pu être construit.");
 
   const form = new FormData();
   form.set("model", IMAGE_MODEL);
   form.set("prompt", insertionPrompt(args.input, context, args.photo.role, args.correction));
   form.set("quality", "high");
-  form.append("image[]", base64ToBlob(projection.photoBase64, "image/png"), "immutable-source.png");
+  form.append("image[]", base64ToBlob(geometryGuide, "image/png"), "geometry-locked-source.png");
   form.set("mask", base64ToBlob(mask, "image/png"), "panel-islands-mask.png");
 
   const response = await fetch("https://api.openai.com/v1/images/edits", {
@@ -136,7 +145,10 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   const rawCandidate = json.data?.[0]?.b64_json;
   if (!rawCandidate) throw new Error("Le moteur visuel n'a produit aucune insertion.");
 
-  const base64 = strictCompositePng(projection.photoBase64, rawCandidate, polygons, EDIT_PADDING);
+  const base64 = geometryLockedCompositePng(projection.photoBase64, rawCandidate, polygons, {
+    featherPixels: COMPOSITE_FEATHER_PIXELS,
+    outsideBlendMax: OUTSIDE_BLEND_MAX,
+  });
   const changeRatio = changedIslandRatio(projection.photoBase64, base64, polygons);
   if (changeRatio < 0.12) {
     throw new Error(`Insertion visuelle insuffisante : seulement ${Math.round(changeRatio * 100)} % des pixels des zones PV ont été réellement modifiés.`);
