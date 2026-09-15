@@ -33,8 +33,11 @@ def health() -> dict[str, Any]:
     capabilities = [
         "geotiff-dsm",
         "ign-mnx-samples",
+        "sampled-elevation-points",
         "las-laz",
         "ransac-planes",
+        "metric-obstacles",
+        "roof-edge-topology",
         "opencv-registration",
     ]
     if _optional_module("open3d"):
@@ -202,13 +205,18 @@ async def reconstruct_roof(
 async def register_photo(reference: UploadFile = File(...), photo: UploadFile = File(...)):
     try:
         result = register_images(await reference.read(), await photo.read())
-        if result.reprojection_error_px > 8.0:
-            raise ValueError(f"Recalage rejeté : erreur médiane {result.reprojection_error_px:.1f} px (> 8 px).")
+        ratio = result.inliers / max(result.matches, 1)
+        if result.reprojection_error_px > 8.0 or result.inliers < 12 or ratio < 0.28:
+            raise ValueError(
+                f"Recalage rejeté : erreur {result.reprojection_error_px:.1f} px, "
+                f"{result.inliers}/{result.matches} inliers ({ratio * 100:.0f} %)."
+            )
         return {
             "homography": result.homography,
             "reprojectionErrorPx": result.reprojection_error_px,
             "matches": result.matches,
             "inliers": result.inliers,
+            "inlierRatio": ratio,
             "method": result.method,
             "diagnostics": result.diagnostics,
         }
