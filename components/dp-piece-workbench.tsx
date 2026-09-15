@@ -91,11 +91,11 @@ const fieldLabels: Record<DpPieceField, { label: string; hint?: string }> = {
   columns: { label: "Colonnes" },
   orientation: { label: "Orientation des panneaux" },
   placement: { label: "Placement souhaité" },
-  instructions: { label: "Consigne libre à ChatGPT Image", hint: "Ex. pan côté rue, légèrement décalé à droite, conserver le Velux entre les deux zones…" },
+  instructions: { label: "Consigne libre au moteur visuel", hint: "Ex. pan côté rue, légèrement décalé à droite, conserver le Velux entre les deux zones…" },
   roofWidthMm: { label: "Largeur réelle du pan (mm)", hint: "DP3 : renseigner uniquement une mesure fiable." },
   roofSlopeLengthMm: { label: "Longueur réelle du rampant (mm)", hint: "DP3 : gouttière → faîtage, si connue." },
   roofSlopeDeg: { label: "Pente réelle du toit (°)", hint: "DP3 : uniquement si connue." },
-  gutterClearanceMm: { label: "Recul bas préféré (mm)", hint: "300 mm par défaut ; ChatGPT peut le réduire si nécessaire pour faire rentrer la matrice exacte." },
+  gutterClearanceMm: { label: "Recul bas préféré (mm)", hint: "300 mm par défaut ; PilotPaper peut le réduire si nécessaire pour faire rentrer la matrice exacte." },
   interPanelGapMm: { label: "Jeu entre panneaux (mm)" },
   nearPhoto: { label: "Photo réelle de la maison", hint: "Maison + toiture clairement lisibles." },
   roofPhoto: { label: "Photo rapprochée toiture", hint: "Utilisée pour la DP5 et sa nouvelle vue plus haute." },
@@ -215,7 +215,12 @@ export function DpPieceWorkbench() {
       const candidate = source[referenceDp];
       if (!candidate?.base64) return [];
       if (!["image/png", "image/jpeg", "image/webp"].includes(candidate.mimeType)) return [];
-      return [{ dp: referenceDp, mimeType: candidate.mimeType as VisualReference["mimeType"], base64: candidate.base64 }];
+      return [{
+        dp: referenceDp,
+        mimeType: candidate.mimeType as VisualReference["mimeType"],
+        base64: candidate.base64,
+        geometryReceipt: candidate.geometryReceipt,
+      }];
     });
   }
 
@@ -350,7 +355,7 @@ export function DpPieceWorkbench() {
       return (
         <label className={`${styles.field} ${styles.wide}`} key={field}>
           <span className={styles.fieldTitle}>{meta.label}</span><span className={styles.fieldHint}>{meta.hint}</span>
-          <textarea rows={4} value={draft.instructions} onChange={(event) => update("instructions", event.target.value)} placeholder="Décris simplement le résultat attendu comme tu le ferais dans ChatGPT…" />
+          <textarea rows={4} value={draft.instructions} onChange={(event) => update("instructions", event.target.value)} placeholder="Décris simplement le résultat attendu ; la géométrie physique restera verrouillée par PilotPaper…" />
         </label>
       );
     }
@@ -368,12 +373,12 @@ export function DpPieceWorkbench() {
     return (
       <main className={styles.app} data-pilotpaper-image2-workbench>
         <header className={styles.topbar}>
-          <div className={styles.brand}><img src="/pilotpaper-dp.svg" alt="dP" /><div><strong>PilotPaper</strong><span>Image-2 · Atelier de validation</span></div></div>
+          <div className={styles.brand}><img src="/pilotpaper-dp.svg" alt="dP" /><div><strong>PilotPaper</strong><span>Site Twin · Atelier de validation V2</span></div></div>
           <div className={styles.testBadge}><span /> MODE TEST · NON VALIDÉ</div>
         </header>
         <section className={styles.hero}>
-          <div><span className={styles.eyebrow}>NOUVEAU MOTEUR DIRECT</span><h1>Une vraie source.<br />ChatGPT Image. Une DP.</h1><p>DP1 à DP6 passent directement par ChatGPT Image-2. Plus de masque, Site Twin, recalage caméra ou Geometry Engine dans le chemin de génération. Les DP2 à DP6 partagent la même identité visuelle de projet.</p></div>
-          <div className={styles.heroStatus}><Sparkles size={28} /><strong>Pipeline simplifié</strong><span>Source réelle → prompt projet partagé → gpt-image-2 → Inspector</span></div>
+          <div><span className={styles.eyebrow}>MOTEUR HYBRIDE V2</span><h1>Une seule géométrie.<br />Toutes les DP.</h1><p>Le Site Twin verrouille le bâtiment, les pans et le calepinage. DP2 est projetée géométriquement, DP3 est vectorielle, et le moteur visuel intervient sur DP4 à DP6 uniquement dans les empreintes photovoltaïques calculées.</p></div>
+          <div className={styles.heroStatus}><Sparkles size={28} /><strong>Pipeline contrôlé</strong><span>Sources métriques + contrôle distant → Site Twin → projection → rendu photoréaliste → Inspector</span></div>
         </section>
         <section className={styles.grid}>
           {DP_PIECE_CONTRACTS.map((piece) => {
@@ -387,7 +392,7 @@ export function DpPieceWorkbench() {
                   {active ? <span className={styles.queueDot}>{active.status === "running" ? "En cours" : "En attente"}</span> : saved ? <span className={styles.passDot}>Sauvegardée</span> : state ? <span className={state.lastPassed ? styles.passDot : styles.failDot}>{state.tests} test{state.tests > 1 ? "s" : ""}</span> : <span className={styles.newDot}>À tester</span>}
                 </div>
                 <h2>{piece.title}</h2><p>{piece.purpose}</p>
-                <div className={styles.pipelineTags}>{piece.generatedByImage2 ? <span>ChatGPT Image-2</span> : <span>Photo originale</span>}{piece.usesInspector ? <span>Inspector</span> : null}</div>
+                <div className={styles.pipelineTags}>{piece.generatedByImage2 ? <span>Rendu visuel contrôlé</span> : <span>Source déterministe</span>}{piece.usesInspector ? <span>Inspector</span> : null}</div>
                 <span className={styles.openLabel}>{saved ? "Rouvrir le résultat →" : "Ouvrir l’atelier →"}</span>
               </button>
             );
@@ -404,13 +409,13 @@ export function DpPieceWorkbench() {
     <main className={styles.app} data-pilotpaper-image2-workbench>
       <header className={styles.topbar}>
         <button className={styles.back} onClick={() => setSelectedDp(null)}><ArrowLeft size={18} /> Toutes les pièces</button>
-        <div className={styles.brandCompact}><img src="/pilotpaper-dp.svg" alt="dP" /><strong>PilotPaper Image-2</strong></div>
+        <div className={styles.brandCompact}><img src="/pilotpaper-dp.svg" alt="dP" /><strong>PilotPaper V2</strong></div>
         <div className={styles.testBadge}><span /> TEST · NON VALIDÉ</div>
       </header>
 
       <section className={styles.workspaceHeader}>
         <div className={styles.dpHeroNumber}>DP{contract.dp}</div>
-        <div><span className={styles.eyebrow}>{contract.generatedByImage2 ? "CHATGPT IMAGE-2 DIRECT" : "PHOTO ORIGINALE"}</span><h1>{contract.title}</h1><p>{contract.purpose}</p></div>
+        <div><span className={styles.eyebrow}>{contract.generatedByImage2 ? "RENDU VISUEL CONTRÔLÉ" : "SOURCE DÉTERMINISTE"}</span><h1>{contract.title}</h1><p>{contract.purpose}</p></div>
         <button className={styles.reset} onClick={() => void resetPiece()} disabled={!result || Boolean(currentJob)}><RotateCcw size={16} /> Effacer et recommencer</button>
       </section>
 
@@ -423,14 +428,14 @@ export function DpPieceWorkbench() {
             <div className={styles.sources}>
               <strong>Cohérence inter-DP</strong>
               <span>{references.length ? `Références déjà disponibles : ${references.map((ref) => `DP${ref.dp}`).join(", ")}` : "Aucune DP antérieure en mémoire pour l'instant."}</span>
-              <span>Les générations antérieures restent sauvegardées et sont réutilisées automatiquement pour maintenir le même projet.</span>
+              <span>Chaque référence transporte aussi son empreinte géométrique ; PilotPaper refuse de mélanger deux implantations physiques différentes.</span>
             </div>
           ) : null}
 
           {error ? <div className={styles.error}><TriangleAlert size={19} /><span>{error}</span></div> : null}
 
           <button className={styles.generate} disabled={Boolean(currentJob)} onClick={generate}>
-            {currentJob ? <>{currentJob.status === "running" ? `DP${contract.dp} en génération réelle…` : `DP${contract.dp} ajoutée à la file d’attente`}</> : contract.generatedByImage2 ? <>Générer DP{contract.dp} avec ChatGPT Image <span>TEST</span></> : <>Utiliser la photo originale DP{contract.dp}</>}
+            {currentJob ? <>{currentJob.status === "running" ? `DP${contract.dp} en génération réelle…` : `DP${contract.dp} ajoutée à la file d’attente`}</> : contract.generatedByImage2 ? <>Générer DP{contract.dp} avec le moteur hybride <span>TEST</span></> : <>Générer la DP{contract.dp}</>}
           </button>
           <p className={styles.modeNote}>Tu peux quitter cette DP immédiatement après le lancement : le job continue dans le dock latéral. Les lancements suivants sont mis en file d’attente et les résultats restent enregistrés jusqu’à suppression explicite.</p>
         </section>
@@ -447,18 +452,18 @@ export function DpPieceWorkbench() {
             <>
               <div className={styles.previewCanvas}>{previewUrl ? <img src={previewUrl} alt={`Résultat DP${contract.dp}`} /> : null}</div>
               <div className={result.inspector.passed ? styles.inspectorPass : styles.inspectorFail}>
-                <div className={styles.inspectorTitle}>{result.inspector.passed ? <CheckCircle2 size={20} /> : <TriangleAlert size={20} />}<strong>{contract.usesInspector ? "PilotPaper Inspector" : "Source originale"}</strong><span>{Math.round(result.inspector.score * 100)} %</span></div>
+                <div className={styles.inspectorTitle}>{result.inspector.passed ? <CheckCircle2 size={20} /> : <TriangleAlert size={20} />}<strong>{contract.usesInspector ? "PilotPaper Inspector" : "Source déterministe"}</strong><span>{Math.round(result.inspector.score * 100)} %</span></div>
                 {result.inspector.checks.map((check) => <p key={check}>✓ {check}</p>)}
                 {result.inspector.issues.map((issue) => <p key={issue}>⚠ {issue}</p>)}
               </div>
               <div className={styles.sources}><strong>Pipeline utilisé</strong>{result.sourceSummary.map((source) => <span key={source}>{source}</span>)}</div>
-              <div className={styles.persistNotice}><CheckCircle2 size={16} /><span>Cette DP est sauvegardée localement. Elle restera disponible en changeant de page ou après relance de PilotPaper, jusqu’à « Effacer et recommencer ».</span></div>
+              <div className={styles.persistNotice}><CheckCircle2 size={16} /><span>Cette DP est sauvegardée localement avec son empreinte géométrique. Elle restera disponible en changeant de page ou après relance de PilotPaper, jusqu’à « Effacer et recommencer ».</span></div>
             </>
           ) : (
             <div className={styles.emptyPreview}>
               {contract.dp === 1 ? <img src="/pilotpaper-france-map.svg" alt="Carte de France" /> : <img src="/pilotpaper-dp.svg" alt="" />}
               <strong>DP{contract.dp} en attente</strong>
-              <span>{contract.generatedByImage2 ? "ChatGPT Image recevra la source complète et les consignes du formulaire, sans masque ni reconstruction géométrique préalable." : "La photographie originale apparaîtra ici sans retouche."}</span>
+              <span>{contract.dp >= 2 && contract.dp <= 6 ? "PilotPaper utilisera le Site Twin et le même calepinage déterministe pour conserver une géométrie cohérente dans tout le dossier." : "La source officielle ou la photographie originale apparaîtra ici sans géométrie inventée."}</span>
             </div>
           )}
         </section>
