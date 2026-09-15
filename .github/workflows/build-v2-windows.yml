@@ -111,7 +111,9 @@ jobs:
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
                 if ($health.ok -eq $true) {
                   if (-not ($health.capabilities -contains "geotiff-dsm")) { throw "DSM capability missing" }
-                  if (-not ($health.capabilities -contains "ign-mnx-samples")) { throw "IGN MNX capability missing" }
+                  if (-not ($health.capabilities -contains "sampled-elevation-points")) { throw "IGN sampled elevation capability missing" }
+                  if (-not ($health.capabilities -contains "metric-obstacles")) { throw "Metric obstacle capability missing" }
+                  if (-not ($health.capabilities -contains "roof-edge-topology")) { throw "Roof edge topology capability missing" }
                   if (-not ($health.capabilities -contains "opencv-registration")) { throw "Photo registration capability missing" }
                   $healthy = $true
                   break
