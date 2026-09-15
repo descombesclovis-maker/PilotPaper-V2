@@ -1,11 +1,11 @@
-import { PilotPaperHomeHub } from "@/components/production/pilotpaper-home-hub";
+import { DpPieceWorkbenchClient } from "@/components/dp-piece-workbench-client";
 import { PilotPaperProductionShell } from "@/components/production/pilotpaper-production-shell";
 import { PilotPaperUpdateButton } from "@/components/pilotpaper-update-button";
 
-export default function Page() {
+export default function KParKPage() {
   return (
     <PilotPaperProductionShell>
-      <PilotPaperHomeHub />
+      <DpPieceWorkbenchClient />
       <PilotPaperUpdateButton />
     </PilotPaperProductionShell>
   );
