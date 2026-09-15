@@ -1,14 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
   Check,
   ChevronDown,
   Download,
-  FileImage,
-  FileText,
   Layers3,
   LoaderCircle,
   MapPin,
@@ -20,7 +18,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFImage } from "pdf-lib";
 import type { DPNumber, DpPieceOutput, PiecePhotoInput, VisualReference } from "@/lib/pilotpaper-image2-types";
 import { deletePersistedDpPiece, persistDpPiece } from "@/lib/pilotpaper-image2-persistence";
 import { BRANDING_STORAGE_KEY, DEFAULT_BRANDING, INSTALLATION_PREFS_STORAGE_KEY, type PilotPaperBranding } from "./pilotpaper-production-shell";
@@ -76,7 +74,7 @@ const PIECES: Array<{ dp: DPNumber; title: string; short: string }> = [
   { dp: 3, title: "Plan en coupe", short: "Coupe" },
   { dp: 4, title: "État initial / projeté", short: "Avant / après" },
   { dp: 5, title: "Aspect extérieur", short: "Vue rapprochée" },
-  { dp: 6, title: "Insertion lointaine", short: "Insertion" },
+  { dp: 6, title: "Insertion du projet", short: "Insertion" },
   { dp: 7, title: "Environnement proche", short: "Photo proche" },
   { dp: 8, title: "Paysage lointain", short: "Photo lointaine" },
 ];
@@ -118,7 +116,6 @@ function base64FromDataUrl(dataUrl: string) {
 async function optimizePhoto(file: File, role: "near" | "far"): Promise<PhotoValue> {
   if (!file.type.startsWith("image/")) throw new Error("Utilisez une image JPEG, PNG ou WebP.");
   if (file.size > 20 * 1024 * 1024) throw new Error("La photo dépasse 20 Mo.");
-
   const sourceUrl = URL.createObjectURL(file);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -180,6 +177,17 @@ function base64Bytes(base64: string) {
   return bytes;
 }
 
+function pdfSafe(value: string) {
+  return value
+    .replace(/[→⇒]/g, "-")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[^\x20-\x7E\u00C0-\u00FF]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function pngDataUrlFromImageDataUrl(dataUrl: string) {
   if (!dataUrl) return "";
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -210,7 +218,7 @@ async function buildCompletePdf(
   const primary = hexToRgb(branding.primaryColor || DEFAULT_BRANDING.primaryColor);
   const accent = hexToRgb(branding.accentColor || DEFAULT_BRANDING.accentColor);
   const paper = hexToRgb(branding.paperColor || DEFAULT_BRANDING.paperColor);
-  let logo: Awaited<ReturnType<PDFDocument["embedPng"]>> | null = null;
+  let logo: PDFImage | null = null;
 
   if (branding.logoDataUrl) {
     try {
@@ -228,10 +236,10 @@ async function buildCompletePdf(
   cover.drawText("PILOTPAPER", { x: 70, y: 510, size: 11, font: bold, color: primary });
   cover.drawText("DECLARATION PREALABLE", { x: 70, y: 433, size: 34, font: bold, color: primary });
   cover.drawText("DOSSIER PHOTOVOLTAIQUE COMPLET", { x: 70, y: 397, size: 17, font: regular, color: accent });
-  cover.drawText(draft.address.slice(0, 100), { x: 70, y: 330, size: 13, font: bold, color: primary });
-  cover.drawText(`${draft.panelCount} modules · ${draft.rows} x ${draft.panelCount / draft.rows} · ${draft.moduleReference}`, { x: 70, y: 300, size: 10, font: regular, color: primary });
-  cover.drawText("DP1 → DP8 générées dans une seule chaîne cohérente", { x: 70, y: 267, size: 9, font: regular, color: primary, opacity: 0.66 });
-  if (branding.companyName) cover.drawText(branding.companyName.slice(0, 80), { x: 70, y: 98, size: 16, font: bold, color: primary });
+  cover.drawText(pdfSafe(draft.address).slice(0, 100), { x: 70, y: 330, size: 13, font: bold, color: primary });
+  cover.drawText(pdfSafe(`${draft.panelCount} modules · ${draft.rows} x ${draft.panelCount / draft.rows} · ${draft.moduleReference}`), { x: 70, y: 300, size: 10, font: regular, color: primary });
+  cover.drawText("DP1 - DP8 generees dans une seule chaine coherente", { x: 70, y: 267, size: 9, font: regular, color: primary, opacity: 0.66 });
+  if (branding.companyName) cover.drawText(pdfSafe(branding.companyName).slice(0, 80), { x: 70, y: 98, size: 16, font: bold, color: primary });
   if (logo) {
     const scale = Math.min(130 / logo.width, 70 / logo.height);
     cover.drawImage(logo, { x: 650, y: 465, width: logo.width * scale, height: logo.height * scale });
@@ -245,7 +253,7 @@ async function buildCompletePdf(
     page.drawRectangle({ x: 0, y: 574, width: 841.89, height: 21, color: primary });
     page.drawRectangle({ x: 650, y: 574, width: 191.89, height: 21, color: accent });
     page.drawText(`DP${piece.dp}`, { x: 34, y: 545, size: 14, font: bold, color: primary });
-    page.drawText(piece.title.toUpperCase(), { x: 78, y: 546, size: 9, font: bold, color: primary });
+    page.drawText(pdfSafe(piece.title).toUpperCase(), { x: 78, y: 546, size: 9, font: bold, color: primary });
 
     let imageBytes = base64Bytes(result.base64);
     let image;
@@ -263,8 +271,8 @@ async function buildCompletePdf(
     const width = image.width * scale;
     const height = image.height * scale;
     page.drawImage(image, { x: (841.89 - width) / 2, y: 55 + (availableHeight - height) / 2, width, height });
-    page.drawText(branding.companyName ? branding.companyName.slice(0, 70) : "PilotPaper", { x: 34, y: 23, size: 6.5, font: bold, color: primary, opacity: 0.72 });
-    page.drawText(draft.address.slice(0, 95), { x: 200, y: 23, size: 6.5, font: regular, color: primary, opacity: 0.62 });
+    page.drawText(pdfSafe(branding.companyName || "PilotPaper").slice(0, 70), { x: 34, y: 23, size: 6.5, font: bold, color: primary, opacity: 0.72 });
+    page.drawText(pdfSafe(draft.address).slice(0, 95), { x: 200, y: 23, size: 6.5, font: regular, color: primary, opacity: 0.62 });
   }
 
   return pdf.save();
@@ -299,7 +307,7 @@ export function CompleteDpExperience() {
   const compatibleRows = useMemo(() => [1, 2, 3, 4].filter((rows) => draft.panelCount % rows === 0), [draft.panelCount]);
   const completedCount = PIECES.filter(({ dp }) => pieces[dp].status === "done").length;
   const progress = Math.round((completedCount / 8) * 100);
-  const canGenerate = draft.address.trim().length >= 8 && draft.moduleReference.trim().length >= 3 && columns >= 1 && nearPhoto && farPhoto && phase !== "generating";
+  const canGenerate = Boolean(draft.address.trim().length >= 8 && draft.moduleReference.trim().length >= 3 && columns >= 1 && nearPhoto && farPhoto && phase !== "generating");
   const results = useMemo(() => Object.fromEntries(PIECES.flatMap(({ dp }) => pieces[dp].result ? [[dp, pieces[dp].result]] : [])) as Partial<Record<DPNumber, DpPieceOutput>>, [pieces]);
 
   function updateDraft(patch: Partial<ProjectDraft>) {
@@ -326,7 +334,9 @@ export function CompleteDpExperience() {
   async function createPdf(nextResults: Partial<Record<DPNumber, DpPieceOutput>>) {
     const bytes = await buildCompletePdf(nextResults, draft, branding);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    const blob = new Blob([bytes], { type: "application/pdf" });
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const blob = new Blob([copy.buffer], { type: "application/pdf" });
     setPdfUrl(URL.createObjectURL(blob));
   }
 
@@ -350,7 +360,6 @@ export function CompleteDpExperience() {
       if (abortRef.current) return;
       setCurrentDp(dp);
       setPieces((current) => ({ ...current, [dp]: { status: "running" } }));
-
       try {
         const response = await fetch("/api/dp-piece", {
           method: "POST",
@@ -372,7 +381,6 @@ export function CompleteDpExperience() {
         });
         const body = await response.json().catch(() => null) as DpPieceOutput | { error?: string } | null;
         if (!response.ok || !body || !("dp" in body)) throw new Error((body as { error?: string } | null)?.error || `DP${dp} : génération interrompue.`);
-
         nextResults[dp] = body;
         await persistDpPiece(body);
         setPieces((current) => ({ ...current, [dp]: { status: "done", result: body } }));
@@ -387,8 +395,13 @@ export function CompleteDpExperience() {
     }
 
     setCurrentDp(null);
-    await createPdf(nextResults);
-    setPhase("ready");
+    try {
+      await createPdf(nextResults);
+      setPhase("ready");
+    } catch (error) {
+      setGlobalError(error instanceof Error ? `Les 8 pièces sont prêtes, mais le PDF n'a pas pu être assemblé : ${error.message}` : "Les 8 pièces sont prêtes, mais le PDF n'a pas pu être assemblé.");
+      setPhase("error");
+    }
   }
 
   function reset() {
@@ -409,7 +422,9 @@ export function CompleteDpExperience() {
     const link = document.createElement("a");
     link.href = `data:${result.mimeType};base64,${result.base64}`;
     link.download = `PilotPaper-DP${dp}.${extension}`;
+    document.body.appendChild(link);
     link.click();
+    link.remove();
   }
 
   const previewResult = previewDp ? pieces[previewDp].result : undefined;
@@ -501,8 +516,8 @@ export function CompleteDpExperience() {
 
         <div className={styles.stagePanel}>
           <div className={styles.stageTop}>
-            <div><span>Chaîne PilotPaper</span><strong>{phase === "ready" ? "Dossier prêt" : phase === "error" ? `Arrêt sur DP${currentDp}` : phase === "generating" ? `DP${currentDp} en fabrication` : "Prêt à générer"}</strong></div>
-            <div className={styles.progressDial} style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}<small>%</small></span></div>
+            <div><span>Chaîne PilotPaper</span><strong>{phase === "ready" ? "Dossier prêt" : phase === "error" ? (currentDp ? `Arrêt sur DP${currentDp}` : "Dossier généré, export à reprendre") : phase === "generating" ? `DP${currentDp} en fabrication` : "Prêt à générer"}</strong></div>
+            <div className={styles.progressDial} style={{ "--progress": `${progress * 3.6}deg` } as CSSProperties}><span>{progress}<small>%</small></span></div>
           </div>
 
           <div className={styles.energyStage}>
@@ -515,7 +530,7 @@ export function CompleteDpExperience() {
             <div className={styles.pieceRail}>
               {PIECES.map((piece, index) => {
                 const state = pieces[piece.dp];
-                return <button type="button" key={piece.dp} className={`${styles.pieceNode} ${styles[`piece_${state.status}`]}`} onClick={() => state.result && setPreviewDp(piece.dp)} disabled={!state.result} style={{ "--i": index } as React.CSSProperties}>
+                return <button type="button" key={piece.dp} className={`${styles.pieceNode} ${styles[`piece_${state.status}`]}`} onClick={() => state.result && setPreviewDp(piece.dp)} disabled={!state.result} style={{ "--i": index } as CSSProperties}>
                   <span>{state.status === "done" ? <Check /> : state.status === "running" ? <LoaderCircle className={styles.spin} /> : state.status === "error" ? <X /> : `0${piece.dp}`}</span>
                   <div><strong>DP{piece.dp}</strong><small>{piece.short}</small></div>
                 </button>;
@@ -527,6 +542,9 @@ export function CompleteDpExperience() {
             {phase === "ready" && pdfUrl ? <>
               <a className={styles.downloadMain} href={pdfUrl} download="PilotPaper-DP-Complete.pdf"><Download /> Télécharger le dossier complet</a>
               <button type="button" className={styles.resetButton} onClick={reset}><RotateCcw /> Nouveau dossier</button>
+            </> : phase === "error" && completedCount === 8 ? <>
+              <button type="button" className={styles.retryButton} onClick={() => void createPdf(results)}><Download /> Réassembler le PDF</button>
+              <button type="button" className={styles.resetButton} onClick={reset}>Nouveau dossier</button>
             </> : phase === "error" ? <>
               <button type="button" className={styles.retryButton} onClick={() => void generateCompleteDp()}><RotateCcw /> Relancer toute la chaîne</button>
               <button type="button" className={styles.resetButton} onClick={reset}>Modifier le projet</button>
