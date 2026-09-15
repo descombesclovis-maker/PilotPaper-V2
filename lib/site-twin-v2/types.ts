@@ -12,6 +12,7 @@ export type SiteTwinEvidenceSource =
   | "google-solar"
   | "google-solar-dsm"
   | "google-3d-tiles"
+  | "advanced-roof-model"
   | "photogrammetry"
   | "lightglue"
   | "user-photo"
@@ -109,6 +110,9 @@ export type SiteTwinSources = {
   photogrammetryReference?: string;
   geometryEngineVersion?: string;
   geometryPrimarySource?: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry";
+  advancedRoofProjectId?: number;
+  advancedRoofFacetCount?: number;
+  advancedRoofAutoDesignAvailable?: boolean;
 };
 
 export type SiteTwin = {
