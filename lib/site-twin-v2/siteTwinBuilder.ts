@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchGoogleSolarBuildingInsights } from "@/lib/dp-ai-engine/providers/googleSolar";
+import { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";
 import { assertSiteTwinGeometry } from "./invariants";
 import { lockSiteTwinProperty } from "./propertyLock";
 import { assertTwinReadyForAutomaticDocuments } from "./policy";
@@ -113,10 +114,12 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     );
   }
 
-  const [{ geometry, googleLayers, lidarReference, failures }, terrainElevationM] = await Promise.all([
+  const [metricRoof, terrainElevationM, advancedRoof] = await Promise.all([
     reconstructMetricRoof(property),
     sampleIgnTerrainElevation(property),
+    resolveAdvancedRoofTruth(address),
   ]);
+  const { geometry, googleLayers, lidarReference, failures } = metricRoof;
   const [longitude, latitude] = property.addressPoint;
 
   let crossCheckNotes: string[] = [];
@@ -163,6 +166,30 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
       ],
     ),
   ];
+
+  if (advancedRoof.available) {
+    const converges = advancedRoof.usable && advancedRoof.roofFacetCount === geometry.faces.length;
+    evidence.push(sourceEvidence(
+      "advanced-roof-model",
+      advancedRoof.projectId ? `advanced-project:${advancedRoof.projectId}` : "advanced-project",
+      advancedRoof.usable ? (converges ? 0.9 : 0.78) : 0.45,
+      [
+        advancedRoof.usable
+          ? `Modèle toiture distant exploitable : ${advancedRoof.roofFacetCount} pans.`
+          : "Modèle toiture distant joignable mais sans facettes suffisamment exploitables.",
+        advancedRoof.usable
+          ? (converges
+              ? `Contrôle indépendant convergent avec les ${geometry.faces.length} pans métriques PilotPaper.`
+              : `Contrôle indépendant divergent : ${advancedRoof.roofFacetCount} pans distants contre ${geometry.faces.length} pans métriques PilotPaper. La géométrie locale reste prioritaire jusqu'à résolution.`)
+          : "PilotPaper conserve sa reconstruction métrique locale comme vérité géométrique.",
+        advancedRoof.autoDesignAvailable
+          ? "Un modèle automatique de projet distant est disponible comme preuve secondaire."
+          : "Aucun modèle automatique distant exploitable n'est encore disponible.",
+        ...(advancedRoof.warnings.length ? [`Le moteur distant a signalé ${advancedRoof.warnings.length} avertissement(s) interne(s), conservé(s) hors interface utilisateur.`] : []),
+      ],
+    ));
+  }
+
   if (tiles3d.available) {
     evidence.push(sourceEvidence(
       "google-3d-tiles",
@@ -201,6 +228,9 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
       google3dTilesReference: tiles3d.available ? tiles3d.reference : undefined,
       geometryEngineVersion: geometry.engineVersion,
       geometryPrimarySource: geometry.source,
+      advancedRoofProjectId: advancedRoof.projectId ?? undefined,
+      advancedRoofFacetCount: advancedRoof.roofFacetCount || undefined,
+      advancedRoofAutoDesignAvailable: advancedRoof.autoDesignAvailable || undefined,
     },
     evidence,
     confidence: geometry.confidence,
