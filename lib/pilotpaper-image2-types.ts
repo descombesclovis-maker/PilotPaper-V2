@@ -1,3 +1,5 @@
+import type { SiteTwinPieceReceipt } from "./site-twin-v2/documentContext";
+
 export type DPNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export type PhotoRole = "near" | "roof" | "far";
@@ -13,6 +15,7 @@ export type VisualReference = {
   dp: 2 | 3 | 4 | 5;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   base64: string;
+  geometryReceipt?: SiteTwinPieceReceipt;
 };
 
 export type DpPieceInput = {
@@ -53,4 +56,5 @@ export type DpPieceOutput = {
   text?: string;
   sourceSummary: string[];
   inspector: DpInspectorResult;
+  geometryReceipt?: SiteTwinPieceReceipt;
 };
