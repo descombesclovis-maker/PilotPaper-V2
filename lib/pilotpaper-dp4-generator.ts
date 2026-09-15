@@ -1,5 +1,6 @@
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
+import { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";
 import type { DpPieceInput, DpPieceOutput, PiecePhotoInput, VisualReference } from "@/lib/pilotpaper-image2-types";
 
 const IMAGE_MODEL = "gpt-image-2";
@@ -150,6 +151,7 @@ export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): P
   if (!apiKey) throw new Error("Clé du moteur visuel absente du poste local.");
   const source = requireSource(input);
   const dp2 = requireDp2Reference(input);
+  const roofTruth = await resolveAdvancedRoofTruth(input.address);
   const module = requireVerifiedPvModule(input.moduleReference ?? "");
   const panelCount = positiveInteger(input.panelCount, "Le nombre de panneaux");
   const rows = positiveInteger(input.rows, "Le nombre de rangées");
@@ -165,6 +167,7 @@ export async function generateSpecializedDp4(input: DpPieceInput & { dp: 4 }): P
 
   const basePrompt = [
     "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",
+    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real source and accepted DP2 as the physical anchors.",
     "Reason as a photovoltaic installer performing a photographic insertion, not as a generic image generator.",
     "Image 1 is the immutable real source. Image 2 is the accepted DP2 and identifies the equipped roof plane and installation zone.",
     facts,

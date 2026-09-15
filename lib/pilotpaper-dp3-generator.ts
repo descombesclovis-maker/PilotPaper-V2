@@ -1,5 +1,6 @@
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
+import { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";
 import { analyzeDp3SectionSource } from "@/lib/pilotpaper-dp3-section-engine";
 import type { DpPieceInput, DpPieceOutput, PiecePhotoInput, VisualReference } from "@/lib/pilotpaper-image2-types";
 
@@ -166,6 +167,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
 
   const source = requireSource(input);
   const dp2 = requireDp2Reference(input);
+  const roofTruth = await resolveAdvancedRoofTruth(input.address);
   const module = requireVerifiedPvModule(input.moduleReference ?? "");
   const panelCount = positiveInteger(input.panelCount, "Le nombre de panneaux");
   const rows = positiveInteger(input.rows, "Le nombre de rangées");
@@ -202,6 +204,7 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
 
   const basePrompt = [
     "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",
+    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real photographs and accepted DP2 as the only physical anchors.",
     "You are not a generic image generator. Reason as an experienced photovoltaic installer working with an architectural drafter.",
     "Image 1 is the real building source. Image 2 is the already accepted DP2 and defines the physical equipped roof plane and installation identity. Do not reposition the project independently; inherit the accepted DP2 placement and installer preferences.",
     expectedFacts,

@@ -153,7 +153,7 @@ function renderOfficialDp1Svg(args: {
 
   if (!rings.length) throw new Error("DP1 : la géométrie officielle de la parcelle est vide.");
 
-  const polygons = rings.map((points) => `<polygon points="${points}" fill="#102f5f" fill-opacity="0.18" stroke="#0b2e61" stroke-width="8" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join("");
+  const polygons = rings.map((points) => `<polygon points="${points}" fill="#102f5f" fill-opacity="0.18" stroke="#0b2e61" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join("");
   const title = escapeXml("DP1 — Plan de situation");
   const address = escapeXml(args.address);
   const reference = escapeXml(args.reference);

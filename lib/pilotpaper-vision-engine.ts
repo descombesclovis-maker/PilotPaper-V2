@@ -1,5 +1,6 @@
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
+import { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";
 import type {
   DpInspectorResult,
   DpPieceInput,
@@ -595,7 +596,11 @@ export async function generatePreventiveDp(input: DpPieceInput & { dp: DirectDp 
   const source = chooseSource(input.dp, input, ign);
   const references = orderedReferences(input.dp, input.references);
   requireProjectAnchor(input.dp, references);
-  const basePrompt = promptForDp(input.dp, address, ign?.parcelReference, spec, references);
+  const roofTruth = input.dp >= 2 ? await resolveAdvancedRoofTruth(address) : null;
+  const basePrompt = [
+    promptForDp(input.dp, address, ign?.parcelReference, spec, references),
+    roofTruth?.usable ? roofTruth.promptContext : "",
+  ].filter(Boolean).join("\n\n");
 
   let lastInspector: DpInspectorResult | null = null;
   let lastIssues: string[] = [];
