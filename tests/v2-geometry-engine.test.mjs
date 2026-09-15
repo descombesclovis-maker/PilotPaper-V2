@@ -74,6 +74,25 @@ test("V2 startup validates visual access and rechecks the encrypted geometry ses
   assert.match(bootstrap, /token du moteur géométrique/);
 });
 
+test("V2 updater is wired from the UI to a dedicated validated release channel", async () => {
+  const button = await source("components/pilotpaper-update-button.tsx");
+  const shell = await source("components/production/pilotpaper-production-shell.tsx");
+  const window = await source("desktop/PilotPaperLauncher/PilotPaperV2Program.cs");
+  const updater = await source("desktop/PilotPaperLauncher/PilotPaperV2Updater.cs");
+  const workflow = await source(".github/workflows/build-v2-windows.yml");
+
+  assert.match(button, /CHECK_UPDATE/);
+  assert.match(button, /dernière V2/);
+  assert.match(shell, /<PilotPaperUpdateButton \/>/);
+  assert.match(window, /WebMessageReceived \+= OnWebMessageReceived/);
+  assert.match(updater, /pilotpaper-v2-latest/);
+  assert.match(updater, /PilotPaper-V2-Setup\.exe\.sha256/);
+  assert.match(updater, /ComputeSha256Async/);
+  assert.match(workflow, /Publish validated V2 update channel/);
+  assert.match(workflow, /PilotPaper-Build-SHA:/);
+  assert.match(workflow, /Get-FileHash .*SHA256/);
+});
+
 test("one-time migration promotes the existing session then removes clear environment values", async () => {
   const seal = await source("scripts/seal-geometry-credential.ps1");
   assert.match(seal, /is_machine_user/);
