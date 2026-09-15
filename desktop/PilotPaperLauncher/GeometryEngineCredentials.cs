@@ -18,6 +18,12 @@ internal static class GeometryEngineCredentials
         "V2",
         "geometry-engine.bin");
 
+    internal static Task<GeometryEngineSession?> EnsureAsync(Form owner, Action<string> log)
+    {
+        _ = owner;
+        return Task.FromResult(TryLoad(log));
+    }
+
     internal static GeometryEngineSession? TryLoad(Action<string> log)
     {
         try
