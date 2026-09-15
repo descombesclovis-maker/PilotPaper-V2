@@ -36,11 +36,27 @@ export async function registerSiteTwinPhoto(args: {
     photo: photoBytes,
     photoMimeType: args.photo.mimeType,
   });
-  if (result.reprojectionErrorPx > SITE_TWIN_POLICY.maximumAutomaticReprojectionErrorPx) {
+  const inlierRatio = result.matches > 0 ? result.inliers / result.matches : 0;
+  if (
+    result.reprojectionErrorPx > SITE_TWIN_POLICY.maximumAutomaticReprojectionErrorPx
+    || result.inliers < SITE_TWIN_POLICY.minimumAutomaticCameraInliers
+    || inlierRatio < SITE_TWIN_POLICY.minimumAutomaticCameraInlierRatio
+  ) {
     throw new SiteTwinError(
       "CAMERA_REGISTRATION_FAILED",
-      `Recalage automatique rejeté (${result.reprojectionErrorPx.toFixed(1)} px).`,
-      { recoverable: true, details: result },
+      [
+        `Recalage automatique rejeté (${result.reprojectionErrorPx.toFixed(1)} px).`,
+        `${result.inliers}/${result.matches} correspondances cohérentes (${Math.round(inlierRatio * 100)} %).`,
+      ].join(" "),
+      {
+        recoverable: true,
+        details: {
+          ...result,
+          inlierRatio,
+          minimumInliers: SITE_TWIN_POLICY.minimumAutomaticCameraInliers,
+          minimumInlierRatio: SITE_TWIN_POLICY.minimumAutomaticCameraInlierRatio,
+        },
+      },
     );
   }
   const digest = digestPhoto(args.photo);
@@ -53,17 +69,27 @@ export async function registerSiteTwinPhoto(args: {
     heightPx: args.photo.heightPx,
     digest,
   };
+  const registrationConfidence = Math.max(
+    0.5,
+    Math.min(
+      0.99,
+      0.55
+      + Math.min(0.24, inlierRatio * 0.32)
+      + Math.min(0.20, Math.max(0, 1 - result.reprojectionErrorPx / SITE_TWIN_POLICY.maximumAutomaticReprojectionErrorPx) * 0.20),
+    ),
+  );
   const registration: SiteTwinCameraRegistration = {
     photoId,
     status: "automatic",
     homography: result.homography,
     reprojectionErrorPx: result.reprojectionErrorPx,
     evidence: [{
-      source: "lightglue",
-      confidence: Math.max(0.5, 1 - result.reprojectionErrorPx / 20),
+      source: result.method.includes("lightglue") ? "lightglue" : "photo-registration",
+      confidence: registrationConfidence,
       reference: result.method,
       notes: [
-        `${result.inliers}/${result.matches} correspondances validées.`,
+        `${result.inliers}/${result.matches} correspondances validées (${Math.round(inlierRatio * 100)} %).`,
+        `Erreur médiane de reprojection : ${result.reprojectionErrorPx.toFixed(2)} px.`,
         ...result.diagnostics,
       ],
     }],
