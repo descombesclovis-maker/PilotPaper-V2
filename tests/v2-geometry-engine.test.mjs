@@ -28,6 +28,64 @@ test("V2 reuses one deterministic remote project per normalized address", async 
   assert.match(resolver, /createOpenSolarProject/);
 });
 
+test("V2 advanced roof evidence exposes structured facets for pan-by-pan comparison", async () => {
+  const resolver = await source("lib/geometry/advanced-roof-truth.ts");
+  const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  assert.match(resolver, /export type AdvancedRoofFacet/);
+  assert.match(resolver, /slopeDeg/);
+  assert.match(resolver, /azimuthDeg/);
+  assert.match(resolver, /areaM2/);
+  assert.match(builder, /compareAdvancedFacets/);
+  assert.match(builder, /Δazimut/);
+  assert.match(builder, /Δpente/);
+  assert.match(builder, /Δsurface/);
+});
+
+test("embedded geometry engine really consumes sampled IGN points and reports obstacle/topology capabilities", async () => {
+  const engine = await source("geometry-engine/app.py");
+  const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  const workflow = await source(".github/workflows/build-v2-windows.yml");
+  assert.match(engine, /sampled-elevation-points/);
+  assert.match(engine, /sampled_points: str \| None/);
+  assert.match(engine, /_extract_sampled_points/);
+  assert.match(engine, /metric-obstacles/);
+  assert.match(engine, /roof-edge-topology/);
+  assert.match(engine, /_detect_metric_obstacles/);
+  assert.match(engine, /_classify_shared_edge/);
+  assert.match(builder, /sampleIgnLidarSurface/);
+  assert.match(builder, /source: "ign-mns"/);
+  assert.match(workflow, /sampled-elevation-points/);
+  assert.match(workflow, /metric-obstacles/);
+  assert.match(workflow, /roof-edge-topology/);
+});
+
+test("deterministic PV layout respects metric obstacle safety envelopes", async () => {
+  const layout = await source("lib/site-twin-v2/pvLayoutEngine.ts");
+  assert.match(layout, /obstacle\.keepoutMm/);
+  assert.match(layout, /expandedBounds/);
+  assert.match(layout, /zones de sécurité des obstacles/);
+  assert.match(layout, /boundsIntersect\(moduleBounds, expandedBounds/);
+});
+
+test("camera registration rejects geometrically weak matches before DP projection", async () => {
+  const policy = await source("lib/site-twin-v2/policy.ts");
+  const registration = await source("lib/site-twin-v2/cameraRegistration.ts");
+  assert.match(policy, /minimumAutomaticCameraInliers: 12/);
+  assert.match(policy, /minimumAutomaticCameraInlierRatio: 0\.28/);
+  assert.match(registration, /result\.inliers < SITE_TWIN_POLICY\.minimumAutomaticCameraInliers/);
+  assert.match(registration, /inlierRatio < SITE_TWIN_POLICY\.minimumAutomaticCameraInlierRatio/);
+  assert.match(registration, /Erreur médiane de reprojection/);
+});
+
+test("DP3 vector section uses proven ridge topology when available", async () => {
+  const renderer = await source("lib/site-twin-v2/renderers/dp3.ts");
+  assert.match(renderer, /edge\.kind === "ridge"/);
+  assert.match(renderer, /sectionDirectionFromRidge/);
+  assert.match(renderer, /Coupe A-A perpendiculaire au faîtage/);
+  assert.match(renderer, /sectionMode: ridge \? "perpendicular-to-ridge" : "single-slope"/);
+  assert.match(renderer, /aucune cote architecturale inventée/);
+});
+
 test("V2 DP2-DP6 generators consume advanced roof truth instead of leaving it dormant", async () => {
   const preventive = await source("lib/pilotpaper-vision-engine.ts");
   const dp3 = await source("lib/pilotpaper-dp3-generator.ts");
