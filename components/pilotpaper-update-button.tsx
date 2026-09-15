@@ -39,7 +39,7 @@ function parseUpdateMessage(data: unknown): UpdateMessage | null {
 
 export function PilotPaperUpdateButton() {
   const [status, setStatus] = useState<UpdateStatus>("idle");
-  const [message, setMessage] = useState("Mettre à jour PilotPaper");
+  const [message, setMessage] = useState("Mettre à jour PilotPaper V2");
 
   useEffect(() => {
     const bridge = getDesktopBridge();
@@ -49,7 +49,7 @@ export function PilotPaperUpdateButton() {
       const payload = parseUpdateMessage(event.data);
       if (payload?.type !== "pilotpaper-update-status" || !payload.status) return;
       setStatus(payload.status);
-      setMessage(payload.message || "Mise à jour PilotPaper");
+      setMessage(payload.message || "Mise à jour PilotPaper V2");
     };
 
     bridge.addEventListener("message", listener);
@@ -60,11 +60,11 @@ export function PilotPaperUpdateButton() {
     const bridge = getDesktopBridge();
     if (!bridge) {
       setStatus("error");
-      setMessage("Updater indisponible hors application Windows");
+      setMessage("Mise à jour disponible uniquement dans l'application Windows");
       return;
     }
     setStatus("checking");
-    setMessage("Vérification de la dernière V1…");
+    setMessage("Vérification de la dernière V2…");
     bridge.postMessage("CHECK_UPDATE");
   }
 
@@ -78,7 +78,7 @@ export function PilotPaperUpdateButton() {
       className={`${styles.button} ${success ? styles.success : ""} ${failed ? styles.error : ""}`}
       onClick={requestUpdate}
       disabled={busy}
-      title="Vérifier manuellement si une nouvelle V1 validée est disponible"
+      title="Vérifier si une nouvelle version V2 validée de PilotPaper est disponible"
       aria-live="polite"
     >
       {success ? <CheckCircle2 size={16} /> : failed ? <TriangleAlert size={16} /> : <RefreshCw className={busy ? styles.spin : undefined} size={16} />}
