@@ -84,50 +84,44 @@ def _reference_png_and_dataset(raw: bytes):
     return memory, dataset, output.getvalue()
 
 
-def _module_polygons(raw: str) -> list[list[dict[str, float]]]:
+def _module_polygons_lonlat(raw: str) -> list[list[tuple[float, float]]]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise ValueError(f"polygones modules invalides : {error}") from error
+        raise ValueError(f"polygones géographiques modules invalides : {error}") from error
     if not isinstance(parsed, list) or not parsed:
-        raise ValueError("aucun polygone module fourni")
-    output: list[list[dict[str, float]]] = []
+        raise ValueError("aucun polygone géographique module fourni")
+    output: list[list[tuple[float, float]]] = []
     for module in parsed:
         if not isinstance(module, list) or len(module) != 4:
-            raise ValueError("chaque module doit contenir exactement quatre coins")
-        corners: list[dict[str, float]] = []
+            raise ValueError("chaque module doit contenir exactement quatre coins géographiques")
+        corners: list[tuple[float, float]] = []
         for point in module:
-            if not isinstance(point, dict):
-                raise ValueError("coin de module invalide")
-            x = float(point.get("x", math.nan))
-            y = float(point.get("y", math.nan))
-            if not (math.isfinite(x) and math.isfinite(y)):
-                raise ValueError("coordonnée module non finie")
-            corners.append({"x": x, "y": y})
+            if not isinstance(point, list) or len(point) != 2:
+                raise ValueError("coin géographique module invalide")
+            lon = float(point[0])
+            lat = float(point[1])
+            if not (math.isfinite(lon) and math.isfinite(lat)):
+                raise ValueError("coordonnée géographique module non finie")
+            if lon < -180 or lon > 180 or lat < -90 or lat > 90:
+                raise ValueError("coordonnée géographique module hors domaine")
+            corners.append((lon, lat))
         output.append(corners)
     return output
 
 
-def _local_to_lonlat(origin_lon: float, origin_lat: float, x_m: float, y_m: float) -> tuple[float, float]:
-    latitude = origin_lat + y_m / 110_540.0
-    metres_per_lon_degree = max(1.0, 111_320.0 * math.cos(math.radians(origin_lat)))
-    longitude = origin_lon + x_m / metres_per_lon_degree
-    return longitude, latitude
-
-
 def _project_reference_pixels(
     dataset: rasterio.io.DatasetReader,
-    origin_lon: float,
-    origin_lat: float,
-    polygons: list[list[dict[str, float]]],
+    polygons_lonlat: list[list[tuple[float, float]]],
 ) -> list[np.ndarray]:
     to_reference = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
     result: list[np.ndarray] = []
-    for module in polygons:
+    for module in polygons_lonlat:
         points: list[list[float]] = []
-        for point in module:
-            lon, lat = _local_to_lonlat(origin_lon, origin_lat, point["x"], point["y"])
+        for lon, lat in module:
             ref_x, ref_y = to_reference.transform(lon, lat)
+            if not (math.isfinite(float(ref_x)) and math.isfinite(float(ref_y))):
+                raise ValueError("transformation CRS non finie pour un coin de module")
             row, col = dataset.index(ref_x, ref_y)
             points.append([float(col) + 0.5, float(row) + 0.5])
         array = np.asarray(points, dtype=np.float32)
@@ -166,9 +160,7 @@ def _apply_homography(
 
 @router.post("/v1/site-twin/project-modules")
 async def project_modules(
-    origin_lon: float = Form(...),
-    origin_lat: float = Form(...),
-    module_polygons: str = Form(...),
+    module_polygons_lonlat: str = Form(...),
     reference: UploadFile = File(...),
     photo: UploadFile = File(...),
 ):
@@ -180,7 +172,7 @@ async def project_modules(
     memory = None
     dataset = None
     try:
-        polygons = _module_polygons(module_polygons)
+        polygons_lonlat = _module_polygons_lonlat(module_polygons_lonlat)
         photo_png, width, height = _normalise_photo(photo_raw)
         memory, dataset, reference_png = _reference_png_and_dataset(reference_raw)
         registration = register_images(reference_png, photo_png)
@@ -190,7 +182,7 @@ async def project_modules(
                 f"recalage insuffisant : {registration.reprojection_error_px:.1f} px, "
                 f"{registration.inliers}/{registration.matches} inliers ({ratio * 100:.0f} %)"
             )
-        reference_polygons = _project_reference_pixels(dataset, origin_lon, origin_lat, polygons)
+        reference_polygons = _project_reference_pixels(dataset, polygons_lonlat)
         projected = _apply_homography(reference_polygons, registration.homography, width, height)
         return {
             "mimeType": "image/png",
