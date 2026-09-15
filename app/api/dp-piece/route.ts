@@ -1,19 +1,24 @@
 import { generateDpPiece } from "@/lib/dp-piece-engine";
 import { generateOfficialDp1 } from "@/lib/pilotpaper-dp1-generator";
-import { generateSpecializedDp3 } from "@/lib/pilotpaper-dp3-generator";
 import { generateSpecializedDp4 } from "@/lib/pilotpaper-dp4-generator";
 import { generatePreventiveDp } from "@/lib/pilotpaper-vision-engine";
 import { pilotPaperRunVisualJob } from "@/lib/pilotpaper-openai-resilience";
 import { generateDiagnosticFallback } from "@/lib/pilotpaper-diagnostic-fallback";
+import { generateDeterministicSiteTwinPiece } from "@/lib/site-twin-v2/dpPieceBridge";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 
 export const dynamic = "force-dynamic";
 
 async function generateVisualPiece(input: DpPieceInput): Promise<DpPieceOutput> {
-  if (input.dp === 3) return generateSpecializedDp3(input as DpPieceInput & { dp: 3 });
+  if (input.dp === 3) {
+    // DP3 is geometry, not creative imagery. It is generated directly from the
+    // canonical Site Twin so slope, ridge, section axis and dimensions cannot
+    // drift between attempts or be invented by an image model.
+    return generateDeterministicSiteTwinPiece(input as DpPieceInput & { dp: 3 });
+  }
   if (input.dp === 4) return generateSpecializedDp4(input as DpPieceInput & { dp: 4 });
   if (input.dp >= 2 && input.dp <= 6) {
-    return generatePreventiveDp(input as DpPieceInput & { dp: 2 | 3 | 4 | 5 | 6 });
+    return generatePreventiveDp(input as DpPieceInput & { dp: 2 | 4 | 5 | 6 });
   }
   throw new Error(`Pièce visuelle DP non prise en charge : ${String(input.dp)}.`);
 }
@@ -24,8 +29,8 @@ async function generatePiece(input: DpPieceInput): Promise<DpPieceOutput> {
     try {
       return await pilotPaperRunVisualJob(`DP${input.dp}`, () => generateVisualPiece(input));
     } catch (error) {
-      // PilotPaper is currently in TEST / NON VALIDÉ mode. Never hide a failed visual test:
-      // expose a diagnostic candidate (or at minimum the real source) so the defect is observable.
+      // TEST / NON VALIDÉ: failed candidates remain visible as diagnostics,
+      // but never count as a validated planning piece.
       if (input.testMode !== false) return generateDiagnosticFallback(input, error);
       throw error;
     }
@@ -44,7 +49,7 @@ export async function POST(request: Request) {
       : result.dp === 1
         ? "official-cadastre-deterministic"
         : result.dp === 3
-          ? "pilotpaper-dp3-specialized"
+          ? "site-twin-vector-section"
           : result.dp === 4
             ? "pilotpaper-dp4-specialized"
             : result.dp <= 6
