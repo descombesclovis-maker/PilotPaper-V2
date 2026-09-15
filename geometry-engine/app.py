@@ -21,10 +21,12 @@ from sklearn.linear_model import LinearRegression, RANSACRegressor
 
 from registration import register_images
 
-ENGINE_VERSION = "pilotpaper-geometry-0.1.0"
+ENGINE_VERSION = "pilotpaper-geometry-0.2.0"
 MAX_POINTS = 100_000
 MIN_FACE_AREA_M2 = 2.0
 MIN_FACE_POINTS = 60
+MIN_OBSTACLE_AREA_M2 = 0.06
+MIN_OBSTACLE_HEIGHT_M = 0.18
 
 app = FastAPI(title="PilotPaper Geometry Engine", version=ENGINE_VERSION)
 
@@ -35,7 +37,15 @@ def _optional_module(name: str) -> bool:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    capabilities = ["geotiff-dsm", "las-laz", "ransac-planes", "opencv-registration"]
+    capabilities = [
+        "geotiff-dsm",
+        "las-laz",
+        "sampled-elevation-points",
+        "ransac-planes",
+        "metric-obstacles",
+        "roof-edge-topology",
+        "opencv-registration",
+    ]
     if _optional_module("open3d"):
         capabilities.append("open3d")
     if _optional_module("pdal"):
@@ -91,7 +101,7 @@ def _extract_raster_points(data: bytes, property_lock: dict[str, Any]):
         with memory.open() as dataset:
             if dataset.count < 1 or dataset.crs is None:
                 raise ValueError("GeoTIFF sans bande altimétrique ou sans système de coordonnées.")
-            buildings = _projected_buildings(property_lock, dataset.crs)
+            buildings = _projected_buildings(property_lock, CRS.from_user_input(dataset.crs))
             target = unary_union([polygon for _, polygon in buildings])
             clipped, transform = mask(dataset, [mapping(target.buffer(0.75))], crop=True, filled=False, indexes=1)
             values = np.asarray(clipped)
@@ -117,10 +127,10 @@ def _extract_point_cloud(data: bytes, property_lock: dict[str, Any]):
     crs = cloud.header.parse_crs()
     if crs is None:
         raise ValueError("Le nuage LAS/LAZ ne déclare aucun CRS.")
-    buildings = _projected_buildings(property_lock, CRS.from_user_input(crs))
+    metric_crs = CRS.from_user_input(crs)
+    buildings = _projected_buildings(property_lock, metric_crs)
     target = unary_union([polygon for _, polygon in buildings]).buffer(0.5)
     xyz = np.column_stack([np.asarray(cloud.x), np.asarray(cloud.y), np.asarray(cloud.z)]).astype(np.float64)
-    # Fast bounding-box pre-filter before exact point-in-polygon filtering.
     minx, miny, maxx, maxy = target.bounds
     keep = (
         (xyz[:, 0] >= minx) & (xyz[:, 0] <= maxx)
@@ -134,10 +144,57 @@ def _extract_point_cloud(data: bytes, property_lock: dict[str, Any]):
     xyz = xyz[inside]
     if len(xyz) < 120:
         raise ValueError("Le nuage LiDAR ne couvre pas suffisamment l'emprise du bâtiment.")
-    # Reject obvious ground/interior outliers while retaining low eaves.
     floor = np.percentile(xyz[:, 2], 12)
     xyz = xyz[xyz[:, 2] >= floor + 0.4]
-    return _limit_points(xyz), buildings, CRS.from_user_input(crs)
+    return _limit_points(xyz), buildings, metric_crs
+
+
+def _local_metric_crs(property_lock: dict[str, Any], samples: list[dict[str, Any]]) -> CRS:
+    address_point = property_lock.get("addressPoint") or []
+    if len(address_point) >= 2:
+        lon0, lat0 = float(address_point[0]), float(address_point[1])
+    else:
+        lon0 = float(np.mean([float(item["longitude"]) for item in samples]))
+        lat0 = float(np.mean([float(item["latitude"]) for item in samples]))
+    return CRS.from_proj4(f"+proj=aeqd +lat_0={lat0:.10f} +lon_0={lon0:.10f} +datum=WGS84 +units=m +no_defs")
+
+
+def _extract_sampled_points(raw: str, property_lock: dict[str, Any]):
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Points IGN invalides : {error}") from error
+    if not isinstance(parsed, list):
+        raise ValueError("Les points IGN doivent être une liste JSON.")
+    samples = [
+        item for item in parsed
+        if isinstance(item, dict)
+        and math.isfinite(float(item.get("longitude", float("nan"))))
+        and math.isfinite(float(item.get("latitude", float("nan"))))
+        and math.isfinite(float(item.get("z", float("nan"))))
+    ]
+    if len(samples) < 120:
+        raise ValueError(f"Pas assez de points IGN valides ({len(samples)}).")
+    crs = _local_metric_crs(property_lock, samples)
+    transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    xyz = np.asarray([
+        (*transformer.transform(float(item["longitude"]), float(item["latitude"])), float(item["z"]))
+        for item in samples
+    ], dtype=np.float64)
+    buildings = _projected_buildings(property_lock, crs)
+    target = unary_union([polygon for _, polygon in buildings]).buffer(0.65)
+    minx, miny, maxx, maxy = target.bounds
+    keep = (
+        (xyz[:, 0] >= minx) & (xyz[:, 0] <= maxx)
+        & (xyz[:, 1] >= miny) & (xyz[:, 1] <= maxy)
+        & np.isfinite(xyz[:, 2])
+    )
+    xyz = xyz[keep]
+    inside = np.fromiter((target.covers(Point(x, y)) for x, y in xyz[:, :2]), dtype=bool, count=len(xyz))
+    xyz = xyz[inside]
+    if len(xyz) < 120:
+        raise ValueError(f"Couverture IGN insuffisante après verrouillage bâtiment ({len(xyz)} points).")
+    return _limit_points(xyz), buildings, crs
 
 
 def _angular_distance(a: float, b: float) -> float:
@@ -170,6 +227,117 @@ def _split_inlier_clusters(points: np.ndarray, pixel_hint: float) -> list[np.nda
     return [cluster for cluster in clusters if len(cluster) >= MIN_FACE_POINTS]
 
 
+def _plane_z(face: dict[str, Any], x: float, y: float, origin_x: float, origin_y: float) -> float:
+    plane = face["plane"]
+    return float(plane["a"] * (x - origin_x) + plane["b"] * (y - origin_y) + plane["c"])
+
+
+def _source_evidence_name(source: str) -> str:
+    if source == "google-dsm":
+        return "google-solar"
+    if source == "ign-mns":
+        return "ign-mns"
+    return "ign-lidar-hd"
+
+
+def _detect_metric_obstacles(
+    points: np.ndarray,
+    face: dict[str, Any],
+    origin_x: float,
+    origin_y: float,
+    pixel_hint: float,
+    source: str,
+) -> list[dict[str, Any]]:
+    geometry: Polygon = face["_geometry"]
+    interior = geometry.buffer(-max(0.08, min(0.18, pixel_hint * 0.7)))
+    if interior.is_empty:
+        interior = geometry
+    minx, miny, maxx, maxy = interior.bounds
+    candidates = points[
+        (points[:, 0] >= minx) & (points[:, 0] <= maxx)
+        & (points[:, 1] >= miny) & (points[:, 1] <= maxy)
+    ]
+    if not len(candidates):
+        return []
+    inside = np.fromiter((interior.covers(Point(x, y)) for x, y in candidates[:, :2]), dtype=bool, count=len(candidates))
+    candidates = candidates[inside]
+    if len(candidates) < 8:
+        return []
+    predicted = np.asarray([_plane_z(face, float(x), float(y), origin_x, origin_y) for x, y in candidates[:, :2]])
+    residuals = candidates[:, 2] - predicted
+    elevated = candidates[residuals >= MIN_OBSTACLE_HEIGHT_M]
+    elevated_residuals = residuals[residuals >= MIN_OBSTACLE_HEIGHT_M]
+    if len(elevated) < 4:
+        return []
+    eps = max(0.20, min(0.55, pixel_hint * 2.4))
+    labels = DBSCAN(eps=eps, min_samples=4).fit_predict(elevated[:, :2])
+    obstacles: list[dict[str, Any]] = []
+    for label in sorted(set(labels)):
+        if label < 0:
+            continue
+        cluster = elevated[labels == label]
+        cluster_residuals = elevated_residuals[labels == label]
+        if len(cluster) < 4:
+            continue
+        hull = MultiPoint(cluster[:, :2]).convex_hull
+        if hull.geom_type != "Polygon":
+            continue
+        clipped = hull.intersection(interior)
+        if clipped.geom_type != "Polygon" or clipped.is_empty:
+            continue
+        area = float(clipped.area)
+        if area < MIN_OBSTACLE_AREA_M2 or area > min(8.0, max(0.5, geometry.area * 0.25)):
+            continue
+        height = float(np.percentile(cluster_residuals, 90))
+        if height < MIN_OBSTACLE_HEIGHT_M:
+            continue
+        key = f"{face['id']}|{clipped.centroid.x:.2f}|{clipped.centroid.y:.2f}|{area:.2f}"
+        obstacles.append({
+            "id": "obs-" + hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:12],
+            "type": "other",
+            "polygonLocalM": [
+                {"x": float(x - origin_x), "y": float(y - origin_y)}
+                for x, y in list(clipped.exterior.coords)[:-1]
+            ],
+            "heightM": height,
+            "keepoutMm": 200,
+            "evidence": [{
+                "source": _source_evidence_name(source),
+                "confidence": min(0.96, 0.68 + min(0.20, len(cluster) / 100) + min(0.08, height / 4)),
+                "notes": [
+                    f"Obstacle métrique détecté par surélévation de {height:.2f} m au-dessus du plan de toiture.",
+                    "Le type visuel reste volontairement non classé tant qu'une preuve image ne le confirme pas.",
+                ],
+            }],
+        })
+    return obstacles
+
+
+def _classify_shared_edge(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    start: tuple[float, float],
+    end: tuple[float, float],
+    origin_x: float,
+    origin_y: float,
+) -> str:
+    midx = (start[0] + end[0]) / 2
+    midy = (start[1] + end[1]) / 2
+    edge_z = (_plane_z(left, midx, midy, origin_x, origin_y) + _plane_z(right, midx, midy, origin_x, origin_y)) / 2
+    left_center = left["_geometry"].centroid
+    right_center = right["_geometry"].centroid
+    left_delta = edge_z - _plane_z(left, left_center.x, left_center.y, origin_x, origin_y)
+    right_delta = edge_z - _plane_z(right, right_center.x, right_center.y, origin_x, origin_y)
+    z_start = _plane_z(left, start[0], start[1], origin_x, origin_y)
+    z_end = _plane_z(left, end[0], end[1], origin_x, origin_y)
+    vertical_change = abs(z_end - z_start)
+    if left_delta > 0.12 and right_delta > 0.12:
+        return "ridge" if vertical_change <= 0.16 else "hip"
+    if left_delta < -0.12 and right_delta < -0.12:
+        return "valley"
+    return "unknown"
+
+
 def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], crs: CRS, source: str):
     building_union = unary_union([polygon for _, polygon in buildings])
     origin_point = building_union.centroid
@@ -180,7 +348,6 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
     raw_faces: list[dict[str, Any]] = []
     diagnostics: list[str] = []
 
-    # Estimate source spacing from nearest raster/point differences without expensive nearest-neighbour trees.
     span = max(np.ptp(points[:, 0]), np.ptp(points[:, 1]), 1.0)
     pixel_hint = max(0.1, min(0.8, span / max(math.sqrt(len(points)), 1.0)))
     residual_threshold = 0.10 if source == "google-dsm" else 0.14
@@ -234,8 +401,13 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
                     list(to_wgs84.transform(float(x), float(y)))
                     for x, y in list(geometry.exterior.coords)[:-1]
                 ]
+                predictions = estimator.predict(cluster[:, :2])
+                median_residual = float(np.median(np.abs(cluster[:, 2] - predictions)))
                 support_ratio = len(cluster) / max(initial_count, 1)
-                confidence = min(0.99, 0.72 + min(0.19, support_ratio * 1.5) + (0.05 if source == "google-dsm" else 0.08))
+                support_quality = min(1.0, support_ratio / 0.25)
+                residual_quality = max(0.0, min(1.0, 1.0 - median_residual / max(residual_threshold * 1.6, 0.01)))
+                source_bonus = 0.06 if source == "google-dsm" else 0.08
+                confidence = min(0.98, 0.56 + 0.16 * support_quality + 0.16 * residual_quality + source_bonus)
                 raw_faces.append({
                     "id": face_id,
                     "buildingId": building_id,
@@ -249,9 +421,13 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
                     "edgeIds": [],
                     "obstacles": [],
                     "evidence": [{
-                        "source": "google-solar" if source == "google-dsm" else "ign-lidar-hd",
+                        "source": _source_evidence_name(source),
                         "confidence": confidence,
-                        "notes": [f"Plan de toiture extrait automatiquement par RANSAC depuis {source}."],
+                        "notes": [
+                            f"Plan de toiture extrait automatiquement par RANSAC depuis {source}.",
+                            f"Résidu médian du plan : {median_residual:.3f} m.",
+                            f"Support du plan : {len(cluster)} points ({support_ratio * 100:.1f} % de l'échantillon).",
+                        ],
                     }],
                     "confidence": confidence,
                     "_geometry": geometry,
@@ -260,7 +436,6 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
     if not raw_faces:
         raise ValueError("Aucun plan de toiture métrique suffisamment fiable n'a été extrait.")
 
-    # Remove near-duplicate fragments produced by neighbouring RANSAC hypotheses.
     deduplicated: list[dict[str, Any]] = []
     for face in sorted(raw_faces, key=lambda item: item["areaM2"], reverse=True):
         duplicate = False
@@ -282,6 +457,7 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     for index, face in enumerate(deduplicated):
         face["displayLabel"] = alphabet[index] if index < len(alphabet) else f"P{index + 1}"
+        face["obstacles"] = _detect_metric_obstacles(points, face, origin_x, origin_y, pixel_hint, source)
 
     edges: list[dict[str, Any]] = []
     edge_counter = 0
@@ -294,29 +470,20 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
                     continue
                 coordinates = list(line.coords)
                 start, end = coordinates[0], coordinates[-1]
-                z_start = (
-                    left["plane"]["a"] * (start[0] - origin_x)
-                    + left["plane"]["b"] * (start[1] - origin_y)
-                    + left["plane"]["c"]
-                )
-                z_end = (
-                    left["plane"]["a"] * (end[0] - origin_x)
-                    + left["plane"]["b"] * (end[1] - origin_y)
-                    + left["plane"]["c"]
-                )
+                z_start = _plane_z(left, start[0], start[1], origin_x, origin_y)
+                z_end = _plane_z(left, end[0], end[1], origin_x, origin_y)
                 edge_id = f"edge-{edge_counter:03d}"
                 edge_counter += 1
                 edges.append({
                     "id": edge_id,
                     "a": {"x": float(start[0] - origin_x), "y": float(start[1] - origin_y), "z": float(z_start)},
                     "b": {"x": float(end[0] - origin_x), "y": float(end[1] - origin_y), "z": float(z_end)},
-                    "kind": "unknown",
+                    "kind": _classify_shared_edge(left, right, start, end, origin_x, origin_y),
                     "adjacentFaceIds": [left["id"], right["id"]],
                 })
                 left["edgeIds"].append(edge_id)
                 right["edgeIds"].append(edge_id)
 
-    # Exposed roof edges close to the building outline are safe to tag as eaves.
     building_boundary = building_union.boundary
     for face in deduplicated:
         coords = list(face["_geometry"].exterior.coords)
@@ -329,8 +496,8 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
                 (edge["b"]["x"] + origin_x, edge["b"]["y"] + origin_y),
             ])) < 0.15 for edge in edges):
                 continue
-            z_start = face["plane"]["a"] * (start[0] - origin_x) + face["plane"]["b"] * (start[1] - origin_y) + face["plane"]["c"]
-            z_end = face["plane"]["a"] * (end[0] - origin_x) + face["plane"]["b"] * (end[1] - origin_y) + face["plane"]["c"]
+            z_start = _plane_z(face, start[0], start[1], origin_x, origin_y)
+            z_end = _plane_z(face, end[0], end[1], origin_x, origin_y)
             edge_id = f"edge-{edge_counter:03d}"
             edge_counter += 1
             edges.append({
@@ -342,15 +509,22 @@ def _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], cr
             })
             face["edgeIds"].append(edge_id)
 
+    obstacle_count = sum(len(face["obstacles"]) for face in deduplicated)
+    topology_counts: dict[str, int] = {}
+    for edge in edges:
+        topology_counts[edge["kind"]] = topology_counts.get(edge["kind"], 0) + 1
+
     for face in deduplicated:
         face.pop("_geometry", None)
 
     origin_lon, origin_lat = to_wgs84.transform(origin_x, origin_y)
     coverage = min(1.0, sum(face["areaM2"] * max(math.cos(math.radians(face["slopeDeg"])), 0.15) for face in deduplicated) / max(building_union.area, 1.0))
     mean_confidence = float(np.mean([face["confidence"] for face in deduplicated]))
-    confidence = min(0.99, mean_confidence * 0.82 + min(coverage, 1.0) * 0.18)
+    confidence = min(0.98, mean_confidence * 0.82 + min(coverage, 1.0) * 0.18)
     diagnostics.append(f"{len(deduplicated)} pans physiques retenus après dédoublonnage.")
     diagnostics.append(f"Couverture projetée de l'emprise bâtiment : {coverage * 100:.1f} %.")
+    diagnostics.append(f"{obstacle_count} obstacle(s) métrique(s) détecté(s) par résidu altimétrique.")
+    diagnostics.append("Topologie arêtes : " + ", ".join(f"{key}={value}" for key, value in sorted(topology_counts.items())))
     return [float(origin_lon), float(origin_lat)], deduplicated, edges, confidence, diagnostics
 
 
@@ -360,9 +534,11 @@ async def reconstruct_roof(
     source: str = Form(...),
     elevation: UploadFile | None = File(default=None),
     point_cloud: UploadFile | None = File(default=None),
+    sampled_points: str | None = Form(default=None),
+    copc_tiles: str | None = Form(default=None),
     imagery: UploadFile | None = File(default=None),
 ):
-    del imagery  # Reserved for obstacle/texture cross-checking; geometry remains metric-only.
+    del imagery  # RGB is reserved for later semantic obstacle classification; geometry stays metric-only.
     property_lock = _parse_property(property)
     if source not in {"google-dsm", "ign-mns", "ign-lidar", "photogrammetry"}:
         raise HTTPException(status_code=400, detail=f"Source géométrique inconnue : {source}")
@@ -371,8 +547,12 @@ async def reconstruct_roof(
             points, buildings, crs = _extract_point_cloud(await point_cloud.read(), property_lock)
         elif elevation is not None:
             points, buildings, crs = _extract_raster_points(await elevation.read(), property_lock)
+        elif sampled_points:
+            points, buildings, crs = _extract_sampled_points(sampled_points, property_lock)
+        elif copc_tiles:
+            raise ValueError("Des dalles COPC ont été découvertes mais leur lecture distante n'est pas encore autorisée ; le fallback IGN échantillonné doit être utilisé.")
         else:
-            raise ValueError("Aucun GeoTIFF ou nuage de points fourni.")
+            raise ValueError("Aucun GeoTIFF, nuage de points ou échantillon altimétrique fourni.")
         origin, faces, edges, confidence, diagnostics = _segment_planes(points, buildings, crs, source)
         return {
             "engineVersion": ENGINE_VERSION,
@@ -385,7 +565,7 @@ async def reconstruct_roof(
         }
     except HTTPException:
         raise
-    except Exception as error:  # noqa: BLE001 - converted into an explicit API failure for the TypeScript orchestrator.
+    except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
