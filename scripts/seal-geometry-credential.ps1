@@ -1,5 +1,47 @@
 $ErrorActionPreference = "Stop"
 
+function Import-ProtectedDataAssembly {
+  try {
+    [void][System.Reflection.Assembly]::Load("System.Security.Cryptography.ProtectedData")
+    return
+  } catch {
+    # Continue with explicit loading below. PowerShell 7 does not always preload this assembly.
+  }
+
+  try {
+    Add-Type -AssemblyName "System.Security.Cryptography.ProtectedData" -ErrorAction Stop
+    return
+  } catch {
+    # Continue with the restored NuGet package below.
+  }
+
+  $packageRoot = Join-Path $env:USERPROFILE ".nuget\packages\system.security.cryptography.protecteddata\8.0.0"
+  $assemblyCandidates = @(
+    (Join-Path $packageRoot "lib\net8.0\System.Security.Cryptography.ProtectedData.dll"),
+    (Join-Path $packageRoot "lib\net6.0\System.Security.Cryptography.ProtectedData.dll"),
+    (Join-Path $packageRoot "lib\netstandard2.0\System.Security.Cryptography.ProtectedData.dll")
+  )
+
+  $assemblyPath = $assemblyCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $assemblyPath) {
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    $project = Join-Path (Get-Location) "desktop\PilotPaperLauncher\PilotPaperLauncher.csproj"
+    if ($dotnet -and (Test-Path $project)) {
+      & $dotnet.Source restore $project --nologo | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Le composant de chiffrement Windows n'a pas pu être restauré." }
+      $assemblyPath = $assemblyCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+  }
+
+  if (-not $assemblyPath) {
+    throw "Le composant de chiffrement Windows DPAPI est introuvable sur ce poste."
+  }
+
+  Add-Type -Path $assemblyPath -ErrorAction Stop
+}
+
+Import-ProtectedDataAssembly
+
 $envPath = Join-Path (Get-Location) ".env.local"
 if (-not (Test-Path $envPath)) {
   throw "Configuration locale introuvable. La connexion technique doit déjà avoir été validée sur ce poste."
@@ -66,10 +108,10 @@ $credential = @{
 $plain = [Text.Encoding]::UTF8.GetBytes($credential)
 $entropy = [Text.Encoding]::UTF8.GetBytes("PilotPaper-V2-GeometryEngine-v1")
 try {
-  $encrypted = [Security.Cryptography.ProtectedData]::Protect(
+  $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
     $plain,
     $entropy,
-    [Security.Cryptography.DataProtectionScope]::CurrentUser
+    [System.Security.Cryptography.DataProtectionScope]::CurrentUser
   )
   $targetDir = Join-Path $env:LOCALAPPDATA "PilotPaper\V2"
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
