@@ -7,9 +7,11 @@ import uvicorn
 from main import app
 from photo_api import router as photo_router
 from photogrammetry_api import router as photogrammetry_router
+from site_twin_projection_api import router as site_twin_projection_router
 
 app.include_router(photo_router)
 app.include_router(photogrammetry_router)
+app.include_router(site_twin_projection_router)
 
 
 if __name__ == "__main__":
