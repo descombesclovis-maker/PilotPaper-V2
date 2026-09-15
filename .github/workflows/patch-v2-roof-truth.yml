@@ -1,0 +1,126 @@
+name: Patch V2 roof truth integration
+
+on:
+  push:
+    branches:
+      - release/v2
+    paths:
+      - ".github/workflows/patch-v2-roof-truth.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v2
+          fetch-depth: 0
+
+      - name: Apply focused V2 integration patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"needle not found in {path}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "lib/pilotpaper-vision-engine.ts",
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
+          )
+          replace_once(
+              "lib/pilotpaper-vision-engine.ts",
+              '  const basePrompt = promptForDp(input.dp, address, ign?.parcelReference, spec, references);\n',
+              '  const roofTruth = input.dp >= 2 ? await resolveAdvancedRoofTruth(address) : null;\n  const basePrompt = [\n    promptForDp(input.dp, address, ign?.parcelReference, spec, references),\n    roofTruth?.usable ? roofTruth.promptContext : "",\n  ].filter(Boolean).join("\\n\\n");\n',
+          )
+
+          replace_once(
+              "lib/pilotpaper-dp3-generator.ts",
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
+          )
+          replace_once(
+              "lib/pilotpaper-dp3-generator.ts",
+              '  const dp2 = requireDp2Reference(input);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
+              '  const dp2 = requireDp2Reference(input);\n  const roofTruth = await resolveAdvancedRoofTruth(input.address);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
+          )
+          replace_once(
+              "lib/pilotpaper-dp3-generator.ts",
+              '    "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",\n',
+              '    "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",\n    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real photographs and accepted DP2 as the only physical anchors.",\n',
+          )
+
+          replace_once(
+              "lib/pilotpaper-dp4-generator.ts",
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
+              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
+          )
+          replace_once(
+              "lib/pilotpaper-dp4-generator.ts",
+              '  const dp2 = requireDp2Reference(input);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
+              '  const dp2 = requireDp2Reference(input);\n  const roofTruth = await resolveAdvancedRoofTruth(input.address);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
+          )
+          replace_once(
+              "lib/pilotpaper-dp4-generator.ts",
+              '    "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",\n',
+              '    "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",\n    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real source and accepted DP2 as the physical anchors.",\n',
+          )
+
+          replace_once(
+              "lib/pilotpaper-dp1-generator.ts",
+              'stroke-width="8"',
+              'stroke-width="3"',
+          )
+
+          diagnostic = Path("lib/pilotpaper-diagnostic-fallback.ts")
+          text = diagnostic.read_text(encoding="utf-8")
+          marker = 'export async function generateDiagnosticFallback(input: DpPieceInput, originalError: unknown): Promise<DpPieceOutput> {'
+          helper = r'''
+function escapeDiagnosticXml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;",
+  }[character] ?? character));
+}
+
+function rawSourceDiagnosticSheet(dp: DPNumber, source: PiecePhotoInput, message: string) {
+  const title = escapeDiagnosticXml(`DP${dp} — SORTIE NON VALIDÉE`);
+  const detail = escapeDiagnosticXml(`Génération visuelle échouée : ${message}`.slice(0, 190));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000">
+  <rect width="1400" height="1000" fill="#eef2f6"/>
+  <image href="data:${source.mimeType};base64,${source.base64}" x="0" y="0" width="1400" height="1000" preserveAspectRatio="xMidYMid slice" opacity="0.9"/>
+  <rect x="0" y="0" width="1400" height="118" fill="#991b1b" fill-opacity="0.96"/>
+  <text x="38" y="52" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="white">${title}</text>
+  <text x="38" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#fee2e2">${detail}</text>
+  <rect x="24" y="920" width="1352" height="56" rx="12" fill="white" fill-opacity="0.92"/>
+  <text x="46" y="956" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#991b1b">Source réelle conservée uniquement pour diagnostic — ne pas déposer cette pièce.</text>
+</svg>`;
+  return Buffer.from(svg, "utf8").toString("base64");
+}
+
+'''
+          if marker not in text:
+              raise SystemExit("diagnostic fallback marker missing")
+          text = text.replace(marker, helper + marker, 1)
+          old = '''  const generated = await tryRawDiagnosticImage(input, source, message);\n  const usesGeneratedCandidate = Boolean(generated);\n\n  return {\n    dp: input.dp,\n    title: contract.title,\n    validationStatus: "test_unverified",\n    mimeType: usesGeneratedCandidate ? "image/png" : source.mimeType,\n    base64: generated ?? source.base64,'''
+          new = '''  const generated = await tryRawDiagnosticImage(input, source, message);\n  const usesGeneratedCandidate = Boolean(generated);\n  const rawDiagnostic = usesGeneratedCandidate ? null : rawSourceDiagnosticSheet(input.dp, source, message);\n\n  return {\n    dp: input.dp,\n    title: contract.title,\n    validationStatus: "test_unverified",\n    mimeType: usesGeneratedCandidate ? "image/png" : "image/svg+xml",\n    base64: generated ?? rawDiagnostic ?? source.base64,'''
+          if old not in text:
+              raise SystemExit("diagnostic return block missing")
+          diagnostic.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+      - name: Commit focused patch
+        shell: bash
+        run: |
+          git config user.name "PilotPaper CI"
+          git config user.email "pilotpaper-ci@users.noreply.github.com"
+          git add lib/pilotpaper-vision-engine.ts lib/pilotpaper-dp3-generator.ts lib/pilotpaper-dp4-generator.ts lib/pilotpaper-dp1-generator.ts lib/pilotpaper-diagnostic-fallback.ts
+          git diff --cached --check
+          git commit -m "Wire roof truth into DP2-DP6 and expose visual failures"
+          git push origin HEAD:release/v2
