@@ -17,6 +17,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
+      - "tw-animate-css"
       - ".github/workflows/build-v2-windows.yml"
 
 permissions:
