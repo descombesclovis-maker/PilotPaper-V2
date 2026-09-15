@@ -6,43 +6,49 @@ async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("DP route uses deterministic DP1 plus preventive and specialized PilotPaper visual paths", async () => {
+test("DP route uses the deterministic Site Twin pipeline for DP2-DP6", async () => {
   const route = await source("app/api/dp-piece/route.ts");
   assert.match(route, /generateOfficialDp1/);
-  assert.match(route, /official-cadastre-deterministic/);
-  assert.match(route, /generatePreventiveDp/);
-  assert.match(route, /generateSpecializedDp3/);
-  assert.match(route, /generateSpecializedDp4/);
-  assert.match(route, /pilotpaper-vision-preventive/);
-  assert.match(route, /pilotpaper-dp3-specialized/);
-  assert.match(route, /pilotpaper-dp4-specialized/);
-  assert.doesNotMatch(route, /SiteTwin|googleSolar|roof-faces|normalizeRoofSelection|Geometry/);
+  assert.match(route, /generateDeterministicDp2/);
+  assert.match(route, /generateDeterministicSiteTwinPiece/);
+  assert.match(route, /generateGeometryLockedDp4/);
+  assert.match(route, /generateGeometryLockedPhotographicDp/);
+  assert.match(route, /site-twin-georeferenced-plan/);
+  assert.match(route, /site-twin-vector-section/);
+  assert.match(route, /site-twin-before-after-composition/);
+  assert.match(route, /site-twin-masked-photorealistic/);
+  assert.doesNotMatch(route, /generatePreventiveDp|generateSpecializedDp3|generateSpecializedDp4/);
 });
 
-test("generation prevents wrong PV counts and wrong module geometry before exposing a result", async () => {
-  const engine = await source("lib/pilotpaper-vision-engine.ts");
-  assert.match(engine, /EXACTLY \$\{spec\.panelCount\} photovoltaic modules/);
-  assert.match(engine, /internally count the cells of the array row by row/);
-  assert.match(engine, /internally recount them/);
-  assert.match(engine, /MAX_GENERATION_ATTEMPTS = 4/);
-  assert.match(engine, /PHOTOVOLTAIC INSERTION SPECIALIST PROTOCOL/);
-  assert.match(engine, /Modules are rectangular physical objects, not square tiles/);
-  assert.match(engine, /moduleShapeCorrect/);
-  assert.match(engine, /moduleScalePlausible/);
-  assert.match(engine, /projectiveConsistency/);
-  assert.match(engine, /AUTOMATIC CORRECTION PASS/);
-  assert.match(engine, /if \(inspector\.passed\)/);
-  assert.match(engine, /non produite : PilotPaper a détecté une incohérence avant sauvegarde/);
+test("geometry-locked photographic insertion lets Image-2 render only exact PV islands", async () => {
+  const renderer = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
+  const projection = await source("lib/site-twin-v2/geometryEngineClient.ts");
+  const runtime = await source("geometry-engine/site_twin_projection_api.py");
+  assert.match(renderer, /buildSiteTwinDocumentContext/);
+  assert.match(renderer, /projectSiteTwinModulesToPhoto/);
+  assert.match(renderer, /buildPanelIslandsMaskForPng/);
+  assert.match(renderer, /strictCompositePng/);
+  assert.match(renderer, /\/v1\/images\/edits/);
+  assert.match(renderer, /Everything outside the editable islands is immutable/);
+  assert.match(renderer, /changedIslandRatio/);
+  assert.match(projection, /\/v1\/site-twin\/project-modules/);
+  assert.match(runtime, /register_images/);
+  assert.match(runtime, /panelPolygonsNormalized/);
+  assert.match(runtime, /registration\.inliers|registration\.matches|inlierRatio/);
 });
 
-test("DP2 locks the real target parcel and building instead of choosing a neighboring roof", async () => {
-  const engine = await source("lib/pilotpaper-vision-engine.ts");
-  assert.match(engine, /official close IGN aerial\/cadastral image and is an IMMUTABLE BASE/);
-  assert.match(engine, /actual target building inside parcel/);
-  assert.match(engine, /Do not equip a neighboring roof/);
-  assert.match(engine, /targetParcelCorrect/);
-  assert.match(engine, /targetBuildingCorrect/);
-  assert.match(engine, /Do not regenerate the property/);
+test("DP2 projects the exact Site Twin modules on the official aerial cadastral view without generative placement", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const generator = await source("lib/site-twin-v2/constrainedDp2.ts");
+  const overlay = await source("lib/site-twin-v2/planningOverlay.ts");
+  assert.match(route, /if \(input\.dp === 2\) return generateDeterministicDp2/);
+  assert.match(generator, /buildSiteTwinDocumentContext/);
+  assert.match(generator, /HR\.ORTHOIMAGERY\.ORTHOPHOTOS,CADASTRALPARCELS\.PARCELLAIRE_EXPRESS/);
+  assert.match(generator, /context\.layout\.modules/);
+  assert.match(generator, /overlayPlanningPanelsPng/);
+  assert.match(generator, /polygons\.length !== context\.layout\.configuration\.panelCount/);
+  assert.match(overlay, /Each physical module receives its own visible border/);
+  assert.doesNotMatch(generator, /OPENAI_API_KEY|gpt-image|\/v1\/images/);
 });
 
 test("DP1 is deterministic from official IGN and API Carto geometry and does not spend an image-generation call", async () => {
@@ -56,33 +62,46 @@ test("DP1 is deterministic from official IGN and API Carto geometry and does not
   assert.doesNotMatch(generator, /\/v1\/images|gpt-image|OPENAI_API_KEY/);
 });
 
-test("DP3 has a dedicated non-blocking photo analysis and hybrid section path", async () => {
+test("DP3 is a metric vector section perpendicular to a proven ridge, not an AI-generated house image", async () => {
   const route = await source("app/api/dp-piece/route.ts");
-  const generator = await source("lib/pilotpaper-dp3-generator.ts");
-  const analyzer = await source("lib/pilotpaper-dp3-section-engine.ts");
-  assert.match(route, /generateSpecializedDp3/);
-  assert.match(generator, /orthographic LATERAL architectural section/);
-  assert.match(generator, /3D axonometric cutaway/);
-  assert.match(generator, /never invent building\/roof\/terrain numeric dimensions/i);
-  assert.match(generator, /Verified module dimensions/);
-  assert.match(generator, /MAX_DP3_ATTEMPTS = 4/);
-  assert.match(analyzer, /pre-analysis stage of PilotPaper DP3/);
-  assert.match(analyzer, /Do NOT invent measurements/);
-  assert.match(analyzer, /return null/);
+  const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
+  const renderer = await source("lib/site-twin-v2/renderers/dp3.ts");
+  assert.match(route, /if \(input\.dp === 3\) return generateDeterministicSiteTwinPiece/);
+  assert.match(bridge, /renderDp3FromSiteTwin/);
+  assert.match(renderer, /edge\.kind === "ridge"/);
+  assert.match(renderer, /sectionDirectionFromRidge/);
+  assert.match(renderer, /Coupe A-A perpendiculaire au faîtage/);
+  assert.match(renderer, /terrainElevationM/);
+  assert.match(renderer, /context\.layout\.modules/);
+  assert.match(renderer, /aucune cote architecturale inventée/);
+  assert.doesNotMatch(renderer, /OPENAI_API_KEY|gpt-image|\/v1\/images/);
 });
 
-test("DP4 uses a dedicated photographic insertion path without false all-or-nothing judge gating", async () => {
+test("DP4 is composed from the immutable real photo and the same geometry-locked projected state", async () => {
   const route = await source("app/api/dp-piece/route.ts");
-  const generator = await source("lib/pilotpaper-dp4-generator.ts");
-  assert.match(route, /generateSpecializedDp4/);
-  assert.match(generator, /same photo with only the photovoltaic array added/);
-  assert.match(generator, /Count panels only in the projected state/);
-  assert.match(generator, /moduleShapeCorrect/);
-  assert.match(generator, /criticalPass/);
-  assert.doesNotMatch(generator, /judge\.passed/);
+  const generator = await source("lib/site-twin-v2/constrainedDp4.ts");
+  assert.match(route, /if \(input\.dp === 4\) return generateGeometryLockedDp4/);
+  assert.match(generator, /generateGeometryLockedPhotographicDp/);
+  assert.match(generator, /ÉTAT INITIAL/);
+  assert.match(generator, /ÉTAT PROJETÉ/);
+  assert.match(generator, /Pixels hors champ photovoltaïque sont restaurés/);
+  assert.match(generator, /Mise en page état initial \/ état projeté réalisée par PilotPaper/);
+  assert.doesNotMatch(route, /generateSpecializedDp4/);
 });
 
-test("DP2 is the persistent master placement reference for DP3-DP6", async () => {
+test("DP5 and DP6 keep geometry fixed while visual QA may retry panel material only", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const generator = await source("lib/site-twin-v2/constrainedPhotographicDp.ts");
+  assert.match(route, /generateGeometryLockedPhotographicDp/);
+  assert.match(generator, /MAX_VISUAL_ATTEMPTS = 3/);
+  assert.match(generator, /geometry remains locked/);
+  assert.match(generator, /Improve only panel material, reflections, local lighting, contact shadows and edge integration/);
+  assert.match(generator, /Do not alter geometry or module locations/);
+  assert.match(generator, /judge\.score >= 0\.88/);
+  assert.match(generator, /Pixels hors insertion préservés : oui/);
+});
+
+test("DP2 remains the persistent master reference through the K-par-k chain", async () => {
   const engine = await source("lib/pilotpaper-vision-engine.ts");
   const ui = await source("components/dp-piece-workbench.tsx");
   const persistence = await source("lib/pilotpaper-image2-persistence.ts");
@@ -90,7 +109,6 @@ test("DP2 is the persistent master placement reference for DP3-DP6", async () =>
   assert.match(engine, /4: \[2\]/);
   assert.match(engine, /5: \[2, 4\]/);
   assert.match(engine, /6: \[2, 4, 5\]/);
-  assert.match(engine, /générez d'abord la DP2/);
   assert.match(ui, /resultsByDp/);
   assert.match(ui, /resultsRef/);
   assert.match(ui, /persistDpPiece/);
@@ -146,7 +164,7 @@ test("DP7 and DP8 preserve original photos", async () => {
   assert.match(pieceEngine, /Aucune retouche générative/);
 });
 
-test("Windows build remains free of the retired Geometry Engine", async () => {
+test("frozen V1 Windows build remains free of the V2 metric engine", async () => {
   const workflow = await source(".github/workflows/build-v1-k-par-k-windows.yml");
   const launcher = await source("desktop/PilotPaperLauncher/Program.cs");
   const installer = await source("desktop/PilotPaperInstaller.iss");
