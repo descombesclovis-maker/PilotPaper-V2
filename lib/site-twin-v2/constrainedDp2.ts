@@ -3,6 +3,7 @@ import "server-only";
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
+import { receiptForPiece } from "./documentContext";
 import { modulePolygonsToLonLat } from "./localGeoTransform";
 import { overlayPlanningPanelsPng } from "./planningOverlay";
 import type { TwinLonLat } from "./types";
@@ -110,7 +111,7 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
       "DP2 calculée sur la vue aérienne/cadastrale officielle sans génération libre de la géométrie.",
       `${context.layout.modules.length} panneaux projetés depuis le Site Twin métrique sur le pan ${face?.displayLabel ?? "sélectionné"}.`,
       `Pente ${face?.slopeDeg.toFixed(1) ?? "?"}° · azimut ${face?.azimuthDeg.toFixed(1) ?? "?"}° · recul bas résolu ${eligibility?.resolvedGutterClearanceMm ?? context.layout.configuration.preferredGutterClearanceMm} mm.`,
-      `Site Twin ${context.siteTwin.id} rev. ${context.siteTwin.revision} · parcelle ${context.siteTwin.parcel.reference}.`,
+      `Site Twin ${context.siteTwin.id} rev. ${context.siteTwin.revision} · empreinte ${context.layoutDigest.slice(0, 16)} · parcelle ${context.siteTwin.parcel.reference}.`,
     ],
     inspector: {
       passed: true,
@@ -120,10 +121,12 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
         `Matrice : ${context.layout.configuration.rows} × ${context.layout.configuration.columns}`,
         "Coordonnées modules issues du calepinage métrique : oui",
         "Conversion géographique dérivée des sommets réels du pan : oui",
+        `Empreinte géométrique : ${context.layoutDigest.slice(0, 16)}`,
         "Fond IGN/cadastre conservé hors des modules : oui",
         `Pan physique verrouillé : ${face?.displayLabel ?? face?.id ?? "oui"}`,
       ],
       issues: [],
     },
+    geometryReceipt: receiptForPiece(context, 2),
   };
 }
