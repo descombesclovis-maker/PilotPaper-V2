@@ -10,7 +10,7 @@ export async function GET() {
       configured: false,
       connected: false,
       orgId: config.orgId,
-      message: "OpenSolar n'est pas encore configuré sur ce poste.",
+      message: "Le moteur géométrique avancé n'est pas connecté sur ce poste.",
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -23,8 +23,8 @@ export async function GET() {
       orgId: config.orgId,
       orgName: typeof org.name === "string" ? org.name : "",
       message: config.enabled
-        ? "OpenSolar est connecté et activé pour PilotPaper V2."
-        : "OpenSolar est connecté mais reste en mode POC/fallback tant que OPENSOLAR_ENABLED n'est pas activé.",
+        ? "Le moteur géométrique avancé est connecté et actif."
+        : "Le moteur géométrique avancé est connecté mais reste en observation.",
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({
@@ -32,7 +32,7 @@ export async function GET() {
       configured: true,
       connected: false,
       orgId: config.orgId,
-      message: error instanceof Error ? error.message : "Connexion OpenSolar impossible.",
+      message: error instanceof Error ? error.message : "Connexion au moteur géométrique impossible.",
     }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }
