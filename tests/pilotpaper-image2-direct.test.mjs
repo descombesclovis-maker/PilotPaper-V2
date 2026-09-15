@@ -6,8 +6,10 @@ async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("DP route uses preventive and specialized PilotPaper visual paths for DP1-DP6", async () => {
+test("DP route uses deterministic DP1 plus preventive and specialized PilotPaper visual paths", async () => {
   const route = await source("app/api/dp-piece/route.ts");
+  assert.match(route, /generateOfficialDp1/);
+  assert.match(route, /official-cadastre-deterministic/);
   assert.match(route, /generatePreventiveDp/);
   assert.match(route, /generateSpecializedDp3/);
   assert.match(route, /generateSpecializedDp4/);
@@ -43,11 +45,15 @@ test("DP2 locks the real target parcel and building instead of choosing a neighb
   assert.match(engine, /Do not regenerate the property/);
 });
 
-test("DP1 can only annotate official cadastral evidence and cannot invent parcel geometry", async () => {
-  const engine = await source("lib/pilotpaper-vision-engine.ts");
-  assert.match(engine, /Use only cadastral boundaries already visible in the official source/);
-  assert.match(engine, /Never fabricate a parcel contour/);
-  assert.match(engine, /parcelHighlightCorrect/);
+test("DP1 is deterministic from official IGN and API Carto geometry and does not spend an image-generation call", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const generator = await source("lib/pilotpaper-dp1-generator.ts");
+  assert.match(route, /if \(input\.dp === 1\) return generateOfficialDp1/);
+  assert.match(generator, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
+  assert.match(generator, /PilotPaper refuse de deviner la parcelle/);
+  assert.match(generator, /DP1 déterministe : aucune IA générative utilisée/);
+  assert.match(generator, /Contour cible issu directement de l'API Carto Cadastre/);
+  assert.doesNotMatch(generator, /\/v1\/images|gpt-image|OPENAI_API_KEY/);
 });
 
 test("DP3 has a dedicated non-blocking photo analysis and hybrid section path", async () => {
