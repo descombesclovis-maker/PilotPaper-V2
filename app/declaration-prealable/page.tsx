@@ -1,8 +1,8 @@
 import { headers } from "next/headers";
 import { PilotPaperProductionShell } from "@/components/production/pilotpaper-production-shell";
+import { ProductionDpWorkspace } from "@/components/production/production-dp-workspace";
 import { PilotPaperUpdateButton } from "@/components/pilotpaper-update-button";
 import { getRequestUser } from "@/lib/request-user";
-import { WorkspaceClient } from "../workspace-client";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function DeclarationPrealablePage() {
   return (
     <PilotPaperProductionShell fullDp>
       <div className="production-dp-wrapper">
-        <WorkspaceClient
+        <ProductionDpWorkspace
           currentUser={{
             email: user?.email ?? null,
             displayName: user?.displayName ?? "Utilisateur local",
