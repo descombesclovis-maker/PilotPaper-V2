@@ -17,10 +17,15 @@ test("local roof coordinates are converted from real face correspondences with a
   assert.match(transform, /modulePolygonsToLonLat/);
 });
 
-test("DP photo projection sends exact module lon-lat corners instead of approximating metres as degrees", async () => {
+test("DP2 and photo projection share the same exact local-to-geographic transform", async () => {
+  const dp2 = await source("lib/site-twin-v2/constrainedDp2.ts");
   const renderer = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
   const client = await source("lib/site-twin-v2/geometryEngineClient.ts");
   const runtime = await source("geometry-engine/site_twin_projection_api.py");
+
+  assert.match(dp2, /modulePolygonsToLonLat/);
+  assert.match(dp2, /modulePolygonsLonLat/);
+  assert.doesNotMatch(dp2, /localToLonLat|111_320|110_540/);
 
   assert.match(renderer, /modulePolygonsToLonLat/);
   assert.match(renderer, /modulePolygonsLonLat/);
@@ -45,6 +50,37 @@ test("visual integration cannot enlarge module geometry outside a tiny feather r
   assert.match(compositor, /outsideBlendMax\?\?\.20/);
   assert.match(compositor, /Math\.min\(\.35,options\.outsideBlendMax/);
   assert.match(compositor, /every other source pixel remains byte-for-byte unchanged/);
+});
+
+test("every V2 downstream DP carries and verifies an exact Site Twin layout fingerprint", async () => {
+  const context = await source("lib/site-twin-v2/documentContext.ts");
+  const types = await source("lib/pilotpaper-image2-types.ts");
+  const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
+  const dp2 = await source("lib/site-twin-v2/constrainedDp2.ts");
+  const photographic = await source("lib/site-twin-v2/constrainedPhotographicDp.ts");
+  const dp4 = await source("lib/site-twin-v2/constrainedDp4.ts");
+  const referenceOrder = await source("lib/pilotpaper-dp-reference-order.ts");
+  const manualWorkbench = await source("components/dp-piece-workbench.tsx");
+  const completeManager = await source("lib/pilotpaper-complete-dossiers.ts");
+
+  assert.match(context, /createHash\("sha256"\)/);
+  assert.match(context, /layoutDigestFor/);
+  assert.match(context, /rows: layout\.configuration\.rows/);
+  assert.match(context, /columns: layout\.configuration\.columns/);
+  assert.match(context, /orientation: layout\.configuration\.orientation/);
+  assert.match(context, /polygonLocalM: module\.polygonLocalM/);
+  assert.match(context, /receipt\.layoutDigest !== context\.layoutDigest/);
+
+  assert.match(types, /geometryReceipt\?: SiteTwinPieceReceipt/);
+  assert.match(bridge, /assertPiecesShareContext/);
+  assert.match(bridge, /receiptForPiece\(args\.context, args\.dp\)/);
+  assert.match(dp2, /geometryReceipt: receiptForPiece\(context, 2\)/);
+  assert.match(photographic, /geometryReceipt: receiptForPiece\(rendered\.context, input\.dp\)/);
+  assert.match(dp4, /geometryReceipt: projected\.geometryReceipt/);
+
+  assert.match(referenceOrder, /geometryReceipt: candidate\.geometryReceipt/);
+  assert.match(manualWorkbench, /geometryReceipt: candidate\.geometryReceipt/);
+  assert.match(completeManager, /referencesFromResults/);
 });
 
 test("Windows packaging smoke-test requires the Site Twin photo projection endpoint", async () => {
