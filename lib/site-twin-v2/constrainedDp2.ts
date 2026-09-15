@@ -3,7 +3,9 @@ import "server-only";
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
+import { modulePolygonsToLonLat } from "./localGeoTransform";
 import { overlayPlanningPanelsPng } from "./planningOverlay";
+import type { TwinLonLat } from "./types";
 
 const IGN_WMS_ENDPOINT = "https://data.geopf.fr/wms-r/wms";
 const IMAGE_WIDTH = 1400;
@@ -12,21 +14,12 @@ const VIEW_WIDTH_M = 110;
 const VIEW_HEIGHT_M = 78.6;
 const WEB_MERCATOR_LIMIT = 20_037_508.342789244;
 
-type Point = { x: number; y: number };
-
 function toWebMercator(longitude: number, latitude: number) {
   const boundedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
   return {
     x: (longitude * WEB_MERCATOR_LIMIT) / 180,
     y: (Math.log(Math.tan(((90 + boundedLatitude) * Math.PI) / 360)) * WEB_MERCATOR_LIMIT) / Math.PI,
   };
-}
-
-function localToLonLat(origin: [number, number], point: Point): [number, number] {
-  const latitude = origin[1] + point.y / 110_540;
-  const metresPerLongitudeDegree = Math.max(1, 111_320 * Math.cos(origin[1] * Math.PI / 180));
-  const longitude = origin[0] + point.x / metresPerLongitudeDegree;
-  return [longitude, latitude];
 }
 
 function ignCloseUrl(longitude: number, latitude: number) {
@@ -67,18 +60,16 @@ async function fetchOfficialCloseView(longitude: number, latitude: number) {
 }
 
 function projectedPanelPolygons(args: {
-  origin: [number, number];
-  center: [number, number];
-  modules: Array<{ polygonLocalM: Point[] }>;
+  center: TwinLonLat;
+  modulePolygonsLonLat: TwinLonLat[][];
 }) {
   const centerMeters = toWebMercator(args.center[0], args.center[1]);
   const minX = centerMeters.x - VIEW_WIDTH_M / 2;
   const maxY = centerMeters.y + VIEW_HEIGHT_M / 2;
-  return args.modules.map((module, moduleIndex) => {
-    if (module.polygonLocalM.length !== 4) throw new Error(`Module ${moduleIndex + 1} : quatre coins métriques requis.`);
-    return module.polygonLocalM.map((point) => {
-      const lonLat = localToLonLat(args.origin, point);
-      const meter = toWebMercator(lonLat[0], lonLat[1]);
+  return args.modulePolygonsLonLat.map((module, moduleIndex) => {
+    if (module.length !== 4) throw new Error(`Module ${moduleIndex + 1} : quatre coins géographiques requis.`);
+    return module.map(([longitude, latitude]) => {
+      const meter = toWebMercator(longitude, latitude);
       const normalized = {
         x: (meter.x - minX) / VIEW_WIDTH_M,
         y: (maxY - meter.y) / VIEW_HEIGHT_M,
@@ -97,11 +88,11 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
   const context = await buildSiteTwinDocumentContext(input);
   const center = context.siteTwin.addressPoint;
   const source = await fetchOfficialCloseView(center[0], center[1]);
-  const polygons = projectedPanelPolygons({
-    origin: context.siteTwin.roof.origin,
-    center,
+  const modulePolygonsLonLat = modulePolygonsToLonLat({
+    faces: context.siteTwin.roof.faces,
     modules: context.layout.modules,
   });
+  const polygons = projectedPanelPolygons({ center, modulePolygonsLonLat });
   if (polygons.length !== context.layout.configuration.panelCount) {
     throw new Error(`DP2 : projection incomplète (${polygons.length}/${context.layout.configuration.panelCount}).`);
   }
@@ -128,6 +119,7 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
         `Quantité exacte : ${polygons.length}/${context.layout.configuration.panelCount}`,
         `Matrice : ${context.layout.configuration.rows} × ${context.layout.configuration.columns}`,
         "Coordonnées modules issues du calepinage métrique : oui",
+        "Conversion géographique dérivée des sommets réels du pan : oui",
         "Fond IGN/cadastre conservé hors des modules : oui",
         `Pan physique verrouillé : ${face?.displayLabel ?? face?.id ?? "oui"}`,
       ],
