@@ -29,6 +29,12 @@ function positiveInteger(value: unknown, label: string) {
   return parsed;
 }
 
+function boundedPreference(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function requireSource(input: DpPieceInput) {
   const source = input.photos?.find((photo) => photo.role === "near") ?? input.photos?.find((photo) => photo.role === "roof");
   if (!source?.base64 || source.base64.length < 1000) throw new Error("DP3 : ajoutez une photo réelle lisible de la maison et de la toiture.");
@@ -166,10 +172,14 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
   const columns = positiveInteger(input.columns, "Le nombre de colonnes");
   if (rows * columns !== panelCount) throw new Error(`${rows} × ${columns} ne correspond pas à ${panelCount} panneaux.`);
   const orientation = input.orientation === "landscape" ? "landscape" : "portrait";
+  const gapMm = boundedPreference(input.interPanelGapMm, 20, 0, 200);
+  const gutterClearanceMm = boundedPreference(input.gutterClearanceMm, 300, 0, 2000);
+  const placement = ["centered", "left", "right", "custom"].includes(String(input.placement)) ? String(input.placement) : "centered";
+  const mountingSystem = String(input.mountingSystem ?? "Surimposition parallèle au rampant").trim().slice(0, 160) || "Surimposition parallèle au rampant";
   const orientedWidthMm = orientation === "portrait" ? module.widthMm : module.heightMm;
   const orientedHeightMm = orientation === "portrait" ? module.heightMm : module.widthMm;
-  const fieldWidthMm = columns * orientedWidthMm + Math.max(0, columns - 1) * 20;
-  const fieldHeightMm = rows * orientedHeightMm + Math.max(0, rows - 1) * 20;
+  const fieldWidthMm = columns * orientedWidthMm + Math.max(0, columns - 1) * gapMm;
+  const fieldHeightMm = rows * orientedHeightMm + Math.max(0, rows - 1) * gapMm;
   const moduleAspectRatio = Math.max(module.widthMm, module.heightMm) / Math.min(module.widthMm, module.heightMm);
 
   const sectionAnalysis = await analyzeDp3SectionSource({
@@ -186,13 +196,14 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
     `Verified module long-side/short-side ratio: ${moduleAspectRatio.toFixed(3)}.`,
     `Requested installation: exactly ${panelCount} modules, ${rows} rows × ${columns} columns, ${orientation} orientation.`,
     `Oriented module footprint in the array: ${orientedWidthMm} × ${orientedHeightMm} mm.`,
-    `Calculated field footprint: ${fieldWidthMm} × ${fieldHeightMm} mm with 20 mm inter-module visual gaps.`,
+    `Calculated field footprint: ${fieldWidthMm} × ${fieldHeightMm} mm with ${gapMm} mm inter-module gaps.`,
+    `Saved installer preferences inherited from DP2: placement ${placement}; preferred lower/gutter clearance ${gutterClearanceMm} mm; mounting system ${mountingSystem}.`,
   ].join("\n");
 
   const basePrompt = [
     "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",
     "You are not a generic image generator. Reason as an experienced photovoltaic installer working with an architectural drafter.",
-    "Image 1 is the real building source. Image 2 is the already accepted DP2 and defines the physical equipped roof plane and installation identity.",
+    "Image 1 is the real building source. Image 2 is the already accepted DP2 and defines the physical equipped roof plane and installation identity. Do not reposition the project independently; inherit the accepted DP2 placement and installer preferences.",
     expectedFacts,
     sectionAnalysis ?? "Automatic source pre-analysis was unavailable. Infer only the non-numeric visible roof/building structure directly from the supplied images and continue; do not block generation.",
     "TEMPLATE LOCK — KEEP THE SUCCESSFUL PILOTPAPER DP3 DESIGN: one large orthographic lateral section occupying the left/main area; one smaller 'AXONOMÉTRIE DE REPÉRAGE' of the same house in the upper-right; one 'INSTALLATION PHOTOVOLTAÏQUE' technical table in the lower-right; discreet note/footer. Do not redesign this composition or replace it with another document style.",
@@ -201,7 +212,8 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
     "Do not turn the main view into a front elevation. Do not invent a new house.",
     "Do not invent rooms, doors, windows, framing systems or hidden structural details as factual information. Use neutral schematic cut surfaces where hidden construction is unknown.",
     "NUMERIC DIMENSION RULE: never invent building/roof/terrain numeric dimensions. If a building dimension is not supplied from a verified source, omit the number rather than estimating it.",
-    `The following photovoltaic dimensions ARE verified and should be dimensioned clearly: one module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; module aspect ratio ${moduleAspectRatio.toFixed(3)}; complete field ${fieldWidthMm} × ${fieldHeightMm} mm; ${panelCount} modules; matrix ${rows} × ${columns}; orientation ${orientation}.`,
+    `The following photovoltaic dimensions ARE verified and should be dimensioned clearly: one module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm; module aspect ratio ${moduleAspectRatio.toFixed(3)}; complete field ${fieldWidthMm} × ${fieldHeightMm} mm; inter-module gap ${gapMm} mm; ${panelCount} modules; matrix ${rows} × ${columns}; orientation ${orientation}.`,
+    `The installation table should also state the saved mounting principle "${mountingSystem}" and the preferred lower/gutter clearance ${gutterClearanceMm} mm as a project preference, without inventing any building dimension.`,
     "Use dimension lines and a small technical legend for these verified PV values. Also label: terrain naturel, mur existant, égout/gouttière, couverture existante, faîtage, modules photovoltaïques.",
     `The side section does not need to visually expose all ${panelCount} modules because modules overlap in the viewing direction. Do not fake a frontal ${rows}×${columns} grid in the cut. The exact full ${rows}×${columns} matrix IS mandatory in the 3D axonometric inset and in the technical table.`,
     `MODULE SHAPE LOCK: every module in the 3D inset is the same real ${module.widthMm} × ${module.heightMm} mm rectangle with long/short ratio ${moduleAspectRatio.toFixed(3)} before perspective. Preserve that elongated rectangular identity under one coherent roof-plane perspective. Never use square or near-square decorative panels merely to fit the roof.`,
@@ -245,7 +257,8 @@ export async function generateSpecializedDp3(input: DpPieceInput & { dp: 3 }): P
           "Analyse visuelle préalable non bloquante de la maison réelle",
           "DP2 utilisée comme verrou de pan et d'identité de l'installation",
           `Matrice PV exigée dans l'axonométrie : ${rows} × ${columns} = ${panelCount}`,
-          `Cotes PV vérifiées : module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm · champ ${fieldWidthMm} × ${fieldHeightMm} mm`,
+          `Cotes PV vérifiées : module ${module.widthMm} × ${module.heightMm} × ${module.thicknessMm} mm · champ ${fieldWidthMm} × ${fieldHeightMm} mm · jeu ${gapMm} mm`,
+          `Préférences pose héritées : ${placement} · recul bas préféré ${gutterClearanceMm} mm · ${mountingSystem}`,
           "Aucune cote numérique de bâtiment inventée",
           `Inspector DP3 validé en ${attempt} tentative${attempt > 1 ? "s" : ""}`,
         ],
