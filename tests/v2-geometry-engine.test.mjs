@@ -28,6 +28,16 @@ test("V2 reuses one deterministic remote project per normalized address", async 
   assert.match(resolver, /createOpenSolarProject/);
 });
 
+test("V2 DP2-DP6 generators consume advanced roof truth instead of leaving it dormant", async () => {
+  const preventive = await source("lib/pilotpaper-vision-engine.ts");
+  const dp3 = await source("lib/pilotpaper-dp3-generator.ts");
+  const dp4 = await source("lib/pilotpaper-dp4-generator.ts");
+  for (const generator of [preventive, dp3, dp4]) {
+    assert.match(generator, /resolveAdvancedRoofTruth/);
+    assert.match(generator, /promptContext/);
+  }
+});
+
 test("visible geometry routes use provider-neutral wording", async () => {
   const status = await source("app/api/opensolar/status/route.ts");
   const truth = await source("app/api/opensolar/project-truth/route.ts");
