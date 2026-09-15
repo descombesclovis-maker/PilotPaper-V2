@@ -23,7 +23,7 @@ internal static class PilotPaperV2Program
     }
 }
 
-internal sealed class PilotPaperV2Window : Form
+internal sealed partial class PilotPaperV2Window : Form
 {
     private const string AppUrl = "http://127.0.0.1:5174/";
 
@@ -128,6 +128,7 @@ internal sealed class PilotPaperV2Window : Form
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
             _webView.CoreWebView2.NewWindowRequested += (_, args) =>
             {
                 args.Handled = true;
