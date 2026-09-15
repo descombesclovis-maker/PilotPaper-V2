@@ -39,6 +39,7 @@ def health() -> dict[str, Any]:
         "metric-obstacles",
         "roof-edge-topology",
         "opencv-registration",
+        "site-twin-photo-projection",
     ]
     if _optional_module("open3d"):
         capabilities.append("open3d")
