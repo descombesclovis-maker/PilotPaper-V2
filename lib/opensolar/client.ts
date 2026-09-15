@@ -1,0 +1,121 @@
+import "server-only";
+
+const OPENSOLAR_API_BASE = "https://api.opensolar.com/api";
+
+type JsonObject = Record<string, unknown>;
+
+export type OpenSolarRuntimeConfig = {
+  enabled: boolean;
+  configured: boolean;
+  orgId: number | null;
+};
+
+function readOrgId() {
+  const raw = process.env.OPENSOLAR_ORG_ID?.trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function getOpenSolarRuntimeConfig(): OpenSolarRuntimeConfig {
+  const token = process.env.OPENSOLAR_BEARER_TOKEN?.trim();
+  const orgId = readOrgId();
+  const enabled = process.env.OPENSOLAR_ENABLED?.trim().toLowerCase() === "true";
+  return {
+    enabled,
+    configured: Boolean(token && orgId),
+    orgId,
+  };
+}
+
+function requireOpenSolarCredentials() {
+  const token = process.env.OPENSOLAR_BEARER_TOKEN?.trim();
+  const orgId = readOrgId();
+  if (!token) throw new Error("OpenSolar n'est pas configuré : OPENSOLAR_BEARER_TOKEN absent.");
+  if (!orgId) throw new Error("OpenSolar n'est pas configuré : OPENSOLAR_ORG_ID absent ou invalide.");
+  return { token, orgId };
+}
+
+async function parseError(response: Response) {
+  const body = await response.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(body) as JsonObject;
+    const detail = parsed.detail ?? parsed.error ?? parsed.message;
+    return typeof detail === "string" ? detail : body.slice(0, 500);
+  } catch {
+    return body.slice(0, 500);
+  }
+}
+
+export async function openSolarRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { token } = requireOpenSolarCredentials();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const response = await fetch(`${OPENSOLAR_API_BASE}${normalizedPath}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...init.headers,
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+    signal: init.signal ?? AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    const detail = await parseError(response);
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`OpenSolar refuse l'authentification (${response.status}). ${detail}`.trim());
+    }
+    if (response.status === 402) {
+      throw new Error("OpenSolar Raw Data API n'est pas actif pour cette organisation (402 Payment Required).");
+    }
+    if (response.status === 429) {
+      throw new Error("OpenSolar a atteint sa limite temporaire de requêtes (429). Réessayez dans quelques instants.");
+    }
+    throw new Error(`OpenSolar API ${response.status}: ${detail || "requête impossible"}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export async function getOpenSolarOrg() {
+  const { orgId } = requireOpenSolarCredentials();
+  return openSolarRequest<JsonObject>(`/orgs/${orgId}/`);
+}
+
+export async function getOpenSolarProject(projectId: number) {
+  const { orgId } = requireOpenSolarCredentials();
+  return openSolarRequest<JsonObject>(`/orgs/${orgId}/projects/${projectId}/`);
+}
+
+export async function getOpenSolarSystemDetails(projectId: number) {
+  const { orgId } = requireOpenSolarCredentials();
+  return openSolarRequest<{ systems?: JsonObject[] }>(`/orgs/${orgId}/projects/${projectId}/systems/details/?exclude_parts=pricing,incentives,payment_options,bills`);
+}
+
+export async function createOpenSolarProject(input: {
+  identifier: string;
+  address: string;
+  locality?: string;
+  zip?: string;
+  countryIso2?: string;
+  lat?: number;
+  lon?: number;
+}) {
+  const { orgId } = requireOpenSolarCredentials();
+  return openSolarRequest<JsonObject>(`/orgs/${orgId}/projects/`, {
+    method: "POST",
+    body: JSON.stringify({
+      identifier: input.identifier,
+      title: input.address,
+      is_residential: "1",
+      address: input.address,
+      locality: input.locality ?? "",
+      zip: input.zip ?? "",
+      country_iso2: input.countryIso2 ?? "FR",
+      ...(Number.isFinite(input.lat) ? { lat: input.lat } : {}),
+      ...(Number.isFinite(input.lon) ? { lon: input.lon } : {}),
+    }),
+  });
+}
