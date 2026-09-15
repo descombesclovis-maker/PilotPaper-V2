@@ -9,7 +9,7 @@
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "vite build",
     "start": "vinext start",
-    "test": "node --test tests/pilotpaper-image2-direct.test.mjs tests/production-one-click.test.mjs tests/v2-geometry-engine.test.mjs",
+    "test": "node --test tests/pilotpaper-image2-direct.test.mjs tests/production-one-click.test.mjs tests/v2-geometry-engine.test.mjs tests/v2-exact-projection.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "pilotpaper:start:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-pilotpaper.ps1",
     "pilotpaper:restart:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-pilotpaper.ps1",
