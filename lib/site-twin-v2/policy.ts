@@ -5,6 +5,8 @@ export const SITE_TWIN_POLICY = Object.freeze({
   minimumFaceConfidence: 0.72,
   minimumTwinConfidence: 0.78,
   maximumAutomaticReprojectionErrorPx: 8,
+  minimumAutomaticCameraInliers: 12,
+  minimumAutomaticCameraInlierRatio: 0.28,
   preferredGutterClearanceMm: 300,
   minimumPhysicalFaceAreaM2: 2,
   minimumRoofSlopeDeg: 0,
