@@ -152,21 +152,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
           if (-not (Test-Path "desktop-output-v2/PilotPaper-V2-Setup.exe")) { throw "V2 installer missing" }
 
-      - name: Build portable V2 archive
-        shell: pwsh
-        run: |
-          $root = Join-Path $PWD "PilotPaper-V2-Preview"
-          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-          Copy-Item "desktop-stage-v2" $root -Recurse
-          Compress-Archive -Path $root -DestinationPath "PilotPaper-V2-Preview.zip" -CompressionLevel Optimal
-          if (-not (Test-Path "PilotPaper-V2-Preview.zip")) { throw "Portable V2 archive missing" }
-
-      - name: Upload V2 preview artifacts
+      - name: Upload V2 installer
         uses: actions/upload-artifact@v4
         with:
-          name: PilotPaper-V2-Windows-Preview
-          path: |
-            desktop-output-v2/PilotPaper-V2-Setup.exe
-            PilotPaper-V2-Preview.zip
+          name: PilotPaper-V2-Setup
+          path: desktop-output-v2/PilotPaper-V2-Setup.exe
           if-no-files-found: error
           retention-days: 14
