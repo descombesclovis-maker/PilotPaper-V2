@@ -18,6 +18,7 @@ type FaceBasis = {
 };
 
 type FacePoint = { u: number; v: number };
+type Bounds = { minU: number; maxU: number; minV: number; maxV: number };
 
 function dot(a: TwinXY, b: TwinXY) {
   return a.x * b.x + a.y * b.y;
@@ -25,7 +26,6 @@ function dot(a: TwinXY, b: TwinXY) {
 
 function basisForFace(face: SiteTwinRoofFace): FaceBasis {
   const azimuthRad = face.azimuthDeg * Math.PI / 180;
-  // Azimuth is clockwise from north. This unit vector points downslope in XY.
   const downslope = { x: Math.sin(azimuthRad), y: Math.cos(azimuthRad) };
   const upslope = { x: -downslope.x, y: -downslope.y };
   const cross = { x: upslope.y, y: -upslope.x };
@@ -37,7 +37,6 @@ function toFacePoint(point: TwinXY, basis: FaceBasis): FacePoint {
   const delta = { x: point.x - basis.origin.x, y: point.y - basis.origin.y };
   return {
     u: dot(delta, basis.cross),
-    // Convert horizontal projected distance into true distance along the roof plane.
     v: dot(delta, basis.slopeHorizontal) / basis.cosSlope,
   };
 }
@@ -88,16 +87,27 @@ function rectangleCorners(left: number, bottom: number, width: number, height: n
   ];
 }
 
-function rectanglesIntersect(a: FacePoint[], b: FacePoint[]) {
-  const bounds = (polygon: FacePoint[]) => ({
+function boundsFor(polygon: FacePoint[]): Bounds {
+  return {
     minU: Math.min(...polygon.map((point) => point.u)),
     maxU: Math.max(...polygon.map((point) => point.u)),
     minV: Math.min(...polygon.map((point) => point.v)),
     maxV: Math.max(...polygon.map((point) => point.v)),
-  });
-  const aa = bounds(a);
-  const bb = bounds(b);
-  return aa.minU < bb.maxU && aa.maxU > bb.minU && aa.minV < bb.maxV && aa.maxV > bb.minV;
+  };
+}
+
+function boundsIntersect(a: Bounds, b: Bounds) {
+  return a.minU < b.maxU && a.maxU > b.minU && a.minV < b.maxV && a.maxV > b.minV;
+}
+
+function expandedBounds(polygon: FacePoint[], keepoutM: number): Bounds {
+  const bounds = boundsFor(polygon);
+  return {
+    minU: bounds.minU - keepoutM,
+    maxU: bounds.maxU + keepoutM,
+    minV: bounds.minV - keepoutM,
+    maxV: bounds.maxV + keepoutM,
+  };
 }
 
 function faceGeometry(face: SiteTwinRoofFace) {
@@ -111,6 +121,7 @@ function faceGeometry(face: SiteTwinRoofFace) {
   const obstacles = face.obstacles.map((obstacle) => ({
     obstacle,
     polygon: obstacle.polygonLocalM.map((point) => toFacePoint(point, basis)),
+    keepoutM: Math.max(0, obstacle.keepoutMm ?? 0) / 1000,
   }));
   return { basis, polygon, minU, maxU, minV, maxV, obstacles };
 }
@@ -138,8 +149,6 @@ function candidateXPositions(args: {
       ? args.maxU - args.arrayWidth
       : args.minU + slack / 2;
   const positions = [preferred];
-  // Irregular roofs may reject the geometrically centered array even when a
-  // small deterministic lateral shift makes it valid. Explore both directions.
   for (let offset = 0.05; offset <= slack / 2 + 0.001; offset += 0.05) {
     positions.push(preferred - offset, preferred + offset);
   }
@@ -151,14 +160,17 @@ function candidateXPositions(args: {
 function validateModuleRectangle(
   corners: FacePoint[],
   polygon: FacePoint[],
-  obstacles: Array<{ polygon: FacePoint[]; obstacle: SiteTwinRoofFace["obstacles"][number] }>,
+  obstacles: Array<{ polygon: FacePoint[]; keepoutM: number; obstacle: SiteTwinRoofFace["obstacles"][number] }>,
 ) {
   if (!corners.every((corner) => polygonContainsPoint(corner, polygon) || clearanceToPolygon(corner, polygon) <= 0.002)) {
     return false;
   }
+  const moduleBounds = boundsFor(corners);
   for (const item of obstacles) {
     if (item.polygon.length < 3) continue;
-    if (rectanglesIntersect(corners, item.polygon)) return false;
+    // Keep-out belongs to physical truth. A panel is rejected even when it does
+    // not touch the obstacle itself but enters its required safety envelope.
+    if (boundsIntersect(moduleBounds, expandedBounds(item.polygon, item.keepoutM))) return false;
   }
   return true;
 }
@@ -170,8 +182,6 @@ function tryLayoutOnFace(face: SiteTwinRoofFace, configuration: PvConfiguration)
   const arrayHeight = configuration.rows * heightM + Math.max(0, configuration.rows - 1) * gapM;
   const preferredGutterM = Math.max(0, configuration.preferredGutterClearanceMm) / 1000;
 
-  // 300 mm is a preference, never a rigid blocker. Reduce progressively until
-  // the requested module count fits or until zero clearance is reached.
   const gutterCandidates: number[] = [];
   for (let mm = Math.round(preferredGutterM * 1000); mm >= 0; mm -= 10) gutterCandidates.push(mm / 1000);
   if (!gutterCandidates.includes(0)) gutterCandidates.push(0);
@@ -220,8 +230,6 @@ function maximumPanelCount(face: SiteTwinRoofFace, configuration: PvConfiguratio
 }
 
 function faceScore(face: SiteTwinRoofFace, resolvedGutterClearanceMm: number) {
-  // Deterministic automatic preference: high-confidence, roomy, generally
-  // south-facing roof. User selection always overrides this ranking.
   const southDelta = Math.min(Math.abs(face.azimuthDeg - 180), 360 - Math.abs(face.azimuthDeg - 180));
   return face.confidence * 100 + Math.min(face.areaM2, 200) * 0.15 - southDelta * 0.04 + resolvedGutterClearanceMm * 0.001;
 }
@@ -253,9 +261,9 @@ export function buildPvLayout(args: {
       resolvedGutterClearanceMm: attempt?.resolvedGutterClearanceMm,
       reasons: attempt
         ? [attempt.resolvedGutterClearanceMm === configuration.preferredGutterClearanceMm
-          ? "Configuration exacte compatible avec le recul bas préféré."
-          : `Configuration exacte compatible après réduction automatique du recul bas à ${attempt.resolvedGutterClearanceMm} mm.`]
-        : ["La configuration exacte ne tient pas dans le polygone physique après prise en compte des obstacles et des dimensions réelles."],
+          ? "Configuration exacte compatible avec le recul bas préféré et les zones de sécurité des obstacles."
+          : `Configuration exacte compatible après réduction automatique du recul bas à ${attempt.resolvedGutterClearanceMm} mm, obstacles et zones de sécurité inclus.`]
+        : ["La configuration exacte ne tient pas dans le polygone physique après prise en compte des obstacles, de leurs zones de sécurité et des dimensions réelles."],
     };
   });
 
