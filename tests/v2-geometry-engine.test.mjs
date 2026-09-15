@@ -43,12 +43,15 @@ test("visible geometry routes use provider-neutral wording", async () => {
   assert.match(probe, /Analyse géométrique impossible/);
 });
 
-test("V2 protected credential is bound to the current Windows user", async () => {
+test("V2 protected credential is bound to the current Windows user and setup asks only for a token", async () => {
   const credentials = await source("desktop/PilotPaperLauncher/GeometryEngineCredentials.cs");
   assert.match(credentials, /ProtectedData\.Unprotect/);
+  assert.match(credentials, /ProtectedData\.Protect/);
   assert.match(credentials, /DataProtectionScope\.CurrentUser/);
   assert.match(credentials, /geometry-engine\.bin/);
-  assert.doesNotMatch(credentials, /password/i);
+  assert.match(credentials, /PromptForToken/);
+  assert.match(credentials, /UseSystemPasswordChar = true/);
+  assert.doesNotMatch(credentials, /PromptForPassword|Read-Host|username\s*=|email\s*=/i);
 });
 
 test("one-time migration promotes the existing session then removes clear environment values", async () => {
