@@ -51,6 +51,20 @@ jobs:
         shell: pwsh
         run: npm test
 
+      - name: Validate Windows migration scripts
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/seal-geometry-credential.ps1"),
+            [ref]$null,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "V2 credential migration script contains PowerShell syntax errors."
+          }
+
       - name: Use .NET 8
         uses: actions/setup-dotnet@v4
         with:
