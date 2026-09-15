@@ -92,5 +92,6 @@ export async function generateGeometryLockedDp4(input: DpPieceInput & { dp: 4 })
       ],
       issues: projected.inspector.issues,
     },
+    geometryReceipt: projected.geometryReceipt ? { ...projected.geometryReceipt, dp: 4 } : undefined,
   };
 }
