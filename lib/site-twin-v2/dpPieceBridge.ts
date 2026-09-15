@@ -1,6 +1,12 @@
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
-import { createDocumentContext, type SiteTwinDocumentContext } from "./documentContext";
+import {
+  assertPiecesShareContext,
+  createDocumentContext,
+  receiptForPiece,
+  type SiteTwinDocumentContext,
+} from "./documentContext";
+import { SiteTwinError } from "./errors";
 import { buildPvLayout } from "./pvLayoutEngine";
 import { renderDp2FromSiteTwin } from "./renderers/dp2";
 import { renderDp3FromSiteTwin } from "./renderers/dp3";
@@ -19,6 +25,23 @@ function finite(value: unknown, fallback: number) {
 
 function point(point: { x: number; y: number }) {
   return `(${point.x.toFixed(2)},${point.y.toFixed(2)})`;
+}
+
+function assertReferenceGeometry(input: DpPieceInput, context: SiteTwinDocumentContext) {
+  const references = input.references ?? [];
+  const receipts = references.flatMap((reference) => reference.geometryReceipt ? [reference.geometryReceipt] : []);
+  if (receipts.length) assertPiecesShareContext(context, receipts);
+
+  if (input.dp >= 3 && input.dp <= 6) {
+    const dp2Reference = references.find((reference) => reference.dp === 2);
+    if (dp2Reference && !dp2Reference.geometryReceipt) {
+      throw new SiteTwinError(
+        "CROSS_PIECE_INCONSISTENCY",
+        "La référence DP2 ne contient pas d'empreinte géométrique V2. Régénérez DP2 avant de poursuivre le dossier.",
+        { recoverable: true },
+      );
+    }
+  }
 }
 
 export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise<SiteTwinDocumentContext> {
@@ -49,7 +72,9 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
       placement: input.placement ?? "centered",
     },
   });
-  return createDocumentContext(twin, layout);
+  const context = createDocumentContext(twin, layout);
+  assertReferenceGeometry(input, context);
+  return context;
 }
 
 export function siteTwinVisualConstraintPrompt(context: SiteTwinDocumentContext) {
@@ -65,6 +90,7 @@ export function siteTwinVisualConstraintPrompt(context: SiteTwinDocumentContext)
   return [
     "PILOTPAPER SITE TWIN METRIC LOCK — HIDDEN GEOMETRY CONSTRAINT.",
     `Canonical context: ${context.contextId}.`,
+    `Layout digest: ${context.layoutDigest}.`,
     `Target roof plane: ${face.displayLabel} / ${face.id}; building ${face.buildingId}.`,
     `Measured roof plane: slope ${face.slopeDeg.toFixed(2)}°, azimuth ${face.azimuthDeg.toFixed(2)}°, usable physical area ${face.areaM2.toFixed(2)} m².`,
     `Roof-plane polygon in PilotPaper local metric XY coordinates: ${face.polygonLocalM.map(point).join(" ")}.`,
@@ -118,6 +144,7 @@ function svgOutput(args: {
     text: args.svg,
     sourceSummary: [
       `DP${args.dp} calculée depuis le Site Twin métrique ${args.context.siteTwin.id} rev. ${args.context.siteTwin.revision}.`,
+      `Empreinte géométrique : ${args.context.layoutDigest.slice(0, 16)}.`,
       `${args.context.layout.modules.length} panneaux positionnés par calcul déterministe sur le pan ${face?.displayLabel ?? face?.id ?? "sélectionné"}.`,
       `Pente ${face?.slopeDeg.toFixed(1) ?? "?"}° · azimut ${face?.azimuthDeg.toFixed(1) ?? "?"}° · recul bas résolu ${eligibility?.resolvedGutterClearanceMm ?? args.context.layout.configuration.preferredGutterClearanceMm} mm.`,
       "Aucune IA générative n'a choisi les coordonnées des panneaux.",
@@ -127,12 +154,14 @@ function svgOutput(args: {
       score: 1,
       checks: [
         `Site Twin unique : ${args.context.contextId}`,
+        `Empreinte exacte : ${args.context.layoutDigest.slice(0, 16)}`,
         `Quantité exacte : ${args.context.layout.modules.length}/${args.context.layout.configuration.panelCount}`,
         `Pan physique verrouillé : ${face?.displayLabel ?? face?.id ?? "oui"}`,
         "Coordonnées des modules déterministes : oui",
       ],
       issues: [],
     },
+    geometryReceipt: receiptForPiece(args.context, args.dp),
   };
 }
 
