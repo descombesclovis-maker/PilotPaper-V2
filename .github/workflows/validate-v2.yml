@@ -16,6 +16,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
+      - "tw-animate-css"
       - ".github/workflows/validate-v2.yml"
 
 permissions:
