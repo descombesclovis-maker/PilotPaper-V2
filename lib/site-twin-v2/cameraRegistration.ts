@@ -84,7 +84,7 @@ export async function registerSiteTwinPhoto(args: {
     homography: result.homography,
     reprojectionErrorPx: result.reprojectionErrorPx,
     evidence: [{
-      source: result.method.includes("lightglue") ? "lightglue" : "photo-registration",
+      source: result.method.includes("lightglue") ? "lightglue" : "photogrammetry",
       confidence: registrationConfidence,
       reference: result.method,
       notes: [
