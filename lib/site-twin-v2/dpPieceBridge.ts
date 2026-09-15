@@ -17,6 +17,10 @@ function finite(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function point(point: { x: number; y: number }) {
+  return `(${point.x.toFixed(2)},${point.y.toFixed(2)})`;
+}
+
 export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise<SiteTwinDocumentContext> {
   const address = input.address?.trim() ?? "";
   if (address.length < 8) throw new Error("Adresse exacte requise pour construire le Site Twin métrique.");
@@ -46,6 +50,53 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
     },
   });
   return createDocumentContext(twin, layout);
+}
+
+export function siteTwinVisualConstraintPrompt(context: SiteTwinDocumentContext) {
+  const faceId = context.layout.selectedFaceIds[0];
+  const face = context.siteTwin.roof.faces.find((candidate) => candidate.id === faceId);
+  if (!face) throw new Error("Le pan sélectionné du Site Twin est introuvable.");
+  const eligibility = context.layout.eligibility.find((candidate) => candidate.faceId === face.id);
+  const moduleRows = context.layout.modules.map((module) => (
+    `M${module.moduleIndex + 1}: ${module.polygonLocalM.map(point).join(" ")}`
+  ));
+  const advanced = context.siteTwin.sources.advancedRoofFacetCount;
+
+  return [
+    "PILOTPAPER SITE TWIN METRIC LOCK — HIDDEN GEOMETRY CONSTRAINT.",
+    `Canonical context: ${context.contextId}.`,
+    `Target roof plane: ${face.displayLabel} / ${face.id}; building ${face.buildingId}.`,
+    `Measured roof plane: slope ${face.slopeDeg.toFixed(2)}°, azimuth ${face.azimuthDeg.toFixed(2)}°, usable physical area ${face.areaM2.toFixed(2)} m².`,
+    `Roof-plane polygon in PilotPaper local metric XY coordinates: ${face.polygonLocalM.map(point).join(" ")}.`,
+    `Locked PV layout: EXACTLY ${context.layout.configuration.panelCount} modules, ${context.layout.configuration.rows} rows × ${context.layout.configuration.columns} columns, ${context.layout.configuration.orientation}.`,
+    `Resolved lower/gutter clearance: ${eligibility?.resolvedGutterClearanceMm ?? context.layout.configuration.preferredGutterClearanceMm} mm. Inter-module gap: ${context.layout.configuration.interPanelGapMm} mm.`,
+    `The deterministic layout contains ${context.layout.modules.length} metric module rectangles on that one roof plane.`,
+    ...moduleRows,
+    advanced
+      ? `Independent advanced roof model also reports ${advanced} roof facet(s). Use it only as a cross-check; the PilotPaper metric layout above remains the coordinate authority.`
+      : "No independent advanced roof facet count is currently available; do not invent one.",
+    "These XY coordinates are metric roof-local coordinates, NOT image pixels. Preserve their topology, count, relative spacing and one-plane relationship when projecting onto the supplied photograph/aerial image.",
+    "Do not let visual convenience override this layout. If the image evidence conflicts with the metric lock, preserve the real building and flag/correct the projection rather than changing panel count, matrix, module size or roof plane.",
+  ].join("\n");
+}
+
+export async function resolveSiteTwinVisualConstraint(input: DpPieceInput) {
+  try {
+    const context = await buildSiteTwinDocumentContext(input);
+    return {
+      usable: true as const,
+      context,
+      promptContext: siteTwinVisualConstraintPrompt(context),
+      warning: "",
+    };
+  } catch (error) {
+    return {
+      usable: false as const,
+      context: null,
+      promptContext: "",
+      warning: error instanceof Error ? error.message : "Site Twin métrique indisponible.",
+    };
+  }
 }
 
 function svgOutput(args: {
