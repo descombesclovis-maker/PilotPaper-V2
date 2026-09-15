@@ -21,18 +21,14 @@ export function getOpenSolarRuntimeConfig(): OpenSolarRuntimeConfig {
   const token = process.env.OPENSOLAR_BEARER_TOKEN?.trim();
   const orgId = readOrgId();
   const enabled = process.env.OPENSOLAR_ENABLED?.trim().toLowerCase() === "true";
-  return {
-    enabled,
-    configured: Boolean(token && orgId),
-    orgId,
-  };
+  return { enabled, configured: Boolean(token && orgId), orgId };
 }
 
 function requireOpenSolarCredentials() {
   const token = process.env.OPENSOLAR_BEARER_TOKEN?.trim();
   const orgId = readOrgId();
-  if (!token) throw new Error("OpenSolar n'est pas configuré : OPENSOLAR_BEARER_TOKEN absent.");
-  if (!orgId) throw new Error("OpenSolar n'est pas configuré : OPENSOLAR_ORG_ID absent ou invalide.");
+  if (!token) throw new Error("Le moteur géométrique n'est pas connecté sur ce poste.");
+  if (!orgId) throw new Error("L'organisation du moteur géométrique est absente ou invalide.");
   return { token, orgId };
 }
 
@@ -64,16 +60,10 @@ export async function openSolarRequest<T>(path: string, init: RequestInit = {}):
 
   if (!response.ok) {
     const detail = await parseError(response);
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(`OpenSolar refuse l'authentification (${response.status}). ${detail}`.trim());
-    }
-    if (response.status === 402) {
-      throw new Error("OpenSolar Raw Data API n'est pas actif pour cette organisation (402 Payment Required).");
-    }
-    if (response.status === 429) {
-      throw new Error("OpenSolar a atteint sa limite temporaire de requêtes (429). Réessayez dans quelques instants.");
-    }
-    throw new Error(`OpenSolar API ${response.status}: ${detail || "requête impossible"}`);
+    if (response.status === 401 || response.status === 403) throw new Error("Le moteur géométrique doit être reconnecté.");
+    if (response.status === 402) throw new Error("L'accès aux données géométriques avancées n'est pas actif pour cette organisation.");
+    if (response.status === 429) throw new Error("Le moteur géométrique est temporairement saturé. Réessayez dans quelques instants.");
+    throw new Error(`Moteur géométrique indisponible (${response.status})${detail ? ` : ${detail}` : ""}`);
   }
 
   return response.json() as Promise<T>;
@@ -92,6 +82,11 @@ export async function getOpenSolarProject(projectId: number) {
 export async function getOpenSolarSystemDetails(projectId: number) {
   const { orgId } = requireOpenSolarCredentials();
   return openSolarRequest<{ systems?: JsonObject[] }>(`/orgs/${orgId}/projects/${projectId}/systems/details/?exclude_parts=pricing,incentives,payment_options,bills`);
+}
+
+export async function listOpenSolarProjects(limit = 100) {
+  const { orgId } = requireOpenSolarCredentials();
+  return openSolarRequest<JsonObject[]>(`/orgs/${orgId}/projects/?limit=${Math.max(1, Math.min(100, limit))}&fieldset=list`);
 }
 
 export async function createOpenSolarProject(input: {
