@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PilotPaper-V2</AssemblyName>
     <RootNamespace>PilotPaperLauncher</RootNamespace>
+    <StartupObject>PilotPaperLauncher.PilotPaperV2Program</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationIcon Condition="Exists('..\pilotpaper.ico')">..\pilotpaper.ico</ApplicationIcon>
