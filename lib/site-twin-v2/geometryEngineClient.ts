@@ -1,5 +1,5 @@
 import type { SiteTwinPropertyLock } from "./propertyLock";
-import type { SiteTwinRoofEdge, SiteTwinRoofFace, TwinLonLat, TwinXY } from "./types";
+import type { SiteTwinRoofEdge, SiteTwinRoofFace, TwinLonLat } from "./types";
 import type { IgnElevationPoint, IgnCopcTile } from "./ignLidar";
 import { SiteTwinError } from "./errors";
 
@@ -177,19 +177,22 @@ export type SiteTwinPhotoProjection = {
 };
 
 export async function projectSiteTwinModulesToPhoto(args: {
-  origin: TwinLonLat;
-  modulePolygonsLocalM: TwinXY[][];
+  modulePolygonsLonLat: TwinLonLat[][];
   referenceGeoTiff: Uint8Array;
   photo: Uint8Array;
   photoMimeType: string;
 }): Promise<SiteTwinPhotoProjection> {
-  if (!args.modulePolygonsLocalM.length || args.modulePolygonsLocalM.some((polygon) => polygon.length !== 4)) {
-    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photo exige quatre coins métriques par module.");
+  if (
+    !args.modulePolygonsLonLat.length
+    || args.modulePolygonsLonLat.some((polygon) => (
+      polygon.length !== 4
+      || polygon.some((point) => point.length !== 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1]))
+    ))
+  ) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photo exige quatre coins géographiques valides par module.");
   }
   const data = new FormData();
-  data.set("origin_lon", String(args.origin[0]));
-  data.set("origin_lat", String(args.origin[1]));
-  data.set("module_polygons", JSON.stringify(args.modulePolygonsLocalM));
+  data.set("module_polygons_lonlat", JSON.stringify(args.modulePolygonsLonLat));
   data.set("reference", new Blob([args.referenceGeoTiff], { type: "image/tiff" }), "site-reference.tif");
   data.set("photo", new Blob([args.photo], { type: args.photoMimeType }), "project-photo");
 
@@ -220,7 +223,7 @@ export async function projectSiteTwinModulesToPhoto(args: {
     result.mimeType !== "image/png"
     || !result.photoBase64
     || !Array.isArray(result.panelPolygonsNormalized)
-    || result.panelPolygonsNormalized.length !== args.modulePolygonsLocalM.length
+    || result.panelPolygonsNormalized.length !== args.modulePolygonsLonLat.length
     || !Number.isFinite(result.registration?.reprojectionErrorPx)
   ) {
     throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photographique a renvoyé un résultat incomplet.");
