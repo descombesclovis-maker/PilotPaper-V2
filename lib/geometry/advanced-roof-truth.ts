@@ -12,11 +12,21 @@ import { extractOpenSolarProjectTruth } from "@/lib/opensolar/design-truth";
 
 type JsonObject = Record<string, unknown>;
 
+export type AdvancedRoofFacet = {
+  id: string;
+  slopeDeg: number | null;
+  azimuthDeg: number | null;
+  areaM2: number | null;
+  polygonLonLat: Array<[number, number]> | null;
+  properties: Record<string, string | number | boolean>;
+};
+
 export type AdvancedRoofTruth = {
   available: boolean;
   usable: boolean;
   projectId: number | null;
   roofFacetCount: number;
+  facets: AdvancedRoofFacet[];
   autoDesignAvailable: boolean;
   promptContext: string;
   warnings: string[];
@@ -42,6 +52,11 @@ function integer(value: unknown) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function finiteOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function parseGeoJson(value: unknown): JsonObject | null {
   if (object(value)) return value as JsonObject;
   if (typeof value !== "string" || value.length < 2) return null;
@@ -53,23 +68,73 @@ function parseGeoJson(value: unknown): JsonObject | null {
   }
 }
 
+function propertyNumber(properties: JsonObject, patterns: RegExp[]) {
+  for (const [key, value] of Object.entries(properties)) {
+    if (!patterns.some((pattern) => pattern.test(key))) continue;
+    const parsed = finiteOrNull(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function polygonLonLat(feature: JsonObject | null) {
+  const geometry = object(feature?.geometry);
+  const type = String(geometry?.type ?? "");
+  const coordinates = geometry?.coordinates;
+  let ring: unknown = null;
+  if (type === "Polygon" && Array.isArray(coordinates)) ring = coordinates[0];
+  if (type === "MultiPolygon" && Array.isArray(coordinates)) ring = (coordinates[0] as unknown[])?.[0];
+  if (!Array.isArray(ring)) return null;
+  const points = ring.flatMap((raw) => {
+    if (!Array.isArray(raw) || raw.length < 2) return [];
+    const longitude = Number(raw[0]);
+    const latitude = Number(raw[1]);
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return [];
+    if (Math.abs(longitude) > 180 || Math.abs(latitude) > 90) return [];
+    return [[longitude, latitude] as [number, number]];
+  });
+  if (points.length < 3) return null;
+  const first = points[0];
+  const last = points.at(-1);
+  if (first && last && first[0] === last[0] && first[1] === last[1]) points.pop();
+  return points.length >= 3 ? points : null;
+}
+
 function facetSummary(value: unknown) {
   const geo = parseGeoJson(value);
   const features = Array.isArray(geo?.features) ? geo.features : [];
   const summaries: string[] = [];
-  for (const raw of features.slice(0, 12)) {
-    const feature = object(raw);
-    const properties = object(feature?.properties);
-    if (!properties) continue;
-    const picked: Record<string, unknown> = {};
+  const facets: AdvancedRoofFacet[] = [];
+  for (let index = 0; index < features.length; index += 1) {
+    const feature = object(features[index]);
+    const properties = object(feature?.properties) ?? {};
+    const picked: Record<string, string | number | boolean> = {};
     for (const [key, child] of Object.entries(properties)) {
       if (/azimuth|pitch|slope|tilt|area|facet|roof|orientation|bearing|id/i.test(key) && ["string", "number", "boolean"].includes(typeof child)) {
-        picked[key] = child;
+        picked[key] = child as string | number | boolean;
       }
     }
+    const id = String(
+      properties.id
+      ?? properties.facet_id
+      ?? properties.facetId
+      ?? feature?.id
+      ?? `facet-${index + 1}`,
+    );
+    const slopeDeg = propertyNumber(properties, [/^slope$/i, /slope.*deg/i, /^pitch$/i, /pitch.*deg/i, /^tilt$/i]);
+    const azimuthDeg = propertyNumber(properties, [/azimuth/i, /bearing/i, /orientation.*deg/i]);
+    const areaM2 = propertyNumber(properties, [/^area$/i, /area.*m2/i, /area.*sqm/i, /surface/i]);
+    facets.push({
+      id,
+      slopeDeg,
+      azimuthDeg,
+      areaM2,
+      polygonLonLat: polygonLonLat(feature),
+      properties: picked,
+    });
     if (Object.keys(picked).length) summaries.push(JSON.stringify(picked));
   }
-  return { count: features.length, summaries };
+  return { count: features.length, summaries, facets };
 }
 
 function addressParts(address: string) {
@@ -107,6 +172,7 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
       usable: false,
       projectId: null,
       roofFacetCount: 0,
+      facets: [],
       autoDesignAvailable: false,
       promptContext: "",
       warnings: ["Moteur géométrique avancé non disponible : utilisation du fallback PilotPaper."],
@@ -147,6 +213,7 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
     usable,
     projectId,
     roofFacetCount: facets.count,
+    facets: facets.facets,
     autoDesignAvailable: Boolean(truth.autoDesignGeoJson),
     promptContext,
     warnings: truth.warnings,
@@ -162,6 +229,7 @@ export function resolveAdvancedRoofTruth(address: string) {
     usable: false,
     projectId: null,
     roofFacetCount: 0,
+    facets: [],
     autoDesignAvailable: false,
     promptContext: "",
     warnings: [error instanceof Error ? error.message : "Moteur géométrique indisponible."],
