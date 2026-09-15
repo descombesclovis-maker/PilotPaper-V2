@@ -102,8 +102,9 @@ async function writeRecord(record: CompleteDossierRecord) {
 async function mutateRecord(id: string, mutation: (record: CompleteDossierRecord) => CompleteDossierRecord | void) {
   const previousLock = mutationLocks.get(id) ?? Promise.resolve();
   let release!: () => void;
-  const nextLock = new Promise<void>((resolve) => { release = resolve; });
-  mutationLocks.set(id, previousLock.then(() => nextLock));
+  const currentLock = new Promise<void>((resolve) => { release = resolve; });
+  const chain = previousLock.then(() => currentLock);
+  mutationLocks.set(id, chain);
   await previousLock;
   try {
     const current = memory.get(id) ?? await getCompleteDossier(id);
@@ -115,7 +116,7 @@ async function mutateRecord(id: string, mutation: (record: CompleteDossierRecord
     return changed;
   } finally {
     release();
-    if (mutationLocks.get(id) === nextLock) mutationLocks.delete(id);
+    if (mutationLocks.get(id) === chain) mutationLocks.delete(id);
   }
 }
 
@@ -248,18 +249,6 @@ async function runPiece(id: string, dp: DPNumber, references: VisualReference[])
   return body;
 }
 
-async function runPool<T>(values: T[], concurrency: number, task: (value: T) => Promise<void>) {
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (cursor < values.length) {
-      const index = cursor;
-      cursor += 1;
-      await task(values[index]);
-    }
-  });
-  await Promise.all(workers);
-}
-
 async function runJob(id: string) {
   if (running.has(id)) return;
   running.add(id);
@@ -269,19 +258,26 @@ async function runJob(id: string) {
       record.error = undefined;
     });
 
-    // DP1, DP2 and the two original-photo pieces have no dependency on one another.
-    const dp1 = runPiece(id, 1, []).catch(() => undefined);
-    const dp7 = runPiece(id, 7, []).catch(() => undefined);
-    const dp8 = runPiece(id, 8, []).catch(() => undefined);
-
+    // Independent pieces start immediately while DP2 establishes the master physical placement.
+    const dp1Promise = runPiece(id, 1, []).catch(() => undefined);
+    const dp7Promise = runPiece(id, 7, []).catch(() => undefined);
+    const dp8Promise = runPiece(id, 8, []).catch(() => undefined);
     const dp2Result = await runPiece(id, 2, []).catch(() => undefined);
     const dp2Reference = dp2Result ? makeReference(dp2Result) : null;
 
     if (dp2Reference) {
-      // Quality/speed compromise: two visual pieces at once. All four inherit the same DP2 master placement.
-      await runPool<DPNumber>([3, 4, 5, 6], 2, async (dp) => {
-        await runPiece(id, dp, [dp2Reference]).catch(() => undefined);
-      });
+      // Wave 1: DP3 and DP4 can be generated together because both depend only on the accepted DP2 anchor.
+      const dp3Promise = runPiece(id, 3, [dp2Reference]).catch(() => undefined);
+      const dp4Promise = runPiece(id, 4, [dp2Reference]).catch(() => undefined);
+      const [, dp4Result] = await Promise.all([dp3Promise, dp4Promise]);
+      const dp4Reference = dp4Result ? makeReference(dp4Result) : null;
+      const closeReferences = [dp2Reference, dp4Reference].filter((reference): reference is VisualReference => Boolean(reference));
+
+      // Wave 2: DP5 and DP6 run together, both inheriting DP2 and the accepted DP4 photographic identity when available.
+      await Promise.all([
+        runPiece(id, 5, closeReferences).catch(() => undefined),
+        runPiece(id, 6, closeReferences).catch(() => undefined),
+      ]);
     } else {
       await mutateRecord(id, (record) => {
         for (const dp of [3, 4, 5, 6] as DPNumber[]) {
@@ -291,7 +287,7 @@ async function runJob(id: string) {
       });
     }
 
-    await Promise.allSettled([dp1, dp7, dp8]);
+    await Promise.allSettled([dp1Promise, dp7Promise, dp8Promise]);
     const finished = await getCompleteDossier(id);
     if (!finished) return;
     const ready = PIECES.every((dp) => finished.pieces[dp].status === "done" && finished.pieces[dp].result);
