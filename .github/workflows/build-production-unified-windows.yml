@@ -82,6 +82,18 @@ jobs:
           python make_icon.py
           if (-not (Test-Path desktop/pilotpaper.ico)) { throw "PilotPaper icon was not created" }
 
+      - name: Point launcher updater at production channel
+        shell: pwsh
+        run: |
+          $path = "desktop/PilotPaperLauncher/Program.cs"
+          $content = Get-Content $path -Raw
+          $content = $content.Replace("pilotpaper-v1-test-latest", "pilotpaper-production-latest")
+          $content = $content.Replace("PilotPaper-V1-Setup.exe", "PilotPaper-Production-Setup.exe")
+          $content = $content.Replace("PilotPaper V1 — ChatGPT Image-2", "PilotPaper — Production")
+          $content = $content.Replace("PilotPaper Image-2", "PilotPaper")
+          Set-Content -Path $path -Value $content -Encoding utf8
+          if ((Get-Content $path -Raw) -notmatch "pilotpaper-production-latest") { throw "Production updater channel was not applied" }
+
       - name: Use .NET 8
         uses: actions/setup-dotnet@v4
         with:
@@ -136,6 +148,7 @@ jobs:
           - Déclaration préalable : création complète en un clic guidé.
           - K-par-k : moteur de test/contrôle pièce par pièce conservé.
           - Paramètres société : identité visuelle et préférences d'installation.
+          - Mise à jour isolée sur le canal production PilotPaper.
           - Les autres moteurs bâtiment restent verrouillés tant qu'ils ne sont pas développés.
           "@
 
@@ -177,7 +190,7 @@ jobs:
           gh release delete $tag --repo $env:GITHUB_REPOSITORY -y --cleanup-tag 2>$null
           $global:LASTEXITCODE = 0
           Copy-Item "desktop-output/PilotPaper-V1-Setup.exe" "PilotPaper-Production-Setup.exe" -Force
-          gh release create $tag "PilotPaper-Production-Setup.exe" "PilotPaper-Production.zip" --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper — Production unifiée" --notes "Accueil production, création de DP complète, K-par-k conservé et paramètres agence. Les moteurs bâtiment futurs restent verrouillés." --prerelease
+          gh release create $tag "PilotPaper-Production-Setup.exe" "PilotPaper-Production.zip" --repo $env:GITHUB_REPOSITORY --target "${{ github.sha }}" --title "PilotPaper — Production unifiée" --notes "Accueil production, création de DP complète, K-par-k conservé, paramètres agence et canal de mise à jour production isolé." --prerelease
           if ($LASTEXITCODE -ne 0) { throw "Unable to publish PilotPaper production release" }
 
       - name: Upload production artifacts
