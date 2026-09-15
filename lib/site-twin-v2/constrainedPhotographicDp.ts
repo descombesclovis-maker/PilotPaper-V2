@@ -4,6 +4,7 @@ import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";
 import type { DpPieceInput, DpPieceOutput, PiecePhotoInput } from "@/lib/pilotpaper-image2-types";
 import { renderGeometryLockedPhotoInsertion } from "./constrainedPhotoEdit";
+import { receiptForPiece } from "./documentContext";
 
 const DEFAULT_JUDGE_MODEL = "gpt-5.6-sol";
 const MAX_VISUAL_ATTEMPTS = 3;
@@ -141,6 +142,7 @@ export async function generateGeometryLockedPhotographicDp(input: DpPieceInput &
         sourceSummary: [
           `DP${input.dp} : insertion photoréaliste limitée aux coordonnées physiques calculées du champ photovoltaïque.`,
           `${rendered.context.layout.modules.length} modules · pan ${face?.displayLabel ?? "verrouillé"} · Site Twin ${rendered.context.siteTwin.id} rev. ${rendered.context.siteTwin.revision}.`,
+          `Empreinte géométrique : ${rendered.context.layoutDigest.slice(0, 16)}.`,
           `Recalage photo : ${rendered.registration.reprojectionErrorPx.toFixed(2)} px · ${rendered.registration.inliers}/${rendered.registration.matches} correspondances cohérentes (${Math.round(rendered.registration.inlierRatio * 100)} %).`,
           `Pixels PV effectivement rendus : ${Math.round(rendered.changedIslandRatio * 100)} % · pixels hors masque restaurés depuis la photo réelle.`,
           `Contrôle de photoréalisme validé en ${attempt} tentative${attempt > 1 ? "s" : ""}.`,
@@ -150,6 +152,7 @@ export async function generateGeometryLockedPhotographicDp(input: DpPieceInput &
           score: judge.score,
           checks: [
             `Panneaux projetés : ${rendered.panelPolygonsNormalized.length}/${expectedPanelCount}`,
+            `Empreinte exacte : ${rendered.context.layoutDigest.slice(0, 16)}`,
             "Coordonnées décidées par le moteur métrique : oui",
             "Pixels hors insertion préservés : oui",
             `Perspective commune : ${judge.commonPerspective ? "oui" : "non"}`,
@@ -158,6 +161,7 @@ export async function generateGeometryLockedPhotographicDp(input: DpPieceInput &
           ],
           issues: judge.issues,
         },
+        geometryReceipt: receiptForPiece(rendered.context, input.dp),
       };
     }
     lastIssues = judge.issues.length ? judge.issues : ["Le rendu des modules n'a pas atteint le niveau photoréaliste requis."];
