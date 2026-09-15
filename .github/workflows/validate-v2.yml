@@ -1,0 +1,57 @@
+name: Validate PilotPaper V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v2
+    paths:
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "tests/**"
+      - "worker/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/validate-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pilotpaper-v2-validation
+  cancel-in-progress: true
+
+jobs:
+  validate-v2:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PilotPaper V2
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Build V2 web application
+        shell: pwsh
+        run: npm run build
+
+      - name: Run PilotPaper regressions
+        shell: pwsh
+        run: npm test
+
+      - name: Confirm V1/V2 safety boundary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "lib/opensolar/client.ts")) { throw "OpenSolar V2 adapter missing" }
+          if (-not (Test-Path "docs/OPENSOLAR_V2_POC.md")) { throw "OpenSolar V2 POC documentation missing" }
+          Write-Host "PilotPaper V2 validation complete. No production release was published."
