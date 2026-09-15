@@ -30,6 +30,10 @@ type ProjectLock = {
   rows: number;
   columns: number;
   orientation: "portrait" | "landscape";
+  placement: "centered" | "left" | "right" | "custom";
+  gapMm: number;
+  gutterClearanceMm: number;
+  mountingSystem: string;
   moduleReference: string;
   manufacturer: string;
   moduleWidthMm: number;
@@ -70,6 +74,12 @@ function positiveInteger(value: unknown, label: string) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} doit être un entier positif.`);
   return parsed;
+}
+
+function boundedPreference(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
 }
 
 function toWebMercator(longitude: number, latitude: number) {
@@ -159,14 +169,23 @@ function buildProjectLock(input: DpPieceInput): ProjectLock {
   if (rows * columns !== panelCount) throw new Error(`${rows} × ${columns} ne correspond pas à ${panelCount} panneaux.`);
 
   const orientation = input.orientation === "landscape" ? "landscape" : "portrait";
+  const placement = ["centered", "left", "right", "custom"].includes(String(input.placement))
+    ? input.placement as ProjectLock["placement"]
+    : "centered";
+  const gapMm = boundedPreference(input.interPanelGapMm, 20, 0, 200);
+  const gutterClearanceMm = boundedPreference(input.gutterClearanceMm, 300, 0, 2000);
+  const mountingSystem = String(input.mountingSystem ?? "Surimposition parallèle au rampant").trim().slice(0, 160) || "Surimposition parallèle au rampant";
   const panelWidth = orientation === "portrait" ? module.widthMm : module.heightMm;
   const panelHeight = orientation === "portrait" ? module.heightMm : module.widthMm;
-  const gapMm = 20;
   return {
     panelCount,
     rows,
     columns,
     orientation,
+    placement,
+    gapMm,
+    gutterClearanceMm,
+    mountingSystem,
     moduleReference: module.canonicalReference,
     manufacturer: module.manufacturer,
     moduleWidthMm: module.widthMm,
@@ -210,7 +229,10 @@ function photovoltaicSpecialistPrompt(spec: ProjectLock) {
     "Treat every project value below as a geometric constraint. Do not merely write the values as text and then draw a visually convenient array.",
     `Each real module measures ${spec.moduleWidthMm} × ${spec.moduleHeightMm} mm. In the requested ${spec.orientation} orientation, each module occupies ${spec.orientedPanelWidthMm} mm horizontally across the array and ${spec.orientedPanelHeightMm} mm vertically along the array before perspective projection.`,
     `The module long-side/short-side ratio is ${spec.panelLongShortRatio.toFixed(3)}. Modules are rectangular physical objects, not square tiles.`,
-    `The complete ${spec.rows} × ${spec.columns} field occupies approximately ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm before projection.`,
+    `The complete ${spec.rows} × ${spec.columns} field occupies approximately ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm before projection, using ${spec.gapMm} mm inter-module gaps.`,
+    `INSTALLER PREFERENCES: placement ${spec.placement}; preferred lower-edge/gutter clearance ${spec.gutterClearanceMm} mm; mounting system "${spec.mountingSystem}".`,
+    "Apply those installer preferences whenever the real roof geometry and visible obstacles permit it. They are genuine project preferences, not decorative metadata.",
+    "If a preferred placement or gutter clearance is physically impossible, preserve the exact panel count/matrix and real building instead of forcing an unsafe or impossible layout; move the whole field to the nearest credible clear zone and keep the selected mounting principle.",
     "Project that real rectangle onto the selected roof plane using one coherent perspective for the entire array. Foreshortening is allowed and expected, but all modules must share the same roof-plane projection and remain mutually consistent.",
     "Use visible roof scale cues conservatively so the field is neither arbitrarily oversized nor miniaturized. Do not invent numeric dimensions of the building to justify the result.",
     "Keep module frames, cell grids and gaps subordinate to the real physical rectangle. A module may only look close to square if the roof perspective genuinely produces that foreshortening.",
@@ -224,7 +246,8 @@ function projectLockPrompt(spec: ProjectLock) {
     "NON-NEGOTIABLE PROJECT LOCK.",
     `The project contains EXACTLY ${spec.panelCount} photovoltaic modules: ${spec.rows} visible rows × ${spec.columns} visible columns.`,
     `Module: ${spec.manufacturer} ${spec.moduleReference}; verified physical module size ${spec.moduleWidthMm} × ${spec.moduleHeightMm} mm; orientation ${spec.orientation}.`,
-    `Complete field size is approximately ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm including a standard 20 mm visual gap.`,
+    `Complete field size is approximately ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm including the selected ${spec.gapMm} mm inter-module gap.`,
+    `Preferred installation: ${spec.placement} placement, ${spec.gutterClearanceMm} mm lower/gutter clearance, mounting system "${spec.mountingSystem}".`,
     `Before rendering, internally count the cells of the array row by row: ${spec.rows} × ${spec.columns} = ${spec.panelCount}.`,
     `After rendering, internally recount them. If there are not EXACTLY ${spec.panelCount} modules in EXACTLY ${spec.rows} rows and ${spec.columns} columns, correct the image before returning it.`,
     "Never add a partial, hidden, duplicate or decorative module. Never change the requested matrix to go around an obstacle.",
@@ -274,6 +297,8 @@ function promptForDp(dp: DirectDp, address: string, parcelReference: string | un
       "Your only physical modification is the photovoltaic array on the real target roof.",
       `Render exactly ${spec!.panelCount} modules in ${spec!.rows} × ${spec!.columns}. No extra module is allowed.`,
       `Respect the real module rectangle ${spec!.orientedPanelWidthMm} × ${spec!.orientedPanelHeightMm} mm and the complete field footprint ${spec!.fieldWidthMm} × ${spec!.fieldHeightMm} mm before roof-plane projection.`,
+      `Actively apply the saved installer preferences: ${spec!.placement} placement, ${spec!.gapMm} mm between modules, approximately ${spec!.gutterClearanceMm} mm preferred clearance from the lower roof edge/gutter, and mounting system "${spec!.mountingSystem}".`,
+      "The preferred gutter clearance may be reduced only when the full requested field otherwise cannot fit safely. Placement may shift only to avoid real obstacles or roof boundaries; do not silently ignore the preference for visual convenience.",
       "Use the real aerial roof perspective and choose the clearest physically plausible zone while preserving all visible roof obstacles.",
       "The chosen physical roof zone becomes the master placement reference for DP3 to DP6.",
       "Keep labels discreet. Never redraw the satellite surroundings.",
@@ -433,11 +458,11 @@ async function inspect(apiKey: string, dp: DirectDp, source: PiecePhotoInput, ge
     `Inspect generated planning piece DP${dp}. Image 1 is the real source; image 2 is the candidate; later images are accepted project references.`,
     "Judge the pixels, geometry and source correspondence. Do not accept a candidate merely because a caption claims the correct panel count, module dimensions or parcel reference.",
     parcelReference ? `Target cadastral parcel: ${parcelReference}.` : "",
-    spec ? `Locked project: EXACTLY ${spec.panelCount} modules, ${spec.rows} rows × ${spec.columns} columns, ${spec.orientation}; real module ${spec.moduleWidthMm} × ${spec.moduleHeightMm} mm; projected field originates from a ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm physical footprint.` : "",
+    spec ? `Locked project: EXACTLY ${spec.panelCount} modules, ${spec.rows} rows × ${spec.columns} columns, ${spec.orientation}; real module ${spec.moduleWidthMm} × ${spec.moduleHeightMm} mm; field ${spec.fieldWidthMm} × ${spec.fieldHeightMm} mm with ${spec.gapMm} mm gaps; preferred placement ${spec.placement}; preferred lower/gutter clearance ${spec.gutterClearanceMm} mm; mounting system ${spec.mountingSystem}.` : "",
     exactArrayRequired ? "Count every visible module in the photovoltaic array. If the exact count or exact matrix is uncertain, mark the candidate failed." : "",
     physicalModuleGeometryRequired ? `Check that modules behave as identical real rectangles with long/short ratio about ${spec!.panelLongShortRatio.toFixed(3)} before perspective, that the array scale is plausible for the roof, and that one coherent roof-plane projection is used. Obvious square tiles, individually stretched modules or arbitrary field scaling are failures.` : "",
     dp === 1 ? "DP1 must preserve cadastral geography and numbers and highlight only the target parcel using boundaries already present in the official source. A fabricated or guessed parcel contour is a failure." : "",
-    dp === 2 ? `DP2 must preserve the aerial property and surroundings AND place the array on the actual target building inside parcel ${parcelReference}. Equipping a neighboring building, crossing a parcel boundary or choosing the wrong roof is a failure.` : "",
+    dp === 2 ? `DP2 must preserve the aerial property and surroundings AND place the array on the actual target building inside parcel ${parcelReference}. Equipping a neighboring building, crossing a parcel boundary or choosing the wrong roof is a failure. The saved placement/gutter preferences should be visibly respected whenever physically compatible with the real roof and obstacles.` : "",
     dp === 3 ? "DP3 must be a genuine side architectural section perpendicular to the ridge, not a front elevation. Reject invented numeric building dimensions and invented architectural details. Do not fail DP3 merely because all project modules are not individually visible in the side cut; the total project count may be conveyed by annotation." : "",
     dp === 4 ? "DP4 must preserve the real source building in both initial/projected states; only the photovoltaic installation may differ. Count modules only on the projected state." : "",
     dp === 5 ? "DP5 may change camera viewpoint, but must preserve the same building identity, same DP2 project placement and physically credible module dimensions." : "",
@@ -525,7 +550,10 @@ async function inspect(apiKey: string, dp: DirectDp, source: PiecePhotoInput, ge
       `Rôle DP${dp} : ${roleOk ? "conforme" : "à corriger"}`,
       ...([2, 4, 6].includes(dp) ? [`Source réelle préservée : ${strictSourceOk ? "oui" : "non"}`] : []),
       ...(dp === 1 ? [`Parcelle cible : ${parcelOk ? "correcte" : "incorrecte"}`] : []),
-      ...(dp === 2 ? [`Bâtiment/parcelle cible : ${targetOk ? "corrects" : "à corriger"}`] : []),
+      ...(dp === 2 ? [
+        `Bâtiment/parcelle cible : ${targetOk ? "corrects" : "à corriger"}`,
+        `Préférences pose : ${spec!.placement}, jeu ${spec!.gapMm} mm, recul bas préféré ${spec!.gutterClearanceMm} mm`,
+      ] : []),
       ...(exactArrayRequired ? [
         `Panneaux : ${report.panelCountObserved ?? "?"}/${spec!.panelCount}`,
         `Matrice : ${report.rowsObserved ?? "?"} × ${report.columnsObserved ?? "?"} / ${spec!.rows} × ${spec!.columns}`,
@@ -595,9 +623,10 @@ export async function generatePreventiveDp(input: DpPieceInput & { dp: DirectDp 
           `DP${input.dp} générée par le moteur visuel PilotPaper`,
           input.dp <= 2 ? `Source IGN/cadastre officielle · parcelle ${ign?.parcelReference}` : "Source photographique réelle",
           input.dp >= 2 ? "Configuration photovoltaïque verrouillée avec dimensions fabricant réelles" : "DP1 sans insertion photovoltaïque",
+          input.dp >= 2 && spec ? `Préférences pose appliquées : ${spec.placement} · jeu ${spec.gapMm} mm · recul bas préféré ${spec.gutterClearanceMm} mm · ${spec.mountingSystem}` : "",
           references.length ? `Références projet : ${references.map((reference) => `DP${reference.dp}`).join(", ")}` : "Aucune reconstruction géométrique préalable",
           `Contrôle automatique préventif validé en ${attempt} tentative${attempt > 1 ? "s" : ""}`,
-        ],
+        ].filter(Boolean),
         inspector,
       };
     }
