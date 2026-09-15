@@ -20,17 +20,25 @@ test("DP route uses the deterministic Site Twin pipeline for DP2-DP6", async () 
   assert.doesNotMatch(route, /generatePreventiveDp|generateSpecializedDp3|generateSpecializedDp4/);
 });
 
-test("geometry-locked photographic insertion lets Image-2 render only exact PV islands", async () => {
+test("geometry-locked photographic insertion separates AI working halo from hard PV geometry", async () => {
   const renderer = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
+  const compositor = await source("lib/dp-ai-engine/utils/pngPixels.ts");
   const projection = await source("lib/site-twin-v2/geometryEngineClient.ts");
   const runtime = await source("geometry-engine/site_twin_projection_api.py");
   assert.match(renderer, /buildSiteTwinDocumentContext/);
   assert.match(renderer, /projectSiteTwinModulesToPhoto/);
   assert.match(renderer, /buildPanelIslandsMaskForPng/);
-  assert.match(renderer, /strictCompositePng/);
+  assert.match(renderer, /annotatePngWithPanelPolygons/);
+  assert.match(renderer, /geometryLockedCompositePng/);
+  assert.match(renderer, /AI_EDIT_PADDING/);
+  assert.match(renderer, /COMPOSITE_FEATHER_PIXELS/);
+  assert.match(renderer, /OUTSIDE_BLEND_MAX/);
   assert.match(renderer, /\/v1\/images\/edits/);
-  assert.match(renderer, /Everything outside the editable islands is immutable/);
+  assert.match(renderer, /Everything beyond the narrow edit halo is immutable/);
   assert.match(renderer, /changedIslandRatio/);
+  assert.match(compositor, /inside each exact projected module polygon/);
+  assert.match(compositor, /outsideBlendMax/);
+  assert.match(compositor, /every other source pixel remains byte-for-byte unchanged/);
   assert.match(projection, /\/v1\/site-twin\/project-modules/);
   assert.match(runtime, /register_images/);
   assert.match(runtime, /panelPolygonsNormalized/);
