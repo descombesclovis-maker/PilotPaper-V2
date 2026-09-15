@@ -7,12 +7,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const projectId = Number(url.searchParams.get("projectId"));
   if (!Number.isInteger(projectId) || projectId < 1) {
-    return Response.json({ error: "projectId OpenSolar invalide." }, { status: 400, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ error: "Identifiant de projet géométrique invalide." }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
 
   const config = getOpenSolarRuntimeConfig();
   if (!config.configured) {
-    return Response.json({ error: "OpenSolar n'est pas configuré sur ce poste." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ error: "Le moteur géométrique avancé n'est pas connecté sur ce poste." }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 
   try {
@@ -22,13 +22,13 @@ export async function GET(request: Request) {
     ]);
     const truth = extractOpenSolarProjectTruth({ projectId, project, systemDetails });
     return Response.json({
-      source: "opensolar-raw-data-poc",
+      source: "geometry-engine-raw-data",
       enabledForProduction: config.enabled,
       truth,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({
-      error: error instanceof Error ? error.message : "Lecture OpenSolar impossible.",
+      error: error instanceof Error ? error.message : "Lecture géométrique impossible.",
     }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }
