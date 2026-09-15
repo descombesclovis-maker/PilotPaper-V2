@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, FileText, Home, LockKeyhole, Menu, Settings2, Sparkles, X } from "lucide-react";
 import { PilotPaperMark, PilotPaperWordmark } from "@/components/pilotpaper-brand";
+import { PilotPaperUpdateButton } from "@/components/pilotpaper-update-button";
 import { ensureCompleteDossierRunning, listCompleteDossiers } from "@/lib/pilotpaper-complete-dossiers";
 import styles from "./pilotpaper-production-shell.module.css";
 
@@ -130,6 +131,7 @@ export function PilotPaperProductionShell({ children, fullDp = false }: { childr
       </aside>
 
       <div className={`${styles.content} ${fullDp ? styles.fullDp : ""}`}>{children}</div>
+      <PilotPaperUpdateButton />
       {mobileOpen ? <button className={styles.backdrop} type="button" onClick={() => setMobileOpen(false)} aria-label="Fermer le menu" /> : null}
     </div>
   );
