@@ -70,7 +70,7 @@ jobs:
       - name: Validate geometry engine modules
         shell: pwsh
         run: |
-          python -m py_compile geometry-engine/app.py geometry-engine/main.py geometry-engine/registration.py geometry-engine/photo_api.py geometry-engine/photogrammetry_api.py geometry-engine/run.py
+          python -m py_compile geometry-engine/app.py geometry-engine/main.py geometry-engine/registration.py geometry-engine/photo_api.py geometry-engine/photogrammetry_api.py geometry-engine/site_twin_projection_api.py geometry-engine/run.py
           if ($LASTEXITCODE -ne 0) { throw "Geometry Python syntax validation failed" }
 
       - name: Build embedded geometry engine
@@ -115,6 +115,9 @@ jobs:
                   if (-not ($health.capabilities -contains "metric-obstacles")) { throw "Metric obstacle capability missing" }
                   if (-not ($health.capabilities -contains "roof-edge-topology")) { throw "Roof edge topology capability missing" }
                   if (-not ($health.capabilities -contains "opencv-registration")) { throw "Photo registration capability missing" }
+                  if (-not ($health.capabilities -contains "site-twin-photo-projection")) { throw "Site Twin photo projection capability missing" }
+                  $openapi = Invoke-RestMethod -Uri "http://127.0.0.1:8765/openapi.json" -TimeoutSec 3
+                  if ($null -eq $openapi.paths.'/v1/site-twin/project-modules') { throw "Site Twin projection route is not packaged" }
                   $healthy = $true
                   break
                 }
