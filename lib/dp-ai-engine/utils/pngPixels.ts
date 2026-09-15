@@ -79,6 +79,69 @@ export function strictCompositePng(originalBase64:string,candidateBase64:string,
   return encodePng(a.width,a.height,out);
 }
 
+function distanceToSegmentPx(px:number,py:number,a:{x:number;y:number},b:{x:number;y:number}){
+  const dx=b.x-a.x,dy=b.y-a.y;
+  const length2=dx*dx+dy*dy;
+  if(length2<=1e-9)return Math.hypot(px-a.x,py-a.y);
+  const t=Math.max(0,Math.min(1,((px-a.x)*dx+(py-a.y)*dy)/length2));
+  return Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy));
+}
+
+/**
+ * Geometry-locked photovoltaic compositor.
+ * - inside each exact projected module polygon: the AI candidate is accepted fully;
+ * - outside the physical polygon: only a tiny feather ring is blended, capped at a low opacity,
+ *   so contact shadows / anti-aliasing can survive without allowing the module geometry to grow;
+ * - every other source pixel remains byte-for-byte unchanged.
+ */
+export function geometryLockedCompositePng(
+  originalBase64:string,
+  candidateBase64:string,
+  polygons:Point2D[][],
+  options:{featherPixels?:number;outsideBlendMax?:number}={},
+):string{
+  const source=decodePng(originalBase64),candidate=decodePng(candidateBase64);
+  const candidateRgba=candidatePixelsAtSourceSize(source,candidate);
+  const featherPixels=Math.max(0,Math.min(12,options.featherPixels??4));
+  const outsideBlendMax=Math.max(0,Math.min(.35,options.outsideBlendMax??.20));
+  const alpha=new Uint8Array(source.width*source.height);
+
+  for(const polygon of polygons){
+    if(polygon.length<3)continue;
+    const pxPoly=polygon.map(p=>({x:p.x*source.width,y:p.y*source.height}));
+    const xs=pxPoly.map(p=>p.x),ys=pxPoly.map(p=>p.y);
+    const x0=Math.max(0,Math.floor(Math.min(...xs)-featherPixels-1));
+    const x1=Math.min(source.width-1,Math.ceil(Math.max(...xs)+featherPixels+1));
+    const y0=Math.max(0,Math.floor(Math.min(...ys)-featherPixels-1));
+    const y1=Math.min(source.height-1,Math.ceil(Math.max(...ys)+featherPixels+1));
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const px=x+.5,py=y+.5,index=y*source.width+x;
+      if(inside(px,py,pxPoly)){
+        alpha[index]=255;
+        continue;
+      }
+      if(featherPixels<=0)continue;
+      let distance=Number.POSITIVE_INFINITY;
+      for(let i=0;i<pxPoly.length;i++)distance=Math.min(distance,distanceToSegmentPx(px,py,pxPoly[i]!,pxPoly[(i+1)%pxPoly.length]!));
+      if(distance>featherPixels)continue;
+      const weight=outsideBlendMax*(1-distance/featherPixels);
+      alpha[index]=Math.max(alpha[index]!,Math.round(255*weight));
+    }
+  }
+
+  const out=new Uint8Array(source.rgba);
+  for(let pixel=0;pixel<alpha.length;pixel++){
+    const amount=alpha[pixel]!/255;
+    if(amount<=0)continue;
+    const offset=pixel*4;
+    for(let channel=0;channel<3;channel++){
+      out[offset+channel]=Math.round(source.rgba[offset+channel]!*(1-amount)+candidateRgba[offset+channel]!*amount);
+    }
+    out[offset+3]=source.rgba[offset+3]!;
+  }
+  return encodePng(source.width,source.height,out);
+}
+
 /** Crop a PNG around the union of normalized polygons, with normalized image margin. */
 export function cropPngAroundPolygons(base64:string,polygons:Point2D[][],marginNormalized=.06):string{
   const src=decodePng(base64);if(!polygons.length)throw new Error("Cannot crop without polygons.");
