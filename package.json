@@ -14,7 +14,8 @@
     "pilotpaper:start:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-pilotpaper.ps1",
     "pilotpaper:restart:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-pilotpaper.ps1",
     "pilotpaper:validate:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-pilotpaper-validation.ps1",
-    "ai:configure:windows": "powershell -ExecutionPolicy Bypass -File scripts/configure-openai.ps1"
+    "ai:configure:windows": "powershell -ExecutionPolicy Bypass -File scripts/configure-openai.ps1",
+    "opensolar:configure:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-opensolar.ps1"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
