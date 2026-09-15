@@ -1,23 +1,19 @@
 import { generateDpPiece } from "@/lib/dp-piece-engine";
 import { generateOfficialDp1 } from "@/lib/pilotpaper-dp1-generator";
-import { generateSpecializedDp4 } from "@/lib/pilotpaper-dp4-generator";
 import { pilotPaperRunVisualJob } from "@/lib/pilotpaper-openai-resilience";
 import { generateDiagnosticFallback } from "@/lib/pilotpaper-diagnostic-fallback";
 import { generateDeterministicSiteTwinPiece } from "@/lib/site-twin-v2/dpPieceBridge";
 import { generateDeterministicDp2 } from "@/lib/site-twin-v2/constrainedDp2";
+import { generateGeometryLockedDp4 } from "@/lib/site-twin-v2/constrainedDp4";
 import { generateGeometryLockedPhotographicDp } from "@/lib/site-twin-v2/constrainedPhotographicDp";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
 
 export const dynamic = "force-dynamic";
 
 async function generateVisualPiece(input: DpPieceInput): Promise<DpPieceOutput> {
-  if (input.dp === 2) {
-    return generateDeterministicDp2(input as DpPieceInput & { dp: 2 });
-  }
-  if (input.dp === 3) {
-    return generateDeterministicSiteTwinPiece(input as DpPieceInput & { dp: 3 });
-  }
-  if (input.dp === 4) return generateSpecializedDp4(input as DpPieceInput & { dp: 4 });
+  if (input.dp === 2) return generateDeterministicDp2(input as DpPieceInput & { dp: 2 });
+  if (input.dp === 3) return generateDeterministicSiteTwinPiece(input as DpPieceInput & { dp: 3 });
+  if (input.dp === 4) return generateGeometryLockedDp4(input as DpPieceInput & { dp: 4 });
   if (input.dp === 5 || input.dp === 6) {
     return generateGeometryLockedPhotographicDp(input as DpPieceInput & { dp: 5 | 6 });
   }
@@ -30,8 +26,6 @@ async function generatePiece(input: DpPieceInput): Promise<DpPieceOutput> {
     try {
       return await pilotPaperRunVisualJob(`DP${input.dp}`, () => generateVisualPiece(input));
     } catch (error) {
-      // TEST / NON VALIDÉ: failed candidates remain visible as diagnostics,
-      // but never count as a validated planning piece.
       if (input.testMode !== false) return generateDiagnosticFallback(input, error);
       throw error;
     }
@@ -54,7 +48,7 @@ export async function POST(request: Request) {
           : result.dp === 3
             ? "site-twin-vector-section"
             : result.dp === 4
-              ? "pilotpaper-dp4-specialized"
+              ? "site-twin-before-after-composition"
               : result.dp === 5 || result.dp === 6
                 ? "site-twin-masked-photorealistic"
                 : "original-photo";
