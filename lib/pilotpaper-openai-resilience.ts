@@ -79,6 +79,16 @@ function isRetryableStatus(status: number) {
   return status === 408 || status === 409 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
+function isTransientVisualError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  if (message.includes("quota de génération api insuffisant")) return false;
+  return message.includes("(429)") ||
+    message.includes("temporairement saturé") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests");
+}
+
 export type PilotPaperOpenAiRequestOptions = {
   label: string;
   imageGeneration?: boolean;
@@ -133,4 +143,26 @@ export async function pilotPaperOpenAiRequest(
 
   const detail = lastError.code || lastError.type || String(lastStatus ?? "inconnu");
   throw new Error(`${options.label} indisponible (${detail}).`);
+}
+
+/**
+ * Protects the whole visual DP job against transient 429s produced anywhere in the generator
+ * (image generation or inspector). Jobs can still overlap, but their starts are staggered.
+ */
+export async function pilotPaperRunVisualJob<T>(label: string, task: () => Promise<T>, maxAttempts = 4): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await waitForImageStartSlot();
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientVisualError(error)) throw error;
+      if (attempt === maxAttempts) {
+        throw new Error(`${label} : limite temporaire du moteur visuel toujours active après ${maxAttempts} reprises automatiques. Réessayez dans quelques minutes.`);
+      }
+      await sleep(Math.min(MAX_BACKOFF_MS, 10_000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 2_000)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${label} indisponible.`);
 }
