@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, FileText, Home, LockKeyhole, Menu, Settings2, Sparkles, X } from "lucide-react";
 import { PilotPaperMark, PilotPaperWordmark } from "@/components/pilotpaper-brand";
+import { ensureCompleteDossierRunning, listCompleteDossiers } from "@/lib/pilotpaper-complete-dossiers";
 import styles from "./pilotpaper-production-shell.module.css";
 
 export const BRANDING_STORAGE_KEY = "pilotpaper-production-branding";
@@ -64,6 +65,14 @@ export function PilotPaperProductionShell({ children, fullDp = false }: { childr
       window.removeEventListener("pilotpaper-branding-updated", handler);
       window.removeEventListener("storage", handler);
     };
+  }, []);
+
+  useEffect(() => {
+    void listCompleteDossiers().then((records) => {
+      for (const record of records) {
+        if (record.status === "queued" || record.status === "generating") void ensureCompleteDossierRunning(record.id);
+      }
+    }).catch(() => undefined);
   }, []);
 
   useEffect(() => setMobileOpen(false), [pathname]);
