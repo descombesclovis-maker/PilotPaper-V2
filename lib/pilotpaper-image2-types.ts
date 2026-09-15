@@ -30,6 +30,7 @@ export type DpPieceInput = {
   roofSlopeDeg?: number;
   gutterClearanceMm?: number;
   interPanelGapMm?: number;
+  mountingSystem?: string;
   photos?: PiecePhotoInput[];
   references?: VisualReference[];
 };
