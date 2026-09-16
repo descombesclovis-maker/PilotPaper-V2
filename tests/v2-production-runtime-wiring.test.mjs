@@ -45,3 +45,12 @@ test("installed V2 preserves geometry receipts and vector references through the
   assert.match(geometryMain, /unary_union/);
   assert.match(geometryMain, /target\.covers\(Point\(x, y\)\)/);
 });
+
+test("installed DP route dispatches every V2 geometry piece to the new deterministic chain", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+
+  assert.match(route, /input\.dp === 2[\s\S]*generateDeterministicDp2/);
+  assert.match(route, /input\.dp === 3[\s\S]*generateDeterministicSiteTwinPiece/);
+  assert.match(route, /input\.dp === 4[\s\S]*generateGeometryLockedDp4/);
+  assert.match(route, /input\.dp === 5 \|\| input\.dp === 6[\s\S]*generateGeometryLockedPhotographicDp/);
+});
