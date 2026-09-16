@@ -136,11 +136,15 @@ export type SiteTwinSources = {
   google3dTilesReference?: string;
   photogrammetryReference?: string;
   geometryEngineVersion?: string;
+  geometryEngineChecked?: boolean;
   geometryPrimarySource?: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry" | "advanced-roof-model";
+  advancedRoofAttempted?: boolean;
+  advancedRoofAvailable?: boolean;
   advancedRoofProjectId?: number;
   advancedRoofFacetCount?: number;
   advancedRoofAutoDesignAvailable?: boolean;
   advancedRoofCrossCheck?: SiteTwinRoofCrossCheck;
+  builtAt?: string;
 };
 
 export type SiteTwin = {
