@@ -31,10 +31,15 @@ test("DP2 and photo projection share the same exact local-to-geographic transfor
   assert.match(renderer, /modulePolygonsLonLat/);
   assert.match(client, /modulePolygonsLonLat: TwinLonLat\[\]\[\]/);
   assert.match(client, /module_polygons_lonlat/);
+  assert.match(client, /reference_crs/);
+  assert.match(client, /reference_bbox/);
   assert.doesNotMatch(client, /origin_lon|origin_lat/);
 
   assert.match(runtime, /_module_polygons_lonlat/);
-  assert.match(runtime, /Transformer\.from_crs\("EPSG:4326", dataset\.crs, always_xy=True\)/);
+  assert.match(runtime, /reference_crs = dataset\.crs if dataset is not None else explicit_crs/);
+  assert.match(runtime, /Transformer\.from_crs\("EPSG:4326", reference_crs, always_xy=True\)/);
+  assert.match(runtime, /pixel_x = \(\(float\(ref_x\) - min_x\) \/ \(max_x - min_x\)\) \* explicit_width/);
+  assert.match(runtime, /pixel_y = \(\(max_y - float\(ref_y\)\) \/ \(max_y - min_y\)\) \* explicit_height/);
   assert.match(runtime, /module_polygons_lonlat: str = Form/);
   assert.doesNotMatch(runtime, /_local_to_lonlat/);
   assert.doesNotMatch(runtime, /111_320|110_540|origin_lon|origin_lat/);
