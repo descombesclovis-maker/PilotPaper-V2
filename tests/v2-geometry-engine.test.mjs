@@ -31,19 +31,32 @@ test("V2 reuses one deterministic remote project per normalized address", async 
 test("V2 advanced roof evidence is consumed by the canonical Site Twin pan-by-pan", async () => {
   const resolver = await source("lib/geometry/advanced-roof-truth.ts");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  const crossCheck = await source("lib/site-twin-v2/advancedRoofCrossCheck.ts");
   const policy = await source("lib/site-twin-v2/policy.ts");
+
   assert.match(resolver, /export type AdvancedRoofFacet/);
   assert.match(resolver, /slopeDeg/);
   assert.match(resolver, /azimuthDeg/);
   assert.match(resolver, /areaM2/);
+
   assert.match(builder, /resolveAdvancedRoofTruth/);
-  assert.match(builder, /compareAdvancedFacets/);
-  assert.match(builder, /Δazimut/);
-  assert.match(builder, /Δpente/);
-  assert.match(builder, /Δsurface/);
-  assert.match(builder, /advanced-roof-model/);
-  assert.match(policy, /assertIndependentRoofCrossCheck/);
-  assert.match(policy, /conflicts\.length > agreements\.length/);
+  assert.match(builder, /compareAdvancedFacets\(geometry\.faces, advancedRoof\.facets\)/);
+  assert.match(builder, /advancedRoofCrossCheck: advancedComparison\.crossCheck/);
+
+  assert.match(crossCheck, /azimuthDeltaDeg/);
+  assert.match(crossCheck, /slopeDeltaDeg/);
+  assert.match(crossCheck, /areaRelativeError/);
+  assert.match(crossCheck, /azimuthDelta <= 15/);
+  assert.match(crossCheck, /slopeDelta <= 7/);
+  assert.match(crossCheck, /areaRelativeError <= 0\.30/);
+  assert.match(crossCheck, /status: best\.close \? "agreement" : "conflict"/);
+  assert.match(crossCheck, /Δazimut/);
+  assert.match(crossCheck, /Δpente/);
+  assert.match(crossCheck, /Δsurface/);
+
+  assert.match(policy, /twin\.sources\.advancedRoofCrossCheck/);
+  assert.match(policy, /structured\.blockingConflict/);
+  assert.match(policy, /comparisons: structured\.comparisons/);
   assert.match(policy, /refuse de choisir silencieusement entre deux géométries/);
 });
 
