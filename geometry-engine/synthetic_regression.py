@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from pyproj import CRS
+from pyproj import CRS, Transformer
 from shapely.geometry import Polygon
 
 from main import _result
+from site_twin_projection_api import _project_reference_pixels
 
 CENTER_X = 850_000.0
 CENTER_Y = 6_560_000.0
@@ -37,6 +38,40 @@ def build_points() -> np.ndarray:
                 z += 0.52 + float(rng.normal(0, 0.01))
             rows.append([CENTER_X + float(x), CENTER_Y + float(y), z])
     return np.asarray(rows, dtype=np.float64)
+
+
+def assert_explicit_reference_projection() -> None:
+    """Prove the IGN WMS PNG+BBOX path maps geographic corners to deterministic pixels."""
+    crs = CRS.from_epsg(3857)
+    to_lonlat = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    min_x, min_y, max_x, max_y = 500_000.0, 5_700_000.0, 500_160.0, 5_700_160.0
+    width = height = 1600
+
+    # One 20 m × 10 m synthetic quadrilateral inside the reference raster.
+    metric = [
+        (500_040.0, 5_700_120.0),
+        (500_060.0, 5_700_120.0),
+        (500_060.0, 5_700_110.0),
+        (500_040.0, 5_700_110.0),
+    ]
+    geographic = [[to_lonlat.transform(x, y) for x, y in metric]]
+    projected = _project_reference_pixels(
+        geographic,
+        explicit_crs=crs,
+        explicit_bbox=(min_x, min_y, max_x, max_y),
+        explicit_width=width,
+        explicit_height=height,
+    )
+    if len(projected) != 1 or projected[0].shape != (4, 2):
+        raise AssertionError(f"Explicit raster projection returned an invalid polygon: {projected}")
+    expected = np.asarray([
+        [400.0, 400.0],
+        [600.0, 400.0],
+        [600.0, 500.0],
+        [400.0, 500.0],
+    ], dtype=np.float32)
+    if not np.allclose(projected[0], expected, atol=0.75):
+        raise AssertionError(f"Explicit raster georeferencing mismatch: {projected[0]} != {expected}")
 
 
 def main() -> None:
@@ -97,12 +132,15 @@ def main() -> None:
     if not any("Topologie analytique" in str(item) for item in diagnostics):
         raise AssertionError(f"Analytic topology refinement did not run: {diagnostics}")
 
+    assert_explicit_reference_projection()
+
     print(
         "Synthetic geometry regression passed:",
         f"faces={len(faces)}",
         f"ridge={ridge_length:.2f}m",
         f"obstacles={len(obstacles)}",
         f"confidence={confidence:.3f}",
+        "explicit-raster-projection=ok",
     )
 
 
