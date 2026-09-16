@@ -1,0 +1,37 @@
+{
+  "name": "pilotpaper-v1-macos-shell",
+  "version": "0.4.3",
+  "private": true,
+  "main": "main.cjs",
+  "build": {
+    "appId": "fr.pilotpaper.v1",
+    "productName": "PilotPaper V1",
+    "electronVersion": "33.4.11",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "key-preload.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "payload/app-template",
+        "to": "app-template"
+      }
+    ],
+    "directories": {
+      "output": "../../desktop-output-macos"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "public.app-category.business",
+      "minimumSystemVersion": "11.0",
+      "identity": null
+    }
+  }
+}
