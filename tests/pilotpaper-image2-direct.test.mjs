@@ -81,7 +81,7 @@ test("DP3 is a metric vector section perpendicular to a proven ridge, not an AI-
   assert.match(renderer, /Coupe A-A perpendiculaire au faîtage/);
   assert.match(renderer, /terrainElevationM/);
   assert.match(renderer, /context\.layout\.modules/);
-  assert.match(renderer, /aucune cote architecturale inventée/);
+  assert.match(renderer, /aucune épaisseur de fixation ni hauteur de surimposition non vérifiée n'est cotée/);
   assert.doesNotMatch(renderer, /OPENAI_API_KEY|gpt-image|\/v1\/images/);
 });
 
@@ -92,7 +92,7 @@ test("DP4 is composed from the immutable real photo and the same geometry-locked
   assert.match(generator, /generateGeometryLockedPhotographicDp/);
   assert.match(generator, /ÉTAT INITIAL/);
   assert.match(generator, /ÉTAT PROJETÉ/);
-  assert.match(generator, /Pixels hors champ photovoltaïque sont restaurés/);
+  assert.match(generator, /pixels hors champ photovoltaïque sont restaurés/i);
   assert.match(generator, /Mise en page état initial \/ état projeté réalisée par PilotPaper/);
   assert.doesNotMatch(route, /generateSpecializedDp4/);
 });
@@ -102,7 +102,7 @@ test("DP5 and DP6 keep geometry fixed while visual QA may retry panel material o
   const generator = await source("lib/site-twin-v2/constrainedPhotographicDp.ts");
   assert.match(route, /generateGeometryLockedPhotographicDp/);
   assert.match(generator, /MAX_VISUAL_ATTEMPTS = 3/);
-  assert.match(generator, /geometry remains locked/);
+  assert.match(generator, /same immutable islands/);
   assert.match(generator, /Improve only panel material, reflections, local lighting, contact shadows and edge integration/);
   assert.match(generator, /Do not alter geometry or module locations/);
   assert.match(generator, /judge\.score >= 0\.88/);
