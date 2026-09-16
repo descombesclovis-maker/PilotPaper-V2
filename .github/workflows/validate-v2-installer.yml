@@ -163,6 +163,14 @@ jobs:
             Write-Host "Installed Geometry Engine passed health and projection-route validation."
           } finally {
             if (-not $engine.HasExited) { Stop-Process -Id $engine.Id -Force -ErrorAction SilentlyContinue }
+            Get-Process -Name "PilotPaperGeometryEngine" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            for ($i = 0; $i -lt 30; $i++) {
+              if (-not (Get-Process -Name "PilotPaperGeometryEngine" -ErrorAction SilentlyContinue)) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (Get-Process -Name "PilotPaperGeometryEngine" -ErrorAction SilentlyContinue) {
+              throw "Installed Geometry Engine process tree did not stop cleanly"
+            }
           }
 
       - name: Uninstall V2 silently and verify cleanup
@@ -170,11 +178,19 @@ jobs:
         shell: pwsh
         run: |
           if (-not $env:PILOTPAPER_INSTALLED_DIR) { exit 0 }
+          Get-Process -Name "PilotPaperGeometryEngine" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           $uninstaller = Join-Path $env:PILOTPAPER_INSTALLED_DIR "unins000.exe"
           if (-not (Test-Path $uninstaller)) { throw "Installed uninstaller is missing" }
           $process = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "PilotPaper V2 uninstaller exited with code $($process.ExitCode)" }
-          Start-Sleep -Seconds 2
+          for ($i = 0; $i -lt 30; $i++) {
+            $remaining = @(
+              (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PilotPaper-V2.exe"),
+              (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/PilotPaperGeometryEngine.exe")
+            ) | Where-Object { Test-Path $_ }
+            if ($remaining.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+          }
           foreach ($path in @(
             (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PilotPaper-V2.exe"),
             (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/PilotPaperGeometryEngine.exe")
