@@ -288,7 +288,10 @@ async function runJob(id: string) {
         record.error = undefined;
       } else {
         const failed = PIECES.filter((dp) => record.pieces[dp].status === "error");
-        record.error = `Dossier incomplet : ${completedCount}/8 pièces produites. Échec réel sur ${failed.map((dp) => `DP${dp}`).join(", ") || "une pièce"}.`;
+        const details = failed
+          .map((dp) => `DP${dp} : ${record.pieces[dp].error || "échec sans détail"}`)
+          .join(" · ");
+        record.error = `Dossier incomplet : ${completedCount}/8 pièces produites.${details ? ` ${details}` : ""}`;
       }
     });
   } finally {
