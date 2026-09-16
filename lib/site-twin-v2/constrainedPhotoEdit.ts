@@ -31,6 +31,8 @@ const LOCAL_CROP_MIN_MARGIN_PX = 72;
 const LOCAL_RENDER_LONG_EDGE_PX = 2048;
 const MIN_AGGREGATE_PANEL_CHANGE_RATIO = 0.15;
 const MIN_SINGLE_PANEL_CHANGE_RATIO = 0.08;
+const MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_EDIT_MASK_BYTES = 4 * 1024 * 1024;
 
 type Point = { x: number; y: number };
 type CropRegion = {
@@ -314,6 +316,10 @@ function assertProjectionUsable(args: {
 }
 
 function assertMaskUsable(maskBase64: string, crop: CropRegion) {
+  const maskBytes = Buffer.from(maskBase64, "base64");
+  if (maskBytes.length > MAX_EDIT_MASK_BYTES) {
+    throw new Error(`Le masque photovoltaïque dépasse la limite de 4 Mo (${(maskBytes.length / 1024 / 1024).toFixed(2)} Mo).`);
+  }
   const mask = decodePng(maskBase64);
   if (mask.width !== crop.width || mask.height !== crop.height) {
     throw new Error("Le masque d'édition ne correspond pas exactement au crop photovoltaïque.");
@@ -499,6 +505,10 @@ export async function renderGeometryLockedPhotoInsertion(args: {
 
   const crop = cropAroundPanelField(projection.photoBase64, polygons);
   const geometryGuide = annotatePngWithPanelPolygons(crop.pngBase64, crop.polygonsNormalized);
+  const geometryGuideBytes = Buffer.from(geometryGuide, "base64");
+  if (geometryGuideBytes.length > MAX_EDIT_IMAGE_BYTES) {
+    throw new Error(`Le crop photovoltaïque dépasse la limite image de 50 Mo (${(geometryGuideBytes.length / 1024 / 1024).toFixed(2)} Mo).`);
+  }
   const mask = buildPanelIslandsMaskForPng(crop.pngBase64, crop.polygonsNormalized, AI_EDIT_PADDING);
   if (!mask) throw new Error("Le masque géométrique des panneaux n'a pas pu être construit.");
   assertMaskUsable(mask, crop);
@@ -510,7 +520,8 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   form.set("quality", "high");
   form.set("size", outputSize);
   form.set("output_format", "png");
-  form.append("image[]", base64ToBlob(geometryGuide, "image/png"), "geometry-locked-pv-crop.png");
+  form.set("input_fidelity", "high");
+  form.set("image", base64ToBlob(geometryGuide, "image/png"), "geometry-locked-pv-crop.png");
   form.set("mask", base64ToBlob(mask, "image/png"), "panel-islands-mask.png");
 
   const response = await fetch("https://api.openai.com/v1/images/edits", {
