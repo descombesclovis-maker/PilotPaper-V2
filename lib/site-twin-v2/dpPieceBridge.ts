@@ -23,6 +23,12 @@ function finite(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function requiresFreshSiteTwin(input: Pick<DpPieceInput, "dp" | "references">) {
+  if (input.dp === 2) return true;
+  if (input.dp < 3 || input.dp > 6) return false;
+  return !(input.references ?? []).some((reference) => reference.dp === 2 && Boolean(reference.geometryReceipt));
+}
+
 function point(point: { x: number; y: number }) {
   return `(${point.x.toFixed(2)},${point.y.toFixed(2)})`;
 }
@@ -44,6 +50,24 @@ function assertReferenceGeometry(input: DpPieceInput, context: SiteTwinDocumentC
   }
 }
 
+function assertMandatoryEnginesWereExecuted(context: SiteTwinDocumentContext) {
+  const sources = context.siteTwin.sources;
+  if (sources.geometryEngineChecked !== true || !sources.geometryEngineVersion) {
+    throw new SiteTwinError(
+      "GEOMETRY_RECONSTRUCTION_FAILED",
+      "Le Site Twin ne prouve pas l'exécution du moteur géométrique local. La pièce est refusée.",
+      { recoverable: true },
+    );
+  }
+  if (sources.advancedRoofAttempted !== true) {
+    throw new SiteTwinError(
+      "SOURCE_CONFLICT",
+      "Le contrôle géométrique indépendant n'a pas été exécuté pour cette génération. La pièce est refusée.",
+      { recoverable: true },
+    );
+  }
+}
+
 export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise<SiteTwinDocumentContext> {
   const address = input.address?.trim() ?? "";
   if (address.length < 8) throw new Error("Adresse exacte requise pour construire le Site Twin métrique.");
@@ -56,7 +80,7 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
     throw new Error(`${rows} × ${columns} ne correspond pas à ${panelCount} panneaux.`);
   }
 
-  const twin = await getOrBuildSiteTwin(address);
+  const twin = await getOrBuildSiteTwin(address, { force: requiresFreshSiteTwin(input) });
   const layout = buildPvLayout({
     twin,
     configuration: {
@@ -73,6 +97,7 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
     },
   });
   const context = createDocumentContext(twin, layout);
+  assertMandatoryEnginesWereExecuted(context);
   assertReferenceGeometry(input, context);
   return context;
 }
@@ -100,7 +125,7 @@ export function siteTwinVisualConstraintPrompt(context: SiteTwinDocumentContext)
     ...moduleRows,
     advanced
       ? `Independent advanced roof model also reports ${advanced} roof facet(s). Use it only as a cross-check; the PilotPaper metric layout above remains the coordinate authority.`
-      : "No independent advanced roof facet count is currently available; do not invent one.",
+      : "The independent roof cross-check was executed but did not return a usable facet count; do not invent one.",
     "These XY coordinates are metric roof-local coordinates, NOT image pixels. Preserve their topology, count, relative spacing and one-plane relationship when projecting onto the supplied photograph/aerial image.",
     "Do not let visual convenience override this layout. If the image evidence conflicts with the metric lock, preserve the real building and flag/correct the projection rather than changing panel count, matrix, module size or roof plane.",
   ].join("\n");
@@ -144,6 +169,8 @@ function svgOutput(args: {
     text: args.svg,
     sourceSummary: [
       `DP${args.dp} calculée depuis le Site Twin métrique ${args.context.siteTwin.id} rev. ${args.context.siteTwin.revision}.`,
+      `Moteur géométrique exécuté : ${args.context.siteTwin.sources.geometryEngineVersion ?? "preuve absente"}.`,
+      `Contrôle géométrique indépendant exécuté : ${args.context.siteTwin.sources.advancedRoofAvailable ? "source exploitable" : "source non exploitable, diagnostic conservé"}.`,
       `Empreinte géométrique : ${args.context.layoutDigest.slice(0, 16)}.`,
       `${args.context.layout.modules.length} panneaux positionnés par calcul déterministe sur le pan ${face?.displayLabel ?? face?.id ?? "sélectionné"}.`,
       `Pente ${face?.slopeDeg.toFixed(1) ?? "?"}° · azimut ${face?.azimuthDeg.toFixed(1) ?? "?"}° · recul bas résolu ${eligibility?.resolvedGutterClearanceMm ?? args.context.layout.configuration.preferredGutterClearanceMm} mm.`,
@@ -157,6 +184,8 @@ function svgOutput(args: {
         `Empreinte exacte : ${args.context.layoutDigest.slice(0, 16)}`,
         `Quantité exacte : ${args.context.layout.modules.length}/${args.context.layout.configuration.panelCount}`,
         `Pan physique verrouillé : ${face?.displayLabel ?? face?.id ?? "oui"}`,
+        "Moteur géométrique exécuté : oui",
+        "Contrôle géométrique indépendant exécuté : oui",
         "Coordonnées des modules déterministes : oui",
       ],
       issues: [],
