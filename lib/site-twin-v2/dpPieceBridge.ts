@@ -23,10 +23,20 @@ function finite(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-export function requiresFreshSiteTwin(input: Pick<DpPieceInput, "dp" | "references">) {
-  if (input.dp === 2) return true;
-  if (input.dp < 3 || input.dp > 6) return false;
-  return !(input.references ?? []).some((reference) => reference.dp === 2 && Boolean(reference.geometryReceipt));
+export function requiresFreshSiteTwin(input: Pick<DpPieceInput, "dp">) {
+  return input.dp === 2;
+}
+
+function requireMasterDp2Reference(input: DpPieceInput) {
+  if (input.dp < 3 || input.dp > 6) return;
+  const dp2Reference = (input.references ?? []).find((reference) => reference.dp === 2);
+  if (!dp2Reference?.geometryReceipt) {
+    throw new SiteTwinError(
+      "CROSS_PIECE_INCONSISTENCY",
+      "DP2 n'a pas produit d'empreinte géométrique V2 valide. PilotPaper refuse de reconstruire une autre géométrie pour DP3–DP6 : régénérez DP2 avant de poursuivre le dossier.",
+      { recoverable: true },
+    );
+  }
 }
 
 function point(point: { x: number; y: number }) {
@@ -37,17 +47,6 @@ function assertReferenceGeometry(input: DpPieceInput, context: SiteTwinDocumentC
   const references = input.references ?? [];
   const receipts = references.flatMap((reference) => reference.geometryReceipt ? [reference.geometryReceipt] : []);
   if (receipts.length) assertPiecesShareContext(context, receipts);
-
-  if (input.dp >= 3 && input.dp <= 6) {
-    const dp2Reference = references.find((reference) => reference.dp === 2);
-    if (dp2Reference && !dp2Reference.geometryReceipt) {
-      throw new SiteTwinError(
-        "CROSS_PIECE_INCONSISTENCY",
-        "La référence DP2 ne contient pas d'empreinte géométrique V2. Régénérez DP2 avant de poursuivre le dossier.",
-        { recoverable: true },
-      );
-    }
-  }
 }
 
 function assertMandatoryEnginesWereExecuted(context: SiteTwinDocumentContext) {
@@ -80,6 +79,10 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
     throw new Error(`${rows} × ${columns} ne correspond pas à ${panelCount} panneaux.`);
   }
 
+  // DP2 is the geometry gate for one dossier generation. It rebuilds the Site Twin
+  // and executes all mandatory geometry sources once. DP3-DP6 must reuse exactly
+  // that locked context and are never allowed to silently start another geometry.
+  requireMasterDp2Reference(input);
   const twin = await getOrBuildSiteTwin(address, { force: requiresFreshSiteTwin(input) });
   const layout = buildPvLayout({
     twin,
