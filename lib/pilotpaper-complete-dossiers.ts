@@ -234,7 +234,6 @@ async function runPiece(id: string, dp: DPNumber) {
       mountingSystem: current.project.mountingSystem,
       photos: projectPhotos(current),
       references,
-      testMode: true,
     }),
   });
   const body = await response.json().catch(() => null) as DpPieceOutput | { error?: string } | null;
@@ -252,9 +251,6 @@ async function runPiece(id: string, dp: DPNumber) {
   await mutateRecord(id, (record) => {
     record.pieces[dp] = { status: "done", result: body, finishedAt: Date.now() };
     record.activeDps = [];
-    if (!body.inspector.passed) {
-      record.error = `DP${dp} produite en mode diagnostic : résultat à corriger, conservé pour analyse.`;
-    }
   });
   return body;
 }
@@ -270,13 +266,14 @@ async function runJob(id: string) {
     });
 
     // EXACTEMENT le même chemin logique que K-par-k : DP1 → DP2 → ... → DP8.
-    // Les références sont calculées par la même source de vérité partagée.
+    // Une erreur réelle reste une erreur : le mode production ne fabrique plus
+    // de faux succès diagnostic à partir des photos sources.
     for (const dp of PIECES) {
       try {
         await runPiece(id, dp);
       } catch {
-        // En mode test, on poursuit vers la pièce suivante quand c'est techniquement possible.
-        // Une pièce sans résultat ne sera simplement pas disponible comme référence.
+        // DP7/DP8 et les pièces indépendantes peuvent encore être produites.
+        // Les pièces dépendantes sans référence resteront explicitement en erreur.
       }
     }
 
@@ -288,12 +285,10 @@ async function runJob(id: string) {
       record.activeDps = [];
       record.status = allProduced ? "ready" : "error";
       if (allProduced) {
-        const rejected = PIECES.filter((dp) => record.pieces[dp].result && !record.pieces[dp].result!.inspector.passed);
-        record.error = rejected.length
-          ? `Dossier test produit avec ${rejected.length} pièce${rejected.length > 1 ? "s" : ""} à corriger : ${rejected.map((dp) => `DP${dp}`).join(", ")}.`
-          : undefined;
+        record.error = undefined;
       } else {
-        record.error = `Dossier test incomplet : ${completedCount}/8 pièces produites. Les sorties disponibles sont conservées pour diagnostic.`;
+        const failed = PIECES.filter((dp) => record.pieces[dp].status === "error");
+        record.error = `Dossier incomplet : ${completedCount}/8 pièces produites. Échec réel sur ${failed.map((dp) => `DP${dp}`).join(", ") || "une pièce"}.`;
       }
     });
   } finally {
