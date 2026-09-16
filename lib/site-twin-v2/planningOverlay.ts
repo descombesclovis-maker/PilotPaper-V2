@@ -23,6 +23,16 @@ function pointSegmentDistance(x: number, y: number, a: PixelPoint, b: PixelPoint
   return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
 }
 
+function polygonArea(polygon: PixelPoint[]) {
+  let twiceArea = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const a = polygon[index]!;
+    const b = polygon[(index + 1) % polygon.length]!;
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
 /**
  * Planning-plan renderer: the aerial photograph remains untouched outside the
  * exact module polygons. Each physical module receives its own visible border,
@@ -31,19 +41,32 @@ function pointSegmentDistance(x: number, y: number, a: PixelPoint, b: PixelPoint
  */
 export function overlayPlanningPanelsPng(base64: string, polygons: Point[][]) {
   const image = decodePng(base64);
+  if (image.width < 320 || image.height < 240) {
+    throw new Error(`DP2 : fond cartographique trop petit (${image.width}×${image.height}).`);
+  }
   const out = new Uint8Array(image.rgba);
-  for (const polygon of polygons) {
+  for (let polygonIndex = 0; polygonIndex < polygons.length; polygonIndex += 1) {
+    const polygon = polygons[polygonIndex]!;
     if (polygon.length !== 4) throw new Error("Le plan de masse exige quatre coins projetés par module.");
+    if (polygon.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+      throw new Error(`DP2 : coordonnées non finies pour le module ${polygonIndex + 1}.`);
+    }
     const px = polygon.map((point) => ({ x: point.x * image.width, y: point.y * image.height }));
+    const areaPx = polygonArea(px);
+    if (areaPx < 8) {
+      throw new Error(`DP2 : module ${polygonIndex + 1} trop petit pour être lisible sur le plan (${areaPx.toFixed(1)} px²).`);
+    }
     const minX = Math.max(0, Math.floor(Math.min(...px.map((point) => point.x)) - 2));
     const maxX = Math.min(image.width - 1, Math.ceil(Math.max(...px.map((point) => point.x)) + 2));
     const minY = Math.max(0, Math.floor(Math.min(...px.map((point) => point.y)) - 2));
     const maxY = Math.min(image.height - 1, Math.ceil(Math.max(...px.map((point) => point.y)) + 2));
+    let paintedPixels = 0;
     for (let y = minY; y <= maxY; y += 1) {
       for (let x = minX; x <= maxX; x += 1) {
         const cx = x + 0.5;
         const cy = y + 0.5;
         if (!pointInPolygon(cx, cy, px)) continue;
+        paintedPixels += 1;
         let edgeDistance = Number.POSITIVE_INFINITY;
         for (let index = 0; index < px.length; index += 1) {
           edgeDistance = Math.min(edgeDistance, pointSegmentDistance(cx, cy, px[index]!, px[(index + 1) % px.length]!));
@@ -61,6 +84,9 @@ export function overlayPlanningPanelsPng(base64: string, polygons: Point[][]) {
           out[offset + 3] = 255;
         }
       }
+    }
+    if (paintedPixels < 4) {
+      throw new Error(`DP2 : le module ${polygonIndex + 1} n'a produit aucun tracé lisible sur le plan.`);
     }
   }
   return encodePng(image.width, image.height, out);
