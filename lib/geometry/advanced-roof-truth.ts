@@ -22,6 +22,7 @@ export type AdvancedRoofFacet = {
 };
 
 export type AdvancedRoofTruth = {
+  attempted: boolean;
   available: boolean;
   usable: boolean;
   projectId: number | null;
@@ -155,10 +156,8 @@ async function ensureProject(address: string) {
   const matchedId = integer(match?.id);
   if (matchedId) return matchedId;
 
-  // A remote project created from an address is not proof that roof facets or an
-  // automatic design will exist. Project creation can also be billable. PilotPaper
-  // therefore reuses existing designed projects by default and only creates one
-  // when an administrator has explicitly opted into that behaviour.
+  // Creating a remote project can be billed per project. PilotPaper therefore
+  // never spends automatically unless the operator has explicitly enabled it.
   if (!allowAutomaticProjectCreation()) {
     throw new Error("Aucun modèle de toiture distant existant pour cette adresse ; création automatique désactivée.");
   }
@@ -180,6 +179,7 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
   const config = getOpenSolarRuntimeConfig();
   if (!config.enabled || !config.configured) {
     return {
+      attempted: false,
       available: false,
       usable: false,
       projectId: null,
@@ -187,7 +187,7 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
       facets: [],
       autoDesignAvailable: false,
       promptContext: "",
-      warnings: ["Moteur géométrique avancé non disponible : utilisation du fallback PilotPaper."],
+      warnings: ["Moteur géométrique avancé non connecté : aucun contrôle distant n'a été exécuté."],
     };
   }
 
@@ -216,11 +216,12 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
     ...facets.summaries.map((summary, index) => `Roof facet ${index + 1}: ${summary}`),
     ...(moduleGroups.length ? ["Existing system/model groups:", ...moduleGroups] : []),
     "Use this geometry only to reinforce roof-plane selection, slope/azimuth reasoning and physical plausibility.",
-    "The cadastral parcel and real photographs remain authoritative if any external geometry conflicts with visible evidence.",
+    "The PilotPaper metric Site Twin remains the coordinate authority if any external geometry conflicts with it.",
     "Never change the requested PilotPaper panel count or matrix merely because an external design contains another module quantity.",
   ].join("\n") : "";
 
   return {
+    attempted: true,
     available: true,
     usable,
     projectId,
@@ -238,7 +239,9 @@ export function resolveAdvancedRoofTruth(address: string, options: { force?: boo
     const existing = cache.get(key);
     if (existing) return existing;
   }
+  const runtime = getOpenSolarRuntimeConfig();
   const promise = resolveUncached(address).catch((error) => ({
+    attempted: Boolean(runtime.enabled && runtime.configured),
     available: false,
     usable: false,
     projectId: null,
