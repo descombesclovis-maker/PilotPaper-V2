@@ -124,6 +124,36 @@ test("V2 route consumes one canonical Site Twin path instead of dormant legacy g
   assert.doesNotMatch(route, /generatePreventiveDp|generateSpecializedDp3|generateSpecializedDp4/);
 });
 
+test("every fresh DP generation executes mandatory geometry and can never masquerade a fallback as success", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
+  const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  const photoEdit = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
+
+  assert.doesNotMatch(route, /generateDiagnosticFallback/);
+  assert.match(route, /assertGeneratedVisualPiece/);
+  assert.match(route, /result\.inspector\?\.passed !== true/);
+  assert.match(route, /!result\.geometryReceipt/);
+  assert.match(route, /rendu vide ou incomplet/);
+  assert.match(route, /X-PilotPaper-Diagnostic": "0"/);
+
+  assert.match(bridge, /export function requiresFreshSiteTwin/);
+  assert.match(bridge, /input\.dp === 2/);
+  assert.match(bridge, /reference\.dp === 2 && Boolean\(reference\.geometryReceipt\)/);
+  assert.match(bridge, /getOrBuildSiteTwin\(address, \{ force: requiresFreshSiteTwin\(input\) \}\)/);
+  assert.match(bridge, /geometryEngineChecked !== true/);
+  assert.match(bridge, /advancedRoofAttempted !== true/);
+
+  assert.match(builder, /geometryEngineChecked: true/);
+  assert.match(builder, /advancedRoofAttempted: true/);
+  assert.match(builder, /builtAt/);
+
+  assert.match(photoEdit, /projectSiteTwinModulesToPhoto/);
+  assert.match(photoEdit, /https:\/\/api\.openai\.com\/v1\/images\/edits/);
+  assert.match(photoEdit, /if \(!rawCropCandidate\) throw new Error\("Le moteur visuel n'a produit aucune insertion\."\)/);
+  assert.match(photoEdit, /if \(changeRatio < 0\.12\)/);
+});
+
 test("visible geometry routes use provider-neutral wording", async () => {
   const status = await source("app/api/opensolar/status/route.ts");
   const truth = await source("app/api/opensolar/project-truth/route.ts");
