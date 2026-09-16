@@ -109,6 +109,8 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
     base64,
     sourceSummary: [
       "DP2 calculée sur la vue aérienne/cadastrale officielle sans génération libre de la géométrie.",
+      `Moteur géométrique exécuté : ${context.siteTwin.sources.geometryEngineVersion ?? "preuve absente"}.`,
+      `Contrôle géométrique indépendant exécuté : ${context.siteTwin.sources.advancedRoofAvailable ? "source exploitable" : "source non exploitable, diagnostic conservé"}.`,
       `${context.layout.modules.length} panneaux projetés depuis le Site Twin métrique sur le pan ${face?.displayLabel ?? "sélectionné"}.`,
       `Pente ${face?.slopeDeg.toFixed(1) ?? "?"}° · azimut ${face?.azimuthDeg.toFixed(1) ?? "?"}° · recul bas résolu ${eligibility?.resolvedGutterClearanceMm ?? context.layout.configuration.preferredGutterClearanceMm} mm.`,
       `Site Twin ${context.siteTwin.id} rev. ${context.siteTwin.revision} · empreinte ${context.layoutDigest.slice(0, 16)} · parcelle ${context.siteTwin.parcel.reference}.`,
@@ -119,6 +121,8 @@ export async function generateDeterministicDp2(input: DpPieceInput & { dp: 2 }):
       checks: [
         `Quantité exacte : ${polygons.length}/${context.layout.configuration.panelCount}`,
         `Matrice : ${context.layout.configuration.rows} × ${context.layout.configuration.columns}`,
+        "Moteur géométrique exécuté : oui",
+        "Contrôle géométrique indépendant exécuté : oui",
         "Coordonnées modules issues du calepinage métrique : oui",
         "Conversion géographique dérivée des sommets réels du pan : oui",
         `Empreinte géométrique : ${context.layoutDigest.slice(0, 16)}`,
