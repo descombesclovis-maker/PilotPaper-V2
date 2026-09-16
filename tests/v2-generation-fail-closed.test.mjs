@@ -6,15 +6,21 @@ async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("fresh dossier generation rebuilds DP2 geometry while downstream pieces reuse the same locked Site Twin", async () => {
+test("fresh dossier generation rebuilds DP2 geometry while downstream pieces reuse the exact DP2 Site Twin context", async () => {
   const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
+  const cache = await source("lib/site-twin-v2/siteTwinCache.ts");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
   const advanced = await source("lib/geometry/advanced-roof-truth.ts");
 
   assert.match(bridge, /return input\.dp === 2/);
   assert.match(bridge, /requireMasterDp2Reference\(input\)/);
   assert.match(bridge, /DP2 n'a pas produit d'empreinte géométrique V2 valide/);
-  assert.match(bridge, /getOrBuildSiteTwin\(address, \{ force: requiresFreshSiteTwin\(input\) \}\)/);
+  assert.match(bridge, /getSiteTwinForContext\(masterReceipt\.contextId\)/);
+  assert.match(bridge, /cacheSiteTwinForContext\(context\.contextId, twin\)/);
+  assert.match(bridge, /refuse d'en reconstruire un autre silencieusement/);
+  assert.match(cache, /const contextCache = new Map/);
+  assert.match(cache, /cacheSiteTwinForContext/);
+  assert.match(cache, /getSiteTwinForContext/);
   assert.match(builder, /resolveAdvancedRoofTruth\(address, \{ force: true \}\)/);
   assert.match(advanced, /options: \{ force\?: boolean \} = \{\}/);
   assert.match(advanced, /if \(!options\.force\)/);
