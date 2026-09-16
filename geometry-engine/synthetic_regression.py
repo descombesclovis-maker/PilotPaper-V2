@@ -6,7 +6,7 @@ import numpy as np
 from pyproj import CRS
 from shapely.geometry import Polygon
 
-from app import _segment_planes
+from main import _result
 
 CENTER_X = 850_000.0
 CENTER_Y = 6_560_000.0
@@ -46,12 +46,17 @@ def main() -> None:
         (CENTER_X + BUILDING_WIDTH_M / 2, CENTER_Y + BUILDING_DEPTH_M / 2),
         (CENTER_X - BUILDING_WIDTH_M / 2, CENTER_Y + BUILDING_DEPTH_M / 2),
     ])
-    origin, faces, edges, confidence, diagnostics = _segment_planes(
+    result = _result(
         build_points(),
         [("synthetic-house", building)],
         CRS.from_epsg(2154),
         "ign-mns",
     )
+    origin = result["origin"]
+    faces = result["faces"]
+    edges = result["edges"]
+    confidence = float(result["confidence"])
+    diagnostics = result["diagnostics"]
 
     if len(faces) != 2:
         raise AssertionError(f"Expected exactly 2 roof faces, got {len(faces)}: {diagnostics}")
@@ -76,6 +81,8 @@ def main() -> None:
     )
     if ridge_length < BUILDING_WIDTH_M * 0.75:
         raise AssertionError(f"Ridge is too short: {ridge_length:.2f} m")
+    if ridge_length > BUILDING_WIDTH_M + 0.25:
+        raise AssertionError(f"Ridge exceeds the locked building footprint: {ridge_length:.2f} m")
 
     obstacles = [obstacle for face in faces for obstacle in face.get("obstacles", [])]
     if not obstacles:
@@ -87,6 +94,8 @@ def main() -> None:
 
     if len(origin) != 2 or not all(math.isfinite(float(value)) for value in origin):
         raise AssertionError(f"Invalid geographic origin: {origin}")
+    if not any("Topologie analytique" in str(item) for item in diagnostics):
+        raise AssertionError(f"Analytic topology refinement did not run: {diagnostics}")
 
     print(
         "Synthetic geometry regression passed:",
