@@ -203,7 +203,7 @@ function resizeRgba(source: { width: number; height: number; rgba: Uint8Array },
       for (let channel = 0; channel < 4; channel += 1) {
         const top = source.rgba[topLeft + channel]! * (1 - wx) + source.rgba[topRight + channel]! * wx;
         const bottom = source.rgba[bottomLeft + channel]! * (1 - wx) + source.rgba[bottomRight + channel]! * wx;
-        output[destination + channel] = Math.round(top * (1 - wy) + bottom * wy));
+        output[destination + channel] = Math.round(top * (1 - wy) + bottom * wy);
       }
     }
   }
