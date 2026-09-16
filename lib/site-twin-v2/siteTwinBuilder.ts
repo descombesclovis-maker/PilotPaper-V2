@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { fetchGoogleSolarBuildingInsights } from "@/lib/dp-ai-engine/providers/googleSolar";
 import { resolveAdvancedRoofTruth, type AdvancedRoofFacet } from "@/lib/geometry/advanced-roof-truth";
+import { buildAdvancedRoofMetricFallback } from "./advancedRoofFallback";
 import { assertSiteTwinGeometry } from "./invariants";
 import { lockSiteTwinProperty } from "./propertyLock";
 import { assertTwinReadyForAutomaticDocuments } from "./policy";
@@ -121,7 +122,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
     failures.push(`Google DSM : ${error instanceof Error ? error.message : "échec inconnu"}`);
   }
 
-  // Reliable IGN fallback: the sampled MNX/MNS points are now a real geometry-engine input.
   if (!geometry) {
     try {
       const samples = await sampleIgnLidarSurface(property);
@@ -136,7 +136,6 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
     }
   }
 
-  // COPC discovery remains the last source because remote range-reading availability varies by host.
   if (!geometry) {
     try {
       const tiles = await discoverIgnCopcTiles(property);
@@ -155,7 +154,7 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
   if (!geometry) {
     throw new SiteTwinError(
       "GEOMETRY_RECONSTRUCTION_FAILED",
-      "Aucune source métrique n'a permis de reconstruire automatiquement la toiture. PilotPaper refuse d'inventer les pans.",
+      "Aucune source métrique locale n'a permis de reconstruire automatiquement la toiture.",
       { recoverable: true, details: { failures } },
     );
   }
@@ -163,10 +162,14 @@ async function reconstructMetricRoof(property: Awaited<ReturnType<typeof lockSit
   return { geometry, googleLayers, googleRgb, lidarReference, failures };
 }
 
-/**
- * Canonical Site Twin V2 builder. PV configuration is deliberately NOT an
- * input: changing the requested modules can never change physical roof truth.
- */
+function failuresFrom(error: unknown) {
+  if (error instanceof SiteTwinError && Array.isArray(error.details?.failures)) {
+    return (error.details.failures as unknown[]).map((item) => String(item));
+  }
+  return [error instanceof Error ? error.message : "Échec inconnu de la reconstruction métrique locale."];
+}
+
+/** Canonical Site Twin V2 builder. PV configuration never changes roof truth. */
 export async function buildSiteTwin(address: string): Promise<SiteTwin> {
   const property = await lockSiteTwinProperty(address).catch((error) => {
     throw asSiteTwinError(error, "PROPERTY_LOCK_FAILED", "Le verrouillage de la propriété a échoué.");
@@ -181,11 +184,44 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     );
   }
 
-  const [metricRoof, terrainElevationM, advancedRoof] = await Promise.all([
-    reconstructMetricRoof(property),
+  const localRoofPromise = reconstructMetricRoof(property)
+    .then((value) => ({ ok: true as const, value }))
+    .catch((error) => ({ ok: false as const, error }));
+  const [localRoof, terrainElevationM, advancedRoof] = await Promise.all([
+    localRoofPromise,
     sampleIgnTerrainElevation(property),
     resolveAdvancedRoofTruth(address),
   ]);
+
+  let metricRoof: Awaited<ReturnType<typeof reconstructMetricRoof>>;
+  if (localRoof.ok) {
+    metricRoof = localRoof.value;
+  } else {
+    const fallback = buildAdvancedRoofMetricFallback({ property, advanced: advancedRoof, terrainElevationM });
+    if (!fallback) {
+      throw new SiteTwinError(
+        "GEOMETRY_RECONSTRUCTION_FAILED",
+        "Aucune source géométrique vérifiable n'a permis de reconstruire automatiquement la toiture. PilotPaper refuse d'inventer les pans.",
+        {
+          recoverable: true,
+          details: {
+            failures: [
+              ...failuresFrom(localRoof.error),
+              ...(advancedRoof.warnings.length ? advancedRoof.warnings : ["Moteur géométrique avancé : facettes géoréférencées/pentes insuffisantes."]),
+            ],
+          },
+        },
+      );
+    }
+    metricRoof = {
+      geometry: fallback,
+      googleLayers: undefined,
+      googleRgb: undefined,
+      lidarReference: undefined,
+      failures: failuresFrom(localRoof.error),
+    };
+  }
+
   const { geometry, googleLayers, lidarReference, failures } = metricRoof;
   const [longitude, latitude] = property.addressPoint;
 
@@ -195,20 +231,21 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     const googleSegmentCount = solar.solarPotential.roofSegmentStats.length;
     if (googleSegmentCount !== geometry.faces.length) {
       crossCheckNotes = [
-        `BuildingInsights annonce ${googleSegmentCount} segments, la reconstruction métrique en démontre ${geometry.faces.length}.`,
-        "PilotPaper conserve la géométrie métrique ; BuildingInsights reste un contrôle secondaire.",
+        `BuildingInsights annonce ${googleSegmentCount} segments, la reconstruction primaire en démontre ${geometry.faces.length}.`,
+        "PilotPaper conserve la géométrie primaire ; BuildingInsights reste un contrôle secondaire.",
       ];
     } else {
-      crossCheckNotes = [`BuildingInsights et la reconstruction métrique convergent sur ${geometry.faces.length} pans physiques.`];
+      crossCheckNotes = [`BuildingInsights et la reconstruction primaire convergent sur ${geometry.faces.length} pans physiques.`];
     }
   } catch (error) {
     crossCheckNotes = [
       `BuildingInsights indisponible pour le contrôle croisé : ${error instanceof Error ? error.message : "erreur inconnue"}.`,
-      "La reconstruction métrique reste indépendante de ce contrôle.",
+      "La reconstruction primaire reste indépendante de ce contrôle.",
     ];
   }
 
-  const advancedComparison = advancedRoof.usable
+  const advancedIsPrimary = geometry.source === "advanced-roof-model";
+  const advancedComparison = advancedRoof.usable && !advancedIsPrimary
     ? compareAdvancedFacets(geometry.faces, advancedRoof.facets)
     : { notes: [] as string[], matched: 0, closeMatched: 0, metricMatches: 0, closeRatio: 0, confidenceDelta: 0 };
 
@@ -220,7 +257,9 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
       ? "ign-mns"
       : geometry.source === "ign-lidar"
         ? "ign-lidar-hd"
-        : "photogrammetry";
+        : geometry.source === "advanced-roof-model"
+          ? "advanced-roof-model"
+          : "photogrammetry";
 
   const evidence: SiteTwinEvidence[] = [
     ...property.evidence,
@@ -233,13 +272,13 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
         `Moteur géométrique : ${geometry.engineVersion}.`,
         ...geometry.diagnostics,
         ...crossCheckNotes,
-        ...(terrainElevationM != null ? [`Terrain IGN MNT : ${terrainElevationM.toFixed(2)} m.`] : ["Terrain MNT non disponible : DP3 métrique devra refuser toute hauteur inventée."]),
-        ...(failures.length ? [`Sources essayées avant succès : ${failures.join(" | ")}`] : []),
+        ...(terrainElevationM != null ? [`Terrain IGN : ${terrainElevationM.toFixed(2)} m.`] : ["Terrain officiel non disponible : toute hauteur absolue non démontrée restera non cotée."]),
+        ...(failures.length ? [`Sources locales essayées avant succès : ${failures.join(" | ")}`] : []),
       ],
     ),
   ];
 
-  if (advancedRoof.available) {
+  if (advancedRoof.available && !advancedIsPrimary) {
     const countConverges = advancedRoof.usable && advancedRoof.roofFacetCount === geometry.faces.length;
     const metricConverges = advancedComparison.metricMatches > 0 && advancedComparison.closeRatio >= 0.75;
     evidence.push(sourceEvidence(
@@ -298,7 +337,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
     photos: [],
     cameraRegistrations: [],
     sources: {
-      lidar: geometry.source === "ign-lidar" || geometry.source === "ign-mns" ? "available" : "not-checked",
+      lidar: geometry.source === "ign-lidar" || geometry.source === "ign-mns" ? "available" : geometry.source === "advanced-roof-model" ? "unavailable" : "not-checked",
       lidarReference,
       terrainElevationM,
       orthoReference: googleLayers?.rgbUrl ? "Google Solar RGB dataLayer" : undefined,
