@@ -19,6 +19,11 @@ jobs:
   real-site-probe:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      GOOGLE_SOLAR_API_KEY: ${{ secrets.GOOGLE_SOLAR_API_KEY }}
+      OPENSOLAR_ENABLED: "true"
+      OPENSOLAR_ORG_ID: ${{ secrets.OPENSOLAR_ORG_ID }}
+      OPENSOLAR_BEARER_TOKEN: ${{ secrets.OPENSOLAR_BEARER_TOKEN }}
     steps:
       - name: Checkout V2
         uses: actions/checkout@v4
@@ -82,7 +87,9 @@ jobs:
             -X POST http://127.0.0.1:5173/api/site-twin-v2/reconstruct \
             -H 'Content-Type: application/json' \
             --data '{"address":"110 Rue Basse, 71260 Azé"}')
+          set -e
           echo "HTTP $code"
+
           python - <<'PY'
           import json
           from pathlib import Path
@@ -95,20 +102,43 @@ jobs:
               print(f"REAL_SITE_FACE_COUNT={len(faces)}")
               print(f"REAL_SITE_CONFIDENCE={twin.get('confidence')}")
           PY
-          if [ "$code" != "200" ]; then
-            echo '--- V2 server log ---'
-            tail -200 /tmp/pilotpaper-v2.log || true
-            echo '--- geometry log ---'
-            tail -200 /tmp/pilotpaper-geometry.log || true
-            exit 1
-          fi
-          python - <<'PY'
+
+          if [ "$code" = "200" ]; then
+            python - <<'PY'
           import json
           payload = json.load(open('/tmp/site-twin.json', encoding='utf-8'))
           faces = payload.get('siteTwin', {}).get('roof', {}).get('faces', [])
           if len(faces) < 2:
-              raise SystemExit(f'Real-site regression: expected multiple physical roof faces, got {len(faces)}')
+              raise SystemExit(f'Real-site regression: HTTP 200 is forbidden with only {len(faces)} physical roof face(s)')
+          print(f'Real-site geometry validated with {len(faces)} physical faces.')
           PY
+            exit 0
+          fi
+
+          # A public CI runner may legitimately have neither a Google DSM key,
+          # an advanced-roof session nor IGN LiDAR coverage for this exact house.
+          # In that case PilotPaper must FAIL CLOSED: an explicit non-200 error is
+          # correct; a blank/raw-source "successful" DP would be a regression.
+          if [ -z "$GOOGLE_SOLAR_API_KEY" ] && { [ -z "$OPENSOLAR_ORG_ID" ] || [ -z "$OPENSOLAR_BEARER_TOKEN" ]; }; then
+            python - <<'PY'
+          import json
+          payload = json.load(open('/tmp/site-twin.json', encoding='utf-8'))
+          if payload.get('siteTwin'):
+              raise SystemExit('Fail-closed regression: failed reconstruction returned a Site Twin anyway')
+          text = json.dumps(payload, ensure_ascii=False).lower()
+          if not any(token in text for token in ('geometry', 'géométr', 'toiture', 'source métrique')):
+              raise SystemExit(f'Unexpected fail-closed payload: {payload}')
+          print('Real-site probe credential-gated: no external source was configured and PilotPaper failed closed as required.')
+          PY
+            exit 0
+          fi
+
+          echo 'A real geometry credential was configured, therefore Azé must reconstruct successfully.'
+          echo '--- V2 server log ---'
+          tail -200 /tmp/pilotpaper-v2.log || true
+          echo '--- geometry log ---'
+          tail -200 /tmp/pilotpaper-geometry.log || true
+          exit 1
 
       - name: Stop local services
         if: always()
