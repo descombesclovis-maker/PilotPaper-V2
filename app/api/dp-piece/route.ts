@@ -1,6 +1,7 @@
 import { generateDpPiece } from "@/lib/dp-piece-engine";
 import { generateOfficialDp1 } from "@/lib/pilotpaper-dp1-generator";
 import { pilotPaperRunVisualJob } from "@/lib/pilotpaper-openai-resilience";
+import { decodePng } from "@/lib/dp-ai-engine/utils/pngPixels";
 import { generateDeterministicSiteTwinPiece } from "@/lib/site-twin-v2/dpPieceBridge";
 import { generateDeterministicDp2 } from "@/lib/site-twin-v2/constrainedDp2";
 import { generateGeometryLockedDp4 } from "@/lib/site-twin-v2/constrainedDp4";
@@ -19,6 +20,51 @@ async function generateVisualPiece(input: DpPieceInput): Promise<DpPieceOutput> 
   throw new Error(`Pièce visuelle DP non prise en charge : ${String(input.dp)}.`);
 }
 
+function assertPngArtifact(result: DpPieceOutput) {
+  const image = decodePng(result.base64 ?? "");
+  if (image.width < 320 || image.height < 240) {
+    throw new Error(`DP${result.dp} refusée : image trop petite (${image.width}×${image.height}).`);
+  }
+  let samples = 0;
+  let darkest = 255;
+  let lightest = 0;
+  for (let y = 0; y < image.height; y += 16) {
+    for (let x = 0; x < image.width; x += 16) {
+      const offset = (y * image.width + x) * 4;
+      const luminance = 0.2126 * image.rgba[offset]!
+        + 0.7152 * image.rgba[offset + 1]!
+        + 0.0722 * image.rgba[offset + 2]!;
+      darkest = Math.min(darkest, luminance);
+      lightest = Math.max(lightest, luminance);
+      samples += 1;
+    }
+  }
+  if (!samples || lightest - darkest < 8) {
+    throw new Error(`DP${result.dp} refusée : image visuellement vide ou uniforme.`);
+  }
+}
+
+function assertSvgArtifact(result: DpPieceOutput) {
+  const svg = Buffer.from(result.base64 ?? "", "base64").toString("utf8");
+  if (svg.length < 500 || !/<svg\b/i.test(svg) || !/viewBox=/i.test(svg) || !/<\/svg>/i.test(svg)) {
+    throw new Error(`DP${result.dp} refusée : SVG incomplet ou illisible.`);
+  }
+  if (/\b(?:NaN|Infinity|undefined)\b/.test(svg)) {
+    throw new Error(`DP${result.dp} refusée : le rendu contient des coordonnées ou valeurs invalides.`);
+  }
+  if (result.dp === 3) {
+    if (!/class="pv-section"/.test(svg) || !/Champ PV coupé/.test(svg)) {
+      throw new Error("DP3 refusée : la coupe ne contient aucune représentation photovoltaïque démontrée.");
+    }
+  }
+  if (result.dp === 4) {
+    const imageCount = svg.match(/<image\s/g)?.length ?? 0;
+    if (imageCount !== 2 || !svg.includes("ÉTAT INITIAL") || !svg.includes("ÉTAT PROJETÉ")) {
+      throw new Error("DP4 refusée : composition avant/après incomplète ou incohérente.");
+    }
+  }
+}
+
 function assertGeneratedVisualPiece(result: DpPieceOutput) {
   if (result.dp < 2 || result.dp > 6) return result;
   if (!result.geometryReceipt) {
@@ -33,6 +79,9 @@ function assertGeneratedVisualPiece(result: DpPieceOutput) {
   if (result.sourceSummary.some((line) => /MODE DIAGNOSTIC|diagnostic fallback|photo source brute/i.test(line))) {
     throw new Error(`DP${result.dp} refusée : un diagnostic ne peut jamais être présenté comme une pièce générée.`);
   }
+  if (result.mimeType === "image/png") assertPngArtifact(result);
+  else if (result.mimeType === "image/svg+xml") assertSvgArtifact(result);
+  else throw new Error(`DP${result.dp} refusée : format visuel inattendu (${result.mimeType}).`);
   return result;
 }
 
