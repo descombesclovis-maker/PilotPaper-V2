@@ -107,6 +107,7 @@ function failuresFrom(error: unknown) {
 
 /** Canonical Site Twin V2 builder. PV configuration never changes roof truth. */
 export async function buildSiteTwin(address: string): Promise<SiteTwin> {
+  const builtAt = new Date().toISOString();
   const property = await lockSiteTwinProperty(address).catch((error) => {
     throw asSiteTwinError(error, "PROPERTY_LOCK_FAILED", "Le verrouillage de la propriété a échoué.");
   });
@@ -289,11 +290,15 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
       googleDsmReference: googleLayers?.dsmUrl,
       google3dTilesReference: tiles3d.available ? tiles3d.reference : undefined,
       geometryEngineVersion: geometry.engineVersion,
+      geometryEngineChecked: true,
       geometryPrimarySource: geometry.source,
+      advancedRoofAttempted: true,
+      advancedRoofAvailable: advancedRoof.available,
       advancedRoofProjectId: advancedRoof.projectId ?? undefined,
       advancedRoofFacetCount: advancedRoof.roofFacetCount || undefined,
       advancedRoofAutoDesignAvailable: advancedRoof.autoDesignAvailable || undefined,
       advancedRoofCrossCheck: advancedComparison.crossCheck,
+      builtAt,
     },
     evidence,
     confidence: adjustedGeometryConfidence,
