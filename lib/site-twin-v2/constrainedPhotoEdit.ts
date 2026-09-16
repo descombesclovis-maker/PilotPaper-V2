@@ -10,9 +10,13 @@ import {
   geometryLockedCompositePng,
 } from "@/lib/dp-ai-engine/utils/pngPixels";
 import { fetchGoogleSolarDataLayers, downloadGoogleGeoTiff } from "./googleSolarDataLayers";
-import { fetchIgnOrthophotoGeoTiff } from "./ignOrthophoto";
+import { fetchIgnOrthophotoReference } from "./ignOrthophoto";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
-import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
+import {
+  projectSiteTwinModulesToPhoto,
+  type SiteTwinPhotoProjection,
+  type SiteTwinProjectionReference,
+} from "./geometryEngineClient";
 import { inspectProjectedModuleGeometry, requireInspectorPass } from "./inspector";
 import { modulePolygonsToLonLat } from "./localGeoTransform";
 import { SITE_TWIN_POLICY } from "./policy";
@@ -24,6 +28,7 @@ const COMPOSITE_FEATHER_PIXELS = 4;
 const OUTSIDE_BLEND_MAX = 0.18;
 const LOCAL_CROP_MARGIN_FACTOR = 0.35;
 const LOCAL_CROP_MIN_MARGIN_PX = 72;
+const LOCAL_RENDER_LONG_EDGE_PX = 2048;
 const MIN_AGGREGATE_PANEL_CHANGE_RATIO = 0.15;
 const MIN_SINGLE_PANEL_CHANGE_RATIO = 0.08;
 
@@ -37,6 +42,11 @@ type CropRegion = {
   height: number;
   pngBase64: string;
   polygonsNormalized: Point[][];
+};
+
+type RegistrationReference = {
+  source: "google-rgb" | "ign-orthophoto";
+  reference: SiteTwinProjectionReference;
 };
 
 function base64ToBlob(base64: string, mimeType: string) {
@@ -63,11 +73,20 @@ function polygonAreaNormalized(polygon: Point[]) {
   return Math.abs(twiceArea) / 2;
 }
 
-function changedRatioForPolygon(original: ReturnType<typeof decodePng>, candidate: ReturnType<typeof decodePng>, polygon: Point[]) {
+function changedRatioForPolygon(
+  original: ReturnType<typeof decodePng>,
+  candidate: ReturnType<typeof decodePng>,
+  polygon: Point[],
+) {
+  const px = polygon.map((point) => ({ x: point.x * original.width, y: point.y * original.height }));
+  const minX = Math.max(0, Math.floor(Math.min(...px.map((point) => point.x))));
+  const maxX = Math.min(original.width - 1, Math.ceil(Math.max(...px.map((point) => point.x))));
+  const minY = Math.max(0, Math.floor(Math.min(...px.map((point) => point.y))));
+  const maxY = Math.min(original.height - 1, Math.ceil(Math.max(...px.map((point) => point.y))));
   let inside = 0;
   let changed = 0;
-  for (let y = 0; y < original.height; y += 1) {
-    for (let x = 0; x < original.width; x += 1) {
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
       const nx = (x + 0.5) / original.width;
       const ny = (y + 0.5) / original.height;
       if (!pointInPolygon(nx, ny, polygon)) continue;
@@ -91,17 +110,15 @@ function changedIslandRatios(originalBase64: string, candidateBase64: string, po
   return polygons.map((polygon) => changedRatioForPolygon(original, candidate, polygon));
 }
 
-function changedIslandRatio(originalBase64: string, candidateBase64: string, polygons: Point[][]) {
-  const ratios = changedIslandRatios(originalBase64, candidateBase64, polygons);
-  if (!ratios.length) return 0;
-  return ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
-}
-
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function expandCropToMaximumAspect(region: { x0: number; y0: number; x1: number; y1: number }, imageWidth: number, imageHeight: number) {
+function expandCropToMaximumAspect(
+  region: { x0: number; y0: number; x1: number; y1: number },
+  imageWidth: number,
+  imageHeight: number,
+) {
   let { x0, y0, x1, y1 } = region;
   const width = () => x1 - x0;
   const height = () => y1 - y0;
@@ -173,13 +190,28 @@ function cropAroundPanelField(base64: string, polygons: Point[][]): CropRegion {
   };
 }
 
-/**
- * GPT Image currently accepts only fixed image sizes or `auto` for edits.
- * `auto` is deliberately used here so the service chooses the closest supported
- * canvas without PilotPaper sending an invalid arbitrary 2048×N value.
- */
-function imageEditSize(_width: number, _height: number) {
-  return "auto";
+/** GPT Image 2 accepts custom sizes when both edges are multiples of 16 and the aspect ratio is 1:3..3:1. */
+function imageEditSize(width: number, height: number) {
+  const ratio = width / height;
+  if (!Number.isFinite(ratio) || ratio < 1 / 3 || ratio > 3) {
+    throw new Error(`Crop photovoltaïque avec ratio non pris en charge (${ratio.toFixed(3)}).`);
+  }
+  let targetWidth: number;
+  let targetHeight: number;
+  if (ratio >= 1) {
+    targetWidth = LOCAL_RENDER_LONG_EDGE_PX;
+    targetHeight = LOCAL_RENDER_LONG_EDGE_PX / ratio;
+  } else {
+    targetHeight = LOCAL_RENDER_LONG_EDGE_PX;
+    targetWidth = LOCAL_RENDER_LONG_EDGE_PX * ratio;
+  }
+  targetWidth = Math.max(16, Math.round(targetWidth / 16) * 16);
+  targetHeight = Math.max(16, Math.round(targetHeight / 16) * 16);
+  const resolvedRatio = targetWidth / targetHeight;
+  if (resolvedRatio < 1 / 3 || resolvedRatio > 3) {
+    throw new Error(`Taille de rendu invalide après arrondi (${targetWidth}×${targetHeight}).`);
+  }
+  return `${targetWidth}x${targetHeight}`;
 }
 
 function resizeRgba(source: { width: number; height: number; rgba: Uint8Array }, width: number, height: number) {
@@ -215,6 +247,12 @@ function restoreCropIntoFullImage(fullSourceBase64: string, cropCandidateBase64:
   const candidate = decodePng(cropCandidateBase64);
   if (candidate.width < 256 || candidate.height < 256) {
     throw new Error(`Le moteur visuel a renvoyé une image trop petite (${candidate.width}×${candidate.height}).`);
+  }
+  const sourceRatio = crop.width / crop.height;
+  const candidateRatio = candidate.width / candidate.height;
+  const ratioError = Math.abs(candidateRatio - sourceRatio) / sourceRatio;
+  if (ratioError > 0.03) {
+    throw new Error(`Le moteur visuel a changé le ratio du crop (${crop.width}×${crop.height} → ${candidate.width}×${candidate.height}).`);
   }
   const candidatePixels = resizeRgba(candidate, crop.width, crop.height);
   const output = new Uint8Array(full.rgba);
@@ -293,28 +331,91 @@ function assertMaskUsable(maskBase64: string, crop: CropRegion) {
   }
 }
 
-async function loadRegistrationReference(longitude: number, latitude: number) {
+async function loadRegistrationReferences(longitude: number, latitude: number) {
+  const references: RegistrationReference[] = [];
   const failures: string[] = [];
+
   try {
     const layers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 70, pixelSizeMeters: 0.1 });
     if (layers.rgbUrl) {
-      return {
-        bytes: new Uint8Array(await downloadGoogleGeoTiff(layers.rgbUrl, "RGB")),
-        source: "google-rgb" as const,
-      };
+      references.push({
+        source: "google-rgb",
+        reference: {
+          bytes: new Uint8Array(await downloadGoogleGeoTiff(layers.rgbUrl, "RGB")),
+          mimeType: "image/tiff",
+        },
+      });
+    } else {
+      failures.push("référence RGB Google absente");
     }
-    failures.push("référence RGB Google absente");
   } catch (error) {
     failures.push(`référence RGB Google : ${error instanceof Error ? error.message : "échec inconnu"}`);
   }
 
   try {
-    const ign = await fetchIgnOrthophotoGeoTiff({ longitude, latitude });
-    return { bytes: ign.bytes, source: ign.source };
+    const ign = await fetchIgnOrthophotoReference({ longitude, latitude });
+    references.push({
+      source: ign.source,
+      reference: {
+        bytes: ign.bytes,
+        mimeType: ign.mimeType,
+        crs: ign.crs,
+        bbox: ign.bbox,
+      },
+    });
   } catch (error) {
     failures.push(`orthophoto IGN : ${error instanceof Error ? error.message : "échec inconnu"}`);
   }
-  throw new Error(`Aucune orthophoto géoréférencée exploitable pour le recalage photo : ${failures.join(" | ")}`);
+
+  if (!references.length) {
+    throw new Error(`Aucune orthophoto de recalage exploitable : ${failures.join(" | ")}`);
+  }
+  return { references, failures };
+}
+
+async function projectWithReferenceFallback(args: {
+  references: RegistrationReference[];
+  modulePolygonsLonLat: Array<Array<[number, number]>>;
+  photo: Uint8Array;
+  photoMimeType: string;
+  expectedCount: number;
+  role: PiecePhotoInput["role"];
+}) {
+  const failures: string[] = [];
+  for (const item of args.references) {
+    try {
+      const projection = await projectSiteTwinModulesToPhoto({
+        modulePolygonsLonLat: args.modulePolygonsLonLat,
+        reference: item.reference,
+        photo: args.photo,
+        photoMimeType: args.photoMimeType,
+      });
+      const normalizedSource = decodePng(projection.photoBase64);
+      if (normalizedSource.width !== projection.widthPx || normalizedSource.height !== projection.heightPx) {
+        throw new Error(`PNG ${normalizedSource.width}×${normalizedSource.height}, métadonnées ${projection.widthPx}×${projection.heightPx}.`);
+      }
+      assertProjectionUsable({
+        photoWidth: projection.widthPx,
+        photoHeight: projection.heightPx,
+        polygons: projection.panelPolygonsNormalized,
+        expectedCount: args.expectedCount,
+        registration: projection.registration,
+        role: args.role,
+      });
+      return {
+        projection,
+        normalizedSource,
+        source: item.source,
+      } satisfies {
+        projection: SiteTwinPhotoProjection;
+        normalizedSource: ReturnType<typeof decodePng>;
+        source: RegistrationReference["source"];
+      };
+    } catch (error) {
+      failures.push(`${item.source}: ${error instanceof Error ? error.message : "échec inconnu"}`);
+    }
+  }
+  throw new Error(`Projection photo impossible avec toutes les références disponibles : ${failures.join(" | ")}`);
 }
 
 function insertionPrompt(
@@ -373,30 +474,25 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   if (!apiKey) throw new Error("Clé du moteur visuel absente du poste local.");
   const context = await buildSiteTwinDocumentContext(args.input);
   const [longitude, latitude] = context.siteTwin.addressPoint;
-  const reference = await loadRegistrationReference(longitude, latitude);
   const modulePolygonsLonLat = modulePolygonsToLonLat({
     faces: context.siteTwin.roof.faces,
     modules: context.layout.modules,
   });
-  const projection = await projectSiteTwinModulesToPhoto({
+  if (modulePolygonsLonLat.length !== context.layout.configuration.panelCount) {
+    throw new Error(`Projection géographique incomplète : ${modulePolygonsLonLat.length}/${context.layout.configuration.panelCount} modules.`);
+  }
+
+  const loaded = await loadRegistrationReferences(longitude, latitude);
+  const projected = await projectWithReferenceFallback({
+    references: loaded.references,
     modulePolygonsLonLat,
-    referenceGeoTiff: reference.bytes,
     photo: Buffer.from(args.photo.base64, "base64"),
     photoMimeType: args.photo.mimeType,
-  });
-  const normalizedSource = decodePng(projection.photoBase64);
-  if (normalizedSource.width !== projection.widthPx || normalizedSource.height !== projection.heightPx) {
-    throw new Error(`Projection photo incohérente : PNG ${normalizedSource.width}×${normalizedSource.height}, métadonnées ${projection.widthPx}×${projection.heightPx}.`);
-  }
-  const polygons = projection.panelPolygonsNormalized;
-  assertProjectionUsable({
-    photoWidth: projection.widthPx,
-    photoHeight: projection.heightPx,
-    polygons,
     expectedCount: context.layout.configuration.panelCount,
-    registration: projection.registration,
     role: args.photo.role,
   });
+  const { projection, normalizedSource } = projected;
+  const polygons = projection.panelPolygonsNormalized;
   if (polygons.length !== context.layout.configuration.panelCount) {
     throw new Error(`Projection photo incomplète : ${polygons.length}/${context.layout.configuration.panelCount} modules.`);
   }
@@ -441,9 +537,12 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   if (finalImage.width !== normalizedSource.width || finalImage.height !== normalizedSource.height) {
     throw new Error("Le rendu final a changé les dimensions de la photographie source.");
   }
+
   const perPanelChangedRatios = changedIslandRatios(projection.photoBase64, base64, polygons);
-  const changeRatio = changedIslandRatio(projection.photoBase64, base64, polygons);
-  const weakestPanel = Math.min(...perPanelChangedRatios);
+  const changeRatio = perPanelChangedRatios.length
+    ? perPanelChangedRatios.reduce((sum, ratio) => sum + ratio, 0) / perPanelChangedRatios.length
+    : 0;
+  const weakestPanel = perPanelChangedRatios.length ? Math.min(...perPanelChangedRatios) : 0;
   if (changeRatio < MIN_AGGREGATE_PANEL_CHANGE_RATIO || weakestPanel < MIN_SINGLE_PANEL_CHANGE_RATIO) {
     throw new Error(
       `Insertion visuelle insuffisante : moyenne ${Math.round(changeRatio * 100)} %, panneau le moins modifié ${Math.round(weakestPanel * 100)} %.`,
@@ -455,7 +554,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
     base64,
     sourcePngBase64: projection.photoBase64,
     panelPolygonsNormalized: polygons,
-    registrationReferenceSource: reference.source,
+    registrationReferenceSource: projected.source,
     registration: {
       reprojectionErrorPx: projection.registration.reprojectionErrorPx,
       matches: projection.registration.matches,
