@@ -127,7 +127,7 @@ export async function buildSiteTwin(address: string): Promise<SiteTwin> {
   const [localRoof, terrainElevationM, advancedRoof] = await Promise.all([
     localRoofPromise,
     sampleIgnTerrainElevation(property),
-    resolveAdvancedRoofTruth(address),
+    resolveAdvancedRoofTruth(address, { force: true }),
   ]);
 
   let metricRoof: Awaited<ReturnType<typeof reconstructMetricRoof>>;
