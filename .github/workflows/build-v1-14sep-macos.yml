@@ -1,0 +1,174 @@
+name: Build exact PilotPaper V1 14 Sep macOS Intel
+
+on:
+  push:
+    branches:
+      - release/v1-14sep-macos-exact
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-v1-exact:
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact V1 branch
+        uses: actions/checkout@v4
+
+      - name: Verify application base commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='ca8b8734925a575f17257121be80bf6f686f739e'
+          git merge-base --is-ancestor "$BASE" HEAD
+          CHANGED="$(git diff --name-only "$BASE"..HEAD | grep -v '^desktop/macos/' | grep -v '^.github/workflows/build-v1-14sep-macos.yml$' || true)"
+          if [ -n "$CHANGED" ]; then
+            echo 'Unexpected non-packaging changes detected:'
+            echo "$CHANGED"
+            exit 1
+          fi
+          echo "Exact PilotPaper application code preserved from $BASE"
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked V1 dependencies
+        run: npm ci
+
+      - name: Run exact V1 regressions
+        run: npm test
+
+      - name: Build exact V1 web application
+        run: npm run build
+
+      - name: Assemble writable macOS payload template
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf desktop/macos/payload desktop-output-macos /tmp/pilotpaper-v1-template
+          mkdir -p /tmp/pilotpaper-v1-template
+          rsync -a ./ /tmp/pilotpaper-v1-template/ \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.dev.vars' \
+            --exclude 'desktop/PilotPaperLauncher' \
+            --exclude 'desktop/macos/payload' \
+            --exclude 'desktop-output-macos'
+          mkdir -p /tmp/pilotpaper-v1-template/runtime
+          cp "$(command -v node)" /tmp/pilotpaper-v1-template/runtime/node
+          chmod +x /tmp/pilotpaper-v1-template/runtime/node
+          printf '%s\n' 'ca8b8734925a575f17257121be80bf6f686f739e' > /tmp/pilotpaper-v1-template/PILOTPAPER-MAC-BUILD.txt
+          mkdir -p desktop/macos/payload
+          mv /tmp/pilotpaper-v1-template desktop/macos/payload/app-template
+
+      - name: Smoke-test bundled exact V1 local server
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$PWD/desktop/macos/payload/app-template"
+          cd "$APP"
+          OPENAI_API_KEY='sk-local-smoke-placeholder-000000000000' \
+          DP_TEST_EXPORT='true' \
+          DP_IMAGE_MODEL='gpt-image-2' \
+          NODE_ENV='development' \
+          ./runtime/node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174 --strictPort > /tmp/pilotpaper-v1-14sep-macos.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5174/ >/dev/null; then
+              echo 'PilotPaper exact V1 local server ready.'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/pilotpaper-v1-14sep-macos.log || true
+          exit 1
+
+      - name: Install macOS shell builder
+        working-directory: desktop/macos
+        run: npm install --no-save --no-package-lock electron@33.4.11 electron-builder@25.1.8
+
+      - name: Build Intel macOS application bundle
+        working-directory: desktop/macos
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac dir --x64
+
+      - name: Ad-hoc sign and verify application bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find desktop-output-macos -maxdepth 3 -type d -name 'PilotPaper V1.app' -print -quit)"
+          test -n "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+          ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/PilotPaper V1")"
+          echo "Architectures: $ARCHS"
+          echo "$ARCHS" | grep -q 'x86_64'
+
+      - name: Build DMG and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf desktop-output-macos/dmg-root
+          mkdir -p desktop-output-macos/dmg-root
+          ditto "$APP_PATH" "desktop-output-macos/dmg-root/PilotPaper V1.app"
+          ln -s /Applications desktop-output-macos/dmg-root/Applications
+          hdiutil create \
+            -volname 'PilotPaper V1 — 14 septembre' \
+            -srcfolder desktop-output-macos/dmg-root \
+            -ov \
+            -format UDZO \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.dmg
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.zip
+          shasum -a 256 \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.dmg \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.zip \
+            > desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.sha256
+
+      - name: Verify generated DMG contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOUNT='/tmp/PilotPaperV1Verify'
+          mkdir -p "$MOUNT"
+          hdiutil attach desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.dmg -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -force || true' EXIT
+          test -d "$MOUNT/PilotPaper V1.app"
+          codesign --verify --deep --strict "$MOUNT/PilotPaper V1.app"
+          lipo -archs "$MOUNT/PilotPaper V1.app/Contents/MacOS/PilotPaper V1" | grep -q 'x86_64'
+          test -f "$MOUNT/PilotPaper V1.app/Contents/Resources/app-template/PILOTPAPER-MAC-BUILD.txt"
+          grep -q 'ca8b8734925a575f17257121be80bf6f686f739e' "$MOUNT/PilotPaper V1.app/Contents/Resources/app-template/PILOTPAPER-MAC-BUILD.txt"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+      - name: Publish macOS files to V1 release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='pilotpaper-v1-test-latest'
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.dmg \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.zip \
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Upload CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotPaper-V1-14sept-macOS-Intel
+          path: |
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.dmg
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.zip
+            desktop-output-macos/PilotPaper-V1-14sept-macOS-Intel.sha256
+          retention-days: 14
+          if-no-files-found: error
