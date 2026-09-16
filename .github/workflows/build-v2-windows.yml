@@ -2,6 +2,12 @@ name: Build PilotPaper V2 Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_update:
+        description: "Publier le canal V2 après validation réelle des DP"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - release/v2
@@ -250,6 +256,7 @@ jobs:
           retention-days: 14
 
       - name: Publish validated V2 update channel
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_update == true }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -257,7 +264,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $tag = "pilotpaper-v2-latest"
           $title = "PilotPaper V2 — Mise à jour validée"
-          $notes = "Canal de mise à jour PilotPaper V2. Cette release n'est publiée qu'après build, tests, smoke test du moteur métrique et compilation Windows réussis.`n`nPilotPaper-Build-SHA: $env:GITHUB_SHA"
+          $notes = "Canal de mise à jour PilotPaper V2. Cette release n'est publiée qu'après build, tests, smoke test du moteur métrique et compilation Windows réussis, puis validation manuelle des DP produites.`n`nPilotPaper-Build-SHA: $env:GITHUB_SHA"
           $setup = "desktop-output-v2/PilotPaper-V2-Setup.exe"
           $hash = "desktop-output-v2/PilotPaper-V2-Setup.exe.sha256"
 
