@@ -26,7 +26,10 @@ async function generatePiece(input: DpPieceInput): Promise<DpPieceOutput> {
     try {
       return await pilotPaperRunVisualJob(`DP${input.dp}`, () => generateVisualPiece(input));
     } catch (error) {
-      if (input.testMode !== false) return generateDiagnosticFallback(input, error);
+      // Diagnostic fallback is deliberately opt-in. Production generation must
+      // never disguise a failed Site Twin/layout/projection as a valid-looking
+      // raw source photo without photovoltaic modules.
+      if (input.testMode === true) return generateDiagnosticFallback(input, error);
       throw error;
     }
   }
@@ -68,7 +71,7 @@ export async function POST(request: Request) {
         error: error instanceof Error ? error.message : "La génération a échoué.",
         validationStatus: "test_unverified",
       },
-      { status: 400, headers: { "Cache-Control": "no-store", "X-PilotPaper-Mode": "test_unverified" } },
+      { status: 422, headers: { "Cache-Control": "no-store", "X-PilotPaper-Mode": "test_unverified", "X-PilotPaper-Diagnostic": "0" } },
     );
   }
 }
