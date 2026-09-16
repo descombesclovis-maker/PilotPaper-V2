@@ -1,0 +1,184 @@
+name: Validate PilotPaper V2 Installer
+
+on:
+  push:
+    branches:
+      - release/v2
+    paths:
+      - "desktop/**"
+      - "app/**"
+      - "components/**"
+      - "geometry-engine/**"
+      - "lib/**"
+      - "public/**"
+      - "scripts/**"
+      - "tests/**"
+      - "worker/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "tw-animate-css"
+      - ".github/workflows/build-v2-windows.yml"
+      - ".github/workflows/validate-v2-installer.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pilotpaper-v2-installer-validation
+  cancel-in-progress: true
+
+jobs:
+  installed-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Wait for matching Windows build
+        id: wait
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runId = $null
+          for ($i = 0; $i -lt 120; $i++) {
+            $payload = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&event=push&per_page=30" | ConvertFrom-Json
+            $run = $payload.workflow_runs | Where-Object { $_.name -eq "Build PilotPaper V2 Windows" } | Select-Object -First 1
+            if ($null -ne $run) {
+              if ($run.conclusion -eq "failure" -or $run.conclusion -eq "cancelled" -or $run.conclusion -eq "timed_out") {
+                throw "Matching Windows build failed: $($run.html_url)"
+              }
+              if ($run.status -eq "completed" -and $run.conclusion -eq "success") {
+                $runId = [string]$run.id
+                break
+              }
+            }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $runId) { throw "No successful Windows build was produced for $env:GITHUB_SHA" }
+          "run_id=$runId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Using build run $runId for $env:GITHUB_SHA"
+
+      - name: Download exact installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PilotPaper-V2-Setup
+          path: installer-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.wait.outputs.run_id }}
+
+      - name: Verify installer checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = Resolve-Path "installer-artifact/PilotPaper-V2-Setup.exe"
+          $checksumFile = Resolve-Path "installer-artifact/PilotPaper-V2-Setup.exe.sha256"
+          $expected = ((Get-Content $checksumFile -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw "Installer SHA256 mismatch: expected $expected, got $actual" }
+          if ((Get-Item $setup).Length -lt 100MB) { throw "Installer is unexpectedly small" }
+          Write-Host "Installer checksum verified: $actual"
+
+      - name: Install exact V2 artifact silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = (Resolve-Path "installer-artifact/PilotPaper-V2-Setup.exe").Path
+          $installDir = Join-Path $env:RUNNER_TEMP "PilotPaper-V2-installed"
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $log = Join-Path $env:RUNNER_TEMP "pilotpaper-v2-install.log"
+          $arguments = @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installDir",
+            "/LOG=$log"
+          )
+          $process = Start-Process -FilePath $setup -ArgumentList $arguments -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 200 }
+            throw "PilotPaper V2 installer exited with code $($process.ExitCode)"
+          }
+          "PILOTPAPER_INSTALLED_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Validate installed payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $required = @(
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PilotPaper-V2.exe"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PILOTPAPER-BUILD.txt"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/node.exe"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/PilotPaperGeometryEngine.exe"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/node_modules/vite/bin/vite.js"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/vite.config.ts")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Installed payload missing: $path" }
+          }
+          $buildSha = (Get-Content (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PILOTPAPER-BUILD.txt") -Raw).Trim()
+          if ($buildSha -ne $env:GITHUB_SHA) { throw "Installed build SHA mismatch: $buildSha != $env:GITHUB_SHA" }
+          Write-Host "Installed payload matches commit $buildSha"
+
+      - name: Smoke-test installed geometry engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $enginePath = Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/PilotPaperGeometryEngine.exe"
+          $out = Join-Path $env:RUNNER_TEMP "installed-geometry.out.log"
+          $err = Join-Path $env:RUNNER_TEMP "installed-geometry.err.log"
+          $engine = Start-Process -FilePath $enginePath -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+          try {
+            $healthy = $false
+            for ($i = 0; $i -lt 120; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
+                if ($health.ok -eq $true) {
+                  foreach ($capability in @(
+                    "geotiff-dsm",
+                    "sampled-elevation-points",
+                    "metric-obstacles",
+                    "roof-edge-topology",
+                    "opencv-registration",
+                    "site-twin-photo-projection"
+                  )) {
+                    if (-not ($health.capabilities -contains $capability)) { throw "Installed engine capability missing: $capability" }
+                  }
+                  $openapi = Invoke-RestMethod -Uri "http://127.0.0.1:8765/openapi.json" -TimeoutSec 3
+                  if ($null -eq $openapi.paths.'/v1/site-twin/project-modules') { throw "Installed Site Twin projection route is missing" }
+                  $healthy = $true
+                  break
+                }
+              } catch {}
+            }
+            if (-not $healthy) {
+              if (Test-Path $out) { Get-Content $out -Tail 150 }
+              if (Test-Path $err) { Get-Content $err -Tail 150 }
+              throw "Installed geometry engine did not become healthy"
+            }
+            Write-Host "Installed Geometry Engine passed health and projection-route validation."
+          } finally {
+            if (-not $engine.HasExited) { Stop-Process -Id $engine.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Uninstall V2 silently and verify cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not $env:PILOTPAPER_INSTALLED_DIR) { exit 0 }
+          $uninstaller = Join-Path $env:PILOTPAPER_INSTALLED_DIR "unins000.exe"
+          if (-not (Test-Path $uninstaller)) { throw "Installed uninstaller is missing" }
+          $process = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "PilotPaper V2 uninstaller exited with code $($process.ExitCode)" }
+          Start-Sleep -Seconds 2
+          foreach ($path in @(
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "PilotPaper-V2.exe"),
+            (Join-Path $env:PILOTPAPER_INSTALLED_DIR "app/current/runtime/PilotPaperGeometryEngine.exe")
+          )) {
+            if (Test-Path $path) { throw "Uninstall cleanup failed: $path still exists" }
+          }
+          Write-Host "PilotPaper V2 install/uninstall lifecycle validated."
