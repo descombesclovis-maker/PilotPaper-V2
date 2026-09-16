@@ -24,6 +24,8 @@ test("the Geometry Engine is smoke-tested from the installed payload and the ins
   assert.match(source, /http:\/\/127\.0\.0\.1:8765\/health/);
   assert.match(source, /site-twin-photo-projection/);
   assert.match(source, /\/v1\/site-twin\/project-modules/);
+  assert.match(source, /Get-Process -Name "PilotPaperGeometryEngine"/);
+  assert.match(source, /process tree did not stop cleanly/);
   assert.match(source, /Uninstall V2 silently and verify cleanup/);
   assert.match(source, /unins000\.exe/);
 });
