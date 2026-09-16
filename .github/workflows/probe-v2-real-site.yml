@@ -7,9 +7,12 @@ on:
     paths:
       - ".github/workflows/probe-v2-real-site.yml"
       - "app/api/site-twin-v2/**"
+      - "app/api/dp-piece/**"
       - "geometry-engine/**"
       - "lib/site-twin-v2/**"
       - "lib/dp-ai-engine/**"
+      - "lib/geometry/**"
+      - "lib/opensolar/**"
   workflow_dispatch:
 
 permissions:
@@ -18,7 +21,7 @@ permissions:
 jobs:
   real-site-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       GOOGLE_SOLAR_API_KEY: ${{ secrets.GOOGLE_SOLAR_API_KEY }}
       OPENSOLAR_ENABLED: "true"
@@ -101,26 +104,26 @@ jobs:
               faces = twin.get('roof', {}).get('faces', [])
               print(f"REAL_SITE_FACE_COUNT={len(faces)}")
               print(f"REAL_SITE_CONFIDENCE={twin.get('confidence')}")
+              print(f"LOCAL_ENGINE_EXECUTED={twin.get('sources', {}).get('geometryEngineChecked')}")
+              print(f"INDEPENDENT_GEOMETRY_ATTEMPTED={twin.get('sources', {}).get('advancedRoofAttempted')}")
           PY
 
           if [ "$code" = "200" ]; then
             python - <<'PY'
           import json
           payload = json.load(open('/tmp/site-twin.json', encoding='utf-8'))
-          faces = payload.get('siteTwin', {}).get('roof', {}).get('faces', [])
+          twin = payload.get('siteTwin', {})
+          faces = twin.get('roof', {}).get('faces', [])
+          sources = twin.get('sources', {})
           if len(faces) < 2:
               raise SystemExit(f'Real-site regression: HTTP 200 is forbidden with only {len(faces)} physical roof face(s)')
+          if sources.get('geometryEngineChecked') is not True or not sources.get('geometryEngineVersion'):
+              raise SystemExit('Real-site regression: local geometry engine execution is not proven')
           print(f'Real-site geometry validated with {len(faces)} physical faces.')
           PY
-            exit 0
-          fi
-
-          # A public CI runner may legitimately have neither a Google DSM key,
-          # an advanced-roof session nor IGN LiDAR coverage for this exact house.
-          # In that case PilotPaper must FAIL CLOSED: an explicit non-200 error is
-          # correct; a blank/raw-source "successful" DP would be a regression.
-          if [ -z "$GOOGLE_SOLAR_API_KEY" ] && { [ -z "$OPENSOLAR_ORG_ID" ] || [ -z "$OPENSOLAR_BEARER_TOKEN" ]; }; then
-            python - <<'PY'
+          else
+            if [ -z "$GOOGLE_SOLAR_API_KEY" ] && { [ -z "$OPENSOLAR_ORG_ID" ] || [ -z "$OPENSOLAR_BEARER_TOKEN" ]; }; then
+              python - <<'PY'
           import json
           payload = json.load(open('/tmp/site-twin.json', encoding='utf-8'))
           if payload.get('siteTwin'):
@@ -130,15 +133,75 @@ jobs:
               raise SystemExit(f'Unexpected fail-closed payload: {payload}')
           print('Real-site probe credential-gated: no external source was configured and PilotPaper failed closed as required.')
           PY
-            exit 0
+              exit 0
+            fi
+            echo 'A real geometry credential was configured, therefore Azé must reconstruct successfully.'
+            tail -200 /tmp/pilotpaper-v2.log || true
+            tail -200 /tmp/pilotpaper-geometry.log || true
+            exit 1
           fi
 
-          echo 'A real geometry credential was configured, therefore Azé must reconstruct successfully.'
-          echo '--- V2 server log ---'
-          tail -200 /tmp/pilotpaper-v2.log || true
-          echo '--- geometry log ---'
-          tail -200 /tmp/pilotpaper-geometry.log || true
-          exit 1
+      - name: Generate real deterministic DP2
+        shell: bash
+        run: |
+          set +e
+          code=$(curl -sS -D /tmp/dp2.headers -o /tmp/dp2.json -w "%{http_code}" \
+            -X POST http://127.0.0.1:5173/api/dp-piece \
+            -H 'Content-Type: application/json' \
+            --data '{"dp":2,"address":"110 Rue Basse, 71260 Azé","moduleReference":"TSM-450NEG9R.28","panelCount":1,"rows":1,"columns":1,"orientation":"portrait","placement":"centered","gutterClearanceMm":300,"interPanelGapMm":20,"photos":[],"references":[]}')
+          set -e
+          echo "DP2 HTTP $code"
+          cat /tmp/dp2.headers
+
+          if [ "$code" != "200" ]; then
+            cat /tmp/dp2.json || true
+            if [ -z "$OPENSOLAR_ORG_ID" ] || [ -z "$OPENSOLAR_BEARER_TOKEN" ]; then
+              python - <<'PY'
+          import json
+          payload = json.load(open('/tmp/dp2.json', encoding='utf-8'))
+          text = json.dumps(payload, ensure_ascii=False).lower()
+          if not any(token in text for token in ('géométr', 'geometry', 'contrôle géométrique', 'moteur')):
+              raise SystemExit(f'DP2 fail-closed payload is not actionable: {payload}')
+          print('DP2 correctly failed closed because the independent geometry session is unavailable.')
+          PY
+              exit 0
+            fi
+            echo 'Geometry credentials are configured, therefore the real DP2 must be produced.'
+            echo '--- V2 server log ---'
+            tail -250 /tmp/pilotpaper-v2.log || true
+            echo '--- geometry log ---'
+            tail -250 /tmp/pilotpaper-geometry.log || true
+            exit 1
+          fi
+
+          python - <<'PY'
+          import base64
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/dp2.json').read_text(encoding='utf-8'))
+          if payload.get('dp') != 2:
+              raise SystemExit(f'Unexpected DP payload: {payload.get("dp")}')
+          if payload.get('mimeType') != 'image/png':
+              raise SystemExit(f'DP2 is not a PNG: {payload.get("mimeType")}')
+          if payload.get('inspector', {}).get('passed') is not True:
+              raise SystemExit(f'DP2 Inspector rejected output: {payload.get("inspector")}')
+          receipt = payload.get('geometryReceipt')
+          if not receipt or receipt.get('layoutPanelCount') != 1 or not receipt.get('contextId'):
+              raise SystemExit(f'DP2 geometry receipt missing or invalid: {receipt}')
+          raw = base64.b64decode(payload.get('base64', ''))
+          if len(raw) < 10000 or raw[:8] != b'\x89PNG\r\n\x1a\n':
+              raise SystemExit(f'DP2 returned an empty/invalid PNG ({len(raw)} bytes)')
+          summary = ' '.join(payload.get('sourceSummary', [])).lower()
+          if 'diagnostic' in summary or 'photo source brute' in summary:
+              raise SystemExit(f'DP2 masqueraded a diagnostic source as valid: {summary}')
+          print(f'REAL_DP2_PNG_BYTES={len(raw)}')
+          print(f'REAL_DP2_CONTEXT={receipt["contextId"]}')
+          print('Real deterministic DP2 validated end-to-end.')
+          PY
+
+          grep -qi '^X-PilotPaper-Diagnostic: 0' /tmp/dp2.headers
+          grep -qi '^X-PilotPaper-Visual-Path: site-twin-georeferenced-plan' /tmp/dp2.headers
 
       - name: Stop local services
         if: always()
