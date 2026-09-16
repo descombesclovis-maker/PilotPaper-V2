@@ -116,6 +116,16 @@ test("geometry engine photo registration has deterministic SIFT and ORB fallback
   assert.match(registration, /\("ORB", _register_orb\)/);
 });
 
+test("visual jobs retry transient provider and network failures but never retry invalid credentials", async () => {
+  const resilience = await source("lib/pilotpaper-openai-resilience.ts");
+  assert.match(resilience, /408\|409\|429\|500\|502\|503\|504/);
+  assert.match(resilience, /message\.includes\("timeout"\)/);
+  assert.match(resilience, /message\.includes\("fetch failed"\)/);
+  assert.match(resilience, /message\.includes\("econnreset"\)/);
+  assert.match(resilience, /invalid_api_key/);
+  assert.match(resilience, /if \(!isTransientVisualError\(error\)\) throw error/);
+});
+
 test("local persistence purges legacy DP artifacts and refuses invalid pieces", async () => {
   const persistence = await source("lib/pilotpaper-image2-persistence.ts");
   assert.match(persistence, /const DB_VERSION = 2/);
