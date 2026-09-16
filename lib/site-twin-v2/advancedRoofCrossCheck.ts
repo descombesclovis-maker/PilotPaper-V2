@@ -1,9 +1,72 @@
 import type { AdvancedRoofFacet } from "@/lib/geometry/advanced-roof-truth";
-import type { SiteTwinRoofCrossCheck, SiteTwinRoofFace } from "./types";
+import type { SiteTwinRoofCrossCheck, SiteTwinRoofFace, TwinLonLat, TwinXY } from "./types";
+
+const GEOMETRY_CENTROID_TOLERANCE_M = 4;
+const GEOMETRY_BOUNDARY_TOLERANCE_M = 2.5;
 
 function angularDistance(a: number, b: number) {
   const delta = Math.abs((a - b) % 360);
   return Math.min(delta, 360 - delta);
+}
+
+function centroid(points: TwinLonLat[]) {
+  if (!points.length) return null;
+  const sum = points.reduce((acc, point) => ({ longitude: acc.longitude + point[0], latitude: acc.latitude + point[1] }), { longitude: 0, latitude: 0 });
+  return [sum.longitude / points.length, sum.latitude / points.length] as TwinLonLat;
+}
+
+function projectToMeters(point: TwinLonLat, origin: TwinLonLat): TwinXY {
+  const latitudeRad = origin[1] * Math.PI / 180;
+  return {
+    x: (point[0] - origin[0]) * 111_320 * Math.cos(latitudeRad),
+    y: (point[1] - origin[1]) * 110_540,
+  };
+}
+
+function distance(a: TwinXY, b: TwinXY) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointToSegmentDistance(point: TwinXY, a: TwinXY, b: TwinXY) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const denominator = dx * dx + dy * dy;
+  if (denominator <= 1e-12) return distance(point, a);
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / denominator));
+  return distance(point, { x: a.x + t * dx, y: a.y + t * dy });
+}
+
+function pointToPolygonBoundaryDistance(point: TwinXY, polygon: TwinXY[]) {
+  let best = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < polygon.length; index += 1) {
+    best = Math.min(best, pointToSegmentDistance(point, polygon[index]!, polygon[(index + 1) % polygon.length]!));
+  }
+  return best;
+}
+
+function polygonGeometryDifference(local: TwinLonLat[] | undefined, remote: Array<[number, number]> | null) {
+  if (!local || local.length < 3 || !remote || remote.length < 3) {
+    return { centroidDistanceM: null, boundaryMeanDistanceM: null };
+  }
+  const localCentroid = centroid(local);
+  const remoteCentroid = centroid(remote);
+  if (!localCentroid || !remoteCentroid) return { centroidDistanceM: null, boundaryMeanDistanceM: null };
+  const origin: TwinLonLat = [
+    (localCentroid[0] + remoteCentroid[0]) / 2,
+    (localCentroid[1] + remoteCentroid[1]) / 2,
+  ];
+  const localMeters = local.map((point) => projectToMeters(point, origin));
+  const remoteMeters = remote.map((point) => projectToMeters(point, origin));
+  const localCenterMeters = projectToMeters(localCentroid, origin);
+  const remoteCenterMeters = projectToMeters(remoteCentroid, origin);
+  const directedDistances = [
+    ...localMeters.map((point) => pointToPolygonBoundaryDistance(point, remoteMeters)),
+    ...remoteMeters.map((point) => pointToPolygonBoundaryDistance(point, localMeters)),
+  ];
+  return {
+    centroidDistanceM: distance(localCenterMeters, remoteCenterMeters),
+    boundaryMeanDistanceM: directedDistances.reduce((sum, value) => sum + value, 0) / directedDistances.length,
+  };
 }
 
 function facetPair(local: SiteTwinRoofFace, remote: AdvancedRoofFacet) {
@@ -12,10 +75,13 @@ function facetPair(local: SiteTwinRoofFace, remote: AdvancedRoofFacet) {
   const areaRelativeError = remote.areaM2 == null || remote.areaM2 <= 0
     ? null
     : Math.abs(local.areaM2 - remote.areaM2) / Math.max(local.areaM2, remote.areaM2);
+  const geometry = polygonGeometryDifference(local.polygonLonLat, remote.polygonLonLat);
   const components = [
     azimuthDelta == null ? null : azimuthDelta / 25,
     slopeDelta == null ? null : slopeDelta / 10,
     areaRelativeError == null ? null : areaRelativeError / 0.4,
+    geometry.centroidDistanceM == null ? null : geometry.centroidDistanceM / GEOMETRY_CENTROID_TOLERANCE_M,
+    geometry.boundaryMeanDistanceM == null ? null : geometry.boundaryMeanDistanceM / GEOMETRY_BOUNDARY_TOLERANCE_M,
   ].filter((value): value is number => value !== null);
   const score = components.length
     ? components.reduce((sum, value) => sum + value, 0) / components.length
@@ -23,8 +89,19 @@ function facetPair(local: SiteTwinRoofFace, remote: AdvancedRoofFacet) {
   const close = components.length > 0
     && (azimuthDelta == null || azimuthDelta <= 15)
     && (slopeDelta == null || slopeDelta <= 7)
-    && (areaRelativeError == null || areaRelativeError <= 0.30);
-  return { azimuthDelta, slopeDelta, areaRelativeError, score, close, metricCount: components.length };
+    && (areaRelativeError == null || areaRelativeError <= 0.30)
+    && (geometry.centroidDistanceM == null || geometry.centroidDistanceM <= GEOMETRY_CENTROID_TOLERANCE_M)
+    && (geometry.boundaryMeanDistanceM == null || geometry.boundaryMeanDistanceM <= GEOMETRY_BOUNDARY_TOLERANCE_M);
+  return {
+    azimuthDelta,
+    slopeDelta,
+    areaRelativeError,
+    centroidDistanceM: geometry.centroidDistanceM,
+    boundaryMeanDistanceM: geometry.boundaryMeanDistanceM,
+    score,
+    close,
+    metricCount: components.length,
+  };
 }
 
 /**
@@ -59,6 +136,8 @@ export function compareAdvancedFacets(
       azimuthDelta: null as number | null,
       slopeDelta: null as number | null,
       areaRelativeError: null as number | null,
+      centroidDistanceM: null as number | null,
+      boundaryMeanDistanceM: null as number | null,
     };
     for (const index of unused) {
       const candidate = facetPair(local, remoteFacets[index]!);
@@ -82,6 +161,8 @@ export function compareAdvancedFacets(
       azimuthDeltaDeg: best.azimuthDelta,
       slopeDeltaDeg: best.slopeDelta,
       areaRelativeError: best.areaRelativeError,
+      centroidDistanceM: best.centroidDistanceM,
+      boundaryMeanDistanceM: best.boundaryMeanDistanceM,
       metricCount: best.metricCount,
       status: best.close ? "agreement" : "conflict",
     });
@@ -91,6 +172,8 @@ export function compareAdvancedFacets(
       best.azimuthDelta == null ? "azimut n/a" : `Δazimut ${best.azimuthDelta.toFixed(1)}°`,
       best.slopeDelta == null ? "pente n/a" : `Δpente ${best.slopeDelta.toFixed(1)}°`,
       best.areaRelativeError == null ? "surface n/a" : `Δsurface ${(best.areaRelativeError * 100).toFixed(0)} %`,
+      best.centroidDistanceM == null ? "position n/a" : `Δcentre ${best.centroidDistanceM.toFixed(2)} m`,
+      best.boundaryMeanDistanceM == null ? "contour n/a" : `Δcontour ${best.boundaryMeanDistanceM.toFixed(2)} m`,
       best.close ? "accord géométrique" : "écart à contrôler",
     ].join(" · "));
   }
