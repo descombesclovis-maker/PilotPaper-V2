@@ -20,6 +20,7 @@ from app import (
     _segment_planes,
 )
 from registration import register_images
+from topology_refinement import refine_roof_topology
 
 app = FastAPI(title="PilotPaper Geometry Engine", version=ENGINE_VERSION)
 
@@ -156,7 +157,8 @@ def _copc_points(raw: str, property_lock: dict[str, Any]):
 def _result(points: np.ndarray, buildings: list[tuple[str, Any]], crs: CRS, source: str):
     points, open3d_diagnostics = _clean_with_open3d(points, source)
     origin, faces, edges, confidence, diagnostics = _segment_planes(points, buildings, crs, source)
-    diagnostics = open3d_diagnostics + diagnostics
+    faces, edges, topology_diagnostics = refine_roof_topology(faces, edges, buildings)
+    diagnostics = open3d_diagnostics + diagnostics + topology_diagnostics
     return {
         "engineVersion": ENGINE_VERSION,
         "source": source,
