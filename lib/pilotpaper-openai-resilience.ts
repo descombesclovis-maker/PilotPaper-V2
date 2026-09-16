@@ -83,10 +83,18 @@ function isTransientVisualError(error: unknown) {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
   if (message.includes("quota de génération api insuffisant")) return false;
-  return message.includes("(429)") ||
-    message.includes("temporairement saturé") ||
-    message.includes("rate limit") ||
-    message.includes("too many requests");
+  if (message.includes("invalid_api_key") || message.includes("incorrect api key") || message.includes("unauthorized")) return false;
+  return /\((408|409|429|500|502|503|504)\)/.test(message)
+    || message.includes("temporairement saturé")
+    || message.includes("rate limit")
+    || message.includes("too many requests")
+    || message.includes("timeout")
+    || message.includes("timed out")
+    || message.includes("aborted")
+    || message.includes("fetch failed")
+    || message.includes("network error")
+    || message.includes("econnreset")
+    || message.includes("econnrefused");
 }
 
 export type PilotPaperOpenAiRequestOptions = {
@@ -146,8 +154,8 @@ export async function pilotPaperOpenAiRequest(
 }
 
 /**
- * Protects the whole visual DP job against transient 429s produced anywhere in the generator
- * (image generation or inspector). Jobs can still overlap, but their starts are staggered.
+ * Protects the whole visual DP job against transient provider/network failures produced anywhere
+ * in the renderer or inspector. Geometry/quality failures are never retried as if they were network errors.
  */
 export async function pilotPaperRunVisualJob<T>(label: string, task: () => Promise<T>, maxAttempts = 4): Promise<T> {
   let lastError: unknown = null;
@@ -159,7 +167,7 @@ export async function pilotPaperRunVisualJob<T>(label: string, task: () => Promi
       lastError = error;
       if (!isTransientVisualError(error)) throw error;
       if (attempt === maxAttempts) {
-        throw new Error(`${label} : limite temporaire du moteur visuel toujours active après ${maxAttempts} reprises automatiques. Réessayez dans quelques minutes.`);
+        throw new Error(`${label} : moteur visuel temporairement indisponible après ${maxAttempts} reprises automatiques. Réessayez dans quelques minutes.`);
       }
       await sleep(Math.min(MAX_BACKOFF_MS, 10_000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 2_000)));
     }
