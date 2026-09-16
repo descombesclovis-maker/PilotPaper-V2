@@ -1,4 +1,4 @@
-name: Patch V2 analytic ridge topology
+name: Patch V2 runtime generation path
 
 on:
   push:
@@ -19,153 +19,94 @@ jobs:
           ref: release/v2
           fetch-depth: 0
 
-      - name: Rebuild shared roof edges from fitted plane intersections
-        shell: python {0}
-        run: |
-          from pathlib import Path
-
-          path = Path("geometry-engine/app.py")
-          text = path.read_text(encoding="utf-8")
-
-          helper_marker = "\n\ndef _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], crs: CRS, source: str):\n"
-          if helper_marker not in text:
-              raise SystemExit("segment marker not found")
-
-          helper = r'''
-
-
-def _line_parts(geometry) -> list[LineString]:
-    if isinstance(geometry, LineString):
-        return [geometry]
-    return [item for item in getattr(geometry, "geoms", []) if isinstance(item, LineString)]
-
-
-def _analytic_shared_edge(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    building_union,
-    origin_x: float,
-    origin_y: float,
-    pixel_hint: float,
-) -> LineString | None:
-    # Roof topology must come from the physical planes, not from the accidental
-    # contact length of two noisy point-cloud hulls. For two non-parallel planes,
-    # z1(x,y) == z2(x,y) defines their exact ridge/hip/valley line in XY.
-    if left.get("buildingId") != right.get("buildingId"):
-        return None
-    left_geometry = left["_geometry"]
-    right_geometry = right["_geometry"]
-    join_tolerance = max(0.18, min(0.50, pixel_hint * 2.6))
-    if left_geometry.distance(right_geometry) > join_tolerance * 2.25:
-        return None
-
-    lp = left["plane"]
-    rp = right["plane"]
-    da = float(lp["a"]) - float(rp["a"])
-    db = float(lp["b"]) - float(rp["b"])
-    dc = float(lp["c"]) - float(rp["c"])
-    norm2 = da * da + db * db
-    if norm2 <= 1e-10:
-        return None
-
-    # Closest point to the Site Twin origin on da*x + db*y + dc = 0.
-    local_x = -da * dc / norm2
-    local_y = -db * dc / norm2
-    norm = math.sqrt(norm2)
-    dir_x = -db / norm
-    dir_y = da / norm
-    minx, miny, maxx, maxy = building_union.bounds
-    reach = max(maxx - minx, maxy - miny, 1.0) * 3.0 + 4.0
-    center_x = origin_x + local_x
-    center_y = origin_y + local_y
-    analytic_line = LineString([
-        (center_x - dir_x * reach, center_y - dir_y * reach),
-        (center_x + dir_x * reach, center_y + dir_y * reach),
-    ])
-
-    # Buffer only compensates for RANSAC/hull discretisation near the shared edge.
-    # It must never invent adjacency between geometrically separated roof faces.
-    adjacency_band = (
-        left_geometry.buffer(join_tolerance)
-        .intersection(right_geometry.buffer(join_tolerance))
-        .intersection(building_union.buffer(0.08))
-    )
-    candidates = [line for line in _line_parts(analytic_line.intersection(adjacency_band)) if line.length >= 0.25]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda line: line.length)
-'''
-
-          if "def _analytic_shared_edge(" not in text:
-              text = text.replace(helper_marker, helper + helper_marker, 1)
-
-          start_marker = "    edges: list[dict[str, Any]] = []\n    edge_counter = 0\n"
-          end_marker = "\n    building_boundary = building_union.boundary"
-          start = text.find(start_marker)
-          if start < 0:
-              raise SystemExit("edge block start not found")
-          end = text.find(end_marker, start)
-          if end < 0:
-              raise SystemExit("edge block end not found")
-
-          replacement = r'''    edges: list[dict[str, Any]] = []
-    edge_counter = 0
-    for left_index, left in enumerate(deduplicated):
-        for right in deduplicated[left_index + 1 :]:
-            analytic = _analytic_shared_edge(
-                left,
-                right,
-                building_union,
-                origin_x,
-                origin_y,
-                pixel_hint,
-            )
-            if analytic is not None:
-                lines = [analytic]
-            else:
-                shared = left["_geometry"].boundary.intersection(right["_geometry"].boundary)
-                lines = _line_parts(shared)
-            for line in lines:
-                if line.length < 0.25:
-                    continue
-                coordinates = list(line.coords)
-                start_point, end_point = coordinates[0], coordinates[-1]
-                z_start = (
-                    _plane_z(left, start_point[0], start_point[1], origin_x, origin_y)
-                    + _plane_z(right, start_point[0], start_point[1], origin_x, origin_y)
-                ) / 2
-                z_end = (
-                    _plane_z(left, end_point[0], end_point[1], origin_x, origin_y)
-                    + _plane_z(right, end_point[0], end_point[1], origin_x, origin_y)
-                ) / 2
-                edge_id = f"edge-{edge_counter:03d}"
-                edge_counter += 1
-                edges.append({
-                    "id": edge_id,
-                    "a": {"x": float(start_point[0] - origin_x), "y": float(start_point[1] - origin_y), "z": float(z_start)},
-                    "b": {"x": float(end_point[0] - origin_x), "y": float(end_point[1] - origin_y), "z": float(z_end)},
-                    "kind": _classify_shared_edge(left, right, start_point, end_point, origin_x, origin_y),
-                    "adjacentFaceIds": [left["id"], right["id"]],
-                })
-                left["edgeIds"].append(edge_id)
-                right["edgeIds"].append(edge_id)
-'''
-
-          text = text[:start] + replacement + text[end:]
-          path.write_text(text, encoding="utf-8")
-
-      - name: Verify focused geometry regression locally in CI
+      - name: Apply focused runtime fixes
         shell: bash
         run: |
-          python -m py_compile geometry-engine/app.py geometry-engine/synthetic_regression.py
-          python geometry-engine/synthetic_regression.py
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Commit analytic ridge correction
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"needle not found in {path}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # The complete one-click chain must preserve vector DP2/DP3 references
+          # and their geometry receipts. They are continuity evidence even when
+          # they are not raster inputs to Image-2.
+          replace_once(
+              "components/production/complete-dp-experience.tsx",
+              '''    const candidate = results[referenceDp];
+    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp"].includes(candidate.mimeType)) return [];
+    return [{ dp: referenceDp, mimeType: candidate.mimeType as VisualReference["mimeType"], base64: candidate.base64 }];''',
+              '''    const candidate = results[referenceDp];
+    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp", "image/svg+xml"].includes(candidate.mimeType)) return [];
+    return [{
+      dp: referenceDp,
+      mimeType: candidate.mimeType as VisualReference["mimeType"],
+      base64: candidate.base64,
+      geometryReceipt: candidate.geometryReceipt,
+    }];''',
+          )
+
+          # Installed V2 is production generation, not diagnostic export mode.
+          replace_once(
+              "desktop/PilotPaperLauncher/PilotPaperV2Program.cs",
+              'startInfo.Environment["DP_TEST_EXPORT"] = "true";',
+              'startInfo.Environment["DP_TEST_EXPORT"] = "false";',
+          )
+
+          # IGN sampled points must be restricted to the locked building union
+          # before RANSAC. Otherwise ground/nearby structures may win a plane fit.
+          replace_once(
+              "geometry-engine/main.py",
+              'from pyproj import CRS, Transformer\n',
+              'from pyproj import CRS, Transformer\nfrom shapely.geometry import Point\nfrom shapely.ops import unary_union\n',
+          )
+          replace_once(
+              "geometry-engine/main.py",
+              '''    buildings = _projected_buildings(property_lock, crs)
+    return np.asarray(rows, dtype=np.float64), buildings, crs
+''',
+              '''    buildings = _projected_buildings(property_lock, crs)
+    points = np.asarray(rows, dtype=np.float64)
+    target = unary_union([polygon for _, polygon in buildings]).buffer(0.65)
+    minx, miny, maxx, maxy = target.bounds
+    keep = (
+        (points[:, 0] >= minx) & (points[:, 0] <= maxx)
+        & (points[:, 1] >= miny) & (points[:, 1] <= maxy)
+        & np.isfinite(points[:, 2])
+    )
+    points = points[keep]
+    if len(points):
+        inside = np.fromiter(
+            (target.covers(Point(x, y)) for x, y in points[:, :2]),
+            dtype=bool,
+            count=len(points),
+        )
+        points = points[inside]
+    if len(points) < 120:
+        raise ValueError(f"IGN MNX : couverture insuffisante sur le bâtiment verrouillé ({len(points)} points).")
+    return points, buildings, crs
+''',
+          )
+          PY
+
+      - name: Validate patched sources
+        shell: bash
+        run: |
+          python -m py_compile geometry-engine/main.py
+          grep -F 'input.testMode === true' app/api/dp-piece/route.ts
+          grep -F 'geometryReceipt: candidate.geometryReceipt' components/production/complete-dp-experience.tsx
+          grep -F 'DP_TEST_EXPORT"] = "false"' desktop/PilotPaperLauncher/PilotPaperV2Program.cs
+
+      - name: Commit runtime corrections
         shell: bash
         run: |
           git config user.name "PilotPaper CI"
           git config user.email "pilotpaper-ci@users.noreply.github.com"
-          git add geometry-engine/app.py
+          git add components/production/complete-dp-experience.tsx desktop/PilotPaperLauncher/PilotPaperV2Program.cs geometry-engine/main.py
           git diff --cached --check
-          git commit -m "Reconstruct roof ridges from analytic plane intersections"
+          git commit -m "Fix installed V2 deterministic generation path"
           git push origin HEAD:release/v2
