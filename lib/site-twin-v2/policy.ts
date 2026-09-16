@@ -21,7 +21,37 @@ export const SITE_TWIN_POLICY = Object.freeze({
   requireOneTwinRevisionAcrossAllPieces: true,
   requireExactPanelCount: true,
   requireRegressionFixtureForConfirmedFailure: true,
+  requireResolutionOfMajorityIndependentFacetConflict: true,
 });
+
+function assertIndependentRoofCrossCheck(twin: SiteTwin) {
+  if (!SITE_TWIN_POLICY.requireResolutionOfMajorityIndependentFacetConflict) return;
+  const advanced = twin.evidence.find((entry) => entry.source === "advanced-roof-model");
+  if (!advanced) return;
+
+  // Do not block merely because an external provider splits the roof into a
+  // different number of facets. We only fail closed when the provider exposes
+  // comparable facet metrics and a majority of those pan-by-pan comparisons
+  // explicitly disagree on azimuth/slope/area tolerances.
+  const facetComparisons = advanced.notes.filter((note) => note.includes("↔ facette distante"));
+  if (!facetComparisons.length) return;
+  const conflicts = facetComparisons.filter((note) => /écart à contrôler/i.test(note));
+  const agreements = facetComparisons.filter((note) => /accord géométrique/i.test(note));
+  if (conflicts.length > agreements.length) {
+    throw new SiteTwinError(
+      "ROOF_GEOMETRY_LOW_CONFIDENCE",
+      `Contrôle géométrique indépendant divergent : ${conflicts.length}/${facetComparisons.length} facettes comparables sont en conflit. PilotPaper refuse de choisir silencieusement entre deux géométries.`,
+      {
+        recoverable: true,
+        details: {
+          comparableFacets: facetComparisons.length,
+          conflicts: conflicts.length,
+          agreements: agreements.length,
+        },
+      },
+    );
+  }
+}
 
 /**
  * These are architectural restrictions, not UI preferences. They deliberately
@@ -59,6 +89,7 @@ export function assertTwinReadyForAutomaticDocuments(twin: SiteTwin) {
       );
     }
   }
+  assertIndependentRoofCrossCheck(twin);
   return twin;
 }
 
