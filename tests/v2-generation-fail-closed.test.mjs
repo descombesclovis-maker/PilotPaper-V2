@@ -118,7 +118,9 @@ test("geometry engine photo registration has deterministic SIFT and ORB fallback
 
 test("visual jobs retry transient provider and network failures but never retry invalid credentials", async () => {
   const resilience = await source("lib/pilotpaper-openai-resilience.ts");
-  assert.match(resilience, /408\|409\|429\|500\|502\|503\|504/);
+  for (const status of [408, 409, 429, 500, 502, 503, 504]) {
+    assert.match(resilience, new RegExp(`status === ${status}`));
+  }
   assert.match(resilience, /message\.includes\("timeout"\)/);
   assert.match(resilience, /message\.includes\("fetch failed"\)/);
   assert.match(resilience, /message\.includes\("econnreset"\)/);
