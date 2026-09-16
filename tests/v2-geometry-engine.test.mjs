@@ -158,8 +158,11 @@ test("every fresh dossier executes mandatory DP2 geometry and downstream pieces 
 
   assert.match(photoEdit, /projectSiteTwinModulesToPhoto/);
   assert.match(photoEdit, /https:\/\/api\.openai\.com\/v1\/images\/edits/);
-  assert.match(photoEdit, /if \(!rawCropCandidate\) throw new Error\("Le moteur visuel n'a produit aucune insertion\."\)/);
-  assert.match(photoEdit, /if \(changeRatio < 0\.12\)/);
+  assert.match(photoEdit, /!rawCropCandidate \|\| rawCropCandidate\.length < 1000/);
+  assert.match(photoEdit, /decodePng\(rawCropCandidate\)/);
+  assert.match(photoEdit, /MIN_AGGREGATE_PANEL_CHANGE_RATIO = 0\.15/);
+  assert.match(photoEdit, /MIN_SINGLE_PANEL_CHANGE_RATIO = 0\.08/);
+  assert.match(photoEdit, /weakestPanel < MIN_SINGLE_PANEL_CHANGE_RATIO/);
 });
 
 test("visible geometry routes use provider-neutral wording", async () => {
