@@ -5,7 +5,7 @@ import { SiteTwinError } from "./errors";
 
 export type GeometryEngineRoofResult = {
   engineVersion: string;
-  source: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry";
+  source: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry" | "advanced-roof-model";
   origin: TwinLonLat;
   faces: SiteTwinRoofFace[];
   edges: SiteTwinRoofEdge[];
@@ -91,7 +91,7 @@ async function postGeometry(data: FormData) {
 
 export async function reconstructRoofWithGeometryEngine(args: {
   property: SiteTwinPropertyLock;
-  source: GeometryEngineRoofResult["source"];
+  source: Exclude<GeometryEngineRoofResult["source"], "advanced-roof-model">;
   elevationGeoTiff?: Uint8Array;
   pointCloud?: Uint8Array;
   sampledPoints?: IgnElevationPoint[];
