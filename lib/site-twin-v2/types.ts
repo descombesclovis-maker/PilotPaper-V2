@@ -106,6 +106,8 @@ export type SiteTwinRoofFacetComparison = {
   azimuthDeltaDeg: number | null;
   slopeDeltaDeg: number | null;
   areaRelativeError: number | null;
+  centroidDistanceM: number | null;
+  boundaryMeanDistanceM: number | null;
   metricCount: number;
   status: "agreement" | "conflict";
 };
