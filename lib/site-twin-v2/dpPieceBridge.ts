@@ -171,6 +171,6 @@ export async function generateDeterministicSiteTwinPiece(input: DpPieceInput & {
     const rendered = renderDp2FromSiteTwin(context);
     return svgOutput({ dp: 2, title: "DP2 — Plan de masse", svg: rendered.text, context });
   }
-  const rendered = renderDp3FromSiteTwin(context);
+  const rendered = await renderDp3FromSiteTwin(context);
   return svgOutput({ dp: 3, title: "DP3 — Plan en coupe", svg: rendered.text, context });
 }
