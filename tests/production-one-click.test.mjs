@@ -39,7 +39,7 @@ test("complete generation follows the exact K-par-k sequence instead of a diverg
   assert.match(kpark, /if \(dp === 6\) return \[5, 4, 2\]/);
 });
 
-test("test mode preserves a visible diagnostic result instead of hiding a rejected visual DP", async () => {
+test("test mode preserves a visible diagnostic result only when explicitly requested", async () => {
   const route = await source("app/api/dp-piece/route.ts");
   const fallback = await source("lib/pilotpaper-diagnostic-fallback.ts");
   const manager = await source("lib/pilotpaper-complete-dossiers.ts");
@@ -48,7 +48,8 @@ test("test mode preserves a visible diagnostic result instead of hiding a reject
   assert.match(types, /testMode\?: boolean/);
   assert.match(manager, /testMode: true/);
   assert.match(route, /generateDiagnosticFallback/);
-  assert.match(route, /input\.testMode !== false/);
+  assert.match(route, /input\.testMode === true/);
+  assert.doesNotMatch(route, /input\.testMode !== false/);
   assert.match(route, /pilotpaper-diagnostic-fallback/);
   assert.match(fallback, /MODE DIAGNOSTIC NON VALIDÉ/);
   assert.match(fallback, /Return the image even if some uncertainty remains/);
