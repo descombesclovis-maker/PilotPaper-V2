@@ -1,4 +1,4 @@
-name: Patch V2 roof truth integration
+name: Patch V2 analytic ridge topology
 
 on:
   push:
@@ -19,73 +19,153 @@ jobs:
           ref: release/v2
           fetch-depth: 0
 
-      - name: Apply focused V2 integration patch
+      - name: Rebuild shared roof edges from fitted plane intersections
         shell: python {0}
         run: |
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
-              if old not in text:
-                  raise SystemExit(f"needle not found in {path}: {old[:100]!r}")
-              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          path = Path("geometry-engine/app.py")
+          text = path.read_text(encoding="utf-8")
 
-          replace_once(
-              "lib/pilotpaper-vision-engine.ts",
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
-          )
-          replace_once(
-              "lib/pilotpaper-vision-engine.ts",
-              '  const basePrompt = promptForDp(input.dp, address, ign?.parcelReference, spec, references);\n',
-              '  const roofTruth = input.dp >= 2 ? await resolveAdvancedRoofTruth(address) : null;\n  const basePrompt = [\n    promptForDp(input.dp, address, ign?.parcelReference, spec, references),\n    roofTruth?.usable ? roofTruth.promptContext : "",\n  ].filter(Boolean).join("\\n\\n");\n',
-          )
+          helper_marker = "\n\ndef _segment_planes(points: np.ndarray, buildings: list[tuple[str, Polygon]], crs: CRS, source: str):\n"
+          if helper_marker not in text:
+              raise SystemExit("segment marker not found")
 
-          replace_once(
-              "lib/pilotpaper-dp3-generator.ts",
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
-          )
-          replace_once(
-              "lib/pilotpaper-dp3-generator.ts",
-              '  const dp2 = requireDp2Reference(input);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
-              '  const dp2 = requireDp2Reference(input);\n  const roofTruth = await resolveAdvancedRoofTruth(input.address);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
-          )
-          replace_once(
-              "lib/pilotpaper-dp3-generator.ts",
-              '    "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",\n',
-              '    "PILOTPAPER DP3 — SPECIALIZED ARCHITECTURAL + PHOTOVOLTAIC SECTION.",\n    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real photographs and accepted DP2 as the only physical anchors.",\n',
-          )
+          helper = r'''
 
-          replace_once(
-              "lib/pilotpaper-dp4-generator.ts",
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\n',
-              'import { requireVerifiedPvModule } from "@/lib/pv-module-catalog";\nimport { resolveAdvancedRoofTruth } from "@/lib/geometry/advanced-roof-truth";\n',
-          )
-          replace_once(
-              "lib/pilotpaper-dp4-generator.ts",
-              '  const dp2 = requireDp2Reference(input);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
-              '  const dp2 = requireDp2Reference(input);\n  const roofTruth = await resolveAdvancedRoofTruth(input.address);\n  const module = requireVerifiedPvModule(input.moduleReference ?? "");\n',
-          )
-          replace_once(
-              "lib/pilotpaper-dp4-generator.ts",
-              '    "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",\n',
-              '    "PILOTPAPER DP4 — PHOTOVOLTAIC INSTALLER MODE.",\n    roofTruth.usable ? roofTruth.promptContext : "Advanced roof truth unavailable: preserve the real source and accepted DP2 as the physical anchors.",\n',
-          )
 
-          replace_once(
-              "lib/pilotpaper-dp1-generator.ts",
-              'stroke-width="8"',
-              'stroke-width="3"',
-          )
+def _line_parts(geometry) -> list[LineString]:
+    if isinstance(geometry, LineString):
+        return [geometry]
+    return [item for item in getattr(geometry, "geoms", []) if isinstance(item, LineString)]
 
-      - name: Commit focused patch
+
+def _analytic_shared_edge(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    building_union,
+    origin_x: float,
+    origin_y: float,
+    pixel_hint: float,
+) -> LineString | None:
+    # Roof topology must come from the physical planes, not from the accidental
+    # contact length of two noisy point-cloud hulls. For two non-parallel planes,
+    # z1(x,y) == z2(x,y) defines their exact ridge/hip/valley line in XY.
+    if left.get("buildingId") != right.get("buildingId"):
+        return None
+    left_geometry = left["_geometry"]
+    right_geometry = right["_geometry"]
+    join_tolerance = max(0.18, min(0.50, pixel_hint * 2.6))
+    if left_geometry.distance(right_geometry) > join_tolerance * 2.25:
+        return None
+
+    lp = left["plane"]
+    rp = right["plane"]
+    da = float(lp["a"]) - float(rp["a"])
+    db = float(lp["b"]) - float(rp["b"])
+    dc = float(lp["c"]) - float(rp["c"])
+    norm2 = da * da + db * db
+    if norm2 <= 1e-10:
+        return None
+
+    # Closest point to the Site Twin origin on da*x + db*y + dc = 0.
+    local_x = -da * dc / norm2
+    local_y = -db * dc / norm2
+    norm = math.sqrt(norm2)
+    dir_x = -db / norm
+    dir_y = da / norm
+    minx, miny, maxx, maxy = building_union.bounds
+    reach = max(maxx - minx, maxy - miny, 1.0) * 3.0 + 4.0
+    center_x = origin_x + local_x
+    center_y = origin_y + local_y
+    analytic_line = LineString([
+        (center_x - dir_x * reach, center_y - dir_y * reach),
+        (center_x + dir_x * reach, center_y + dir_y * reach),
+    ])
+
+    # Buffer only compensates for RANSAC/hull discretisation near the shared edge.
+    # It must never invent adjacency between geometrically separated roof faces.
+    adjacency_band = (
+        left_geometry.buffer(join_tolerance)
+        .intersection(right_geometry.buffer(join_tolerance))
+        .intersection(building_union.buffer(0.08))
+    )
+    candidates = [line for line in _line_parts(analytic_line.intersection(adjacency_band)) if line.length >= 0.25]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda line: line.length)
+'''
+
+          if "def _analytic_shared_edge(" not in text:
+              text = text.replace(helper_marker, helper + helper_marker, 1)
+
+          start_marker = "    edges: list[dict[str, Any]] = []\n    edge_counter = 0\n"
+          end_marker = "\n    building_boundary = building_union.boundary"
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit("edge block start not found")
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("edge block end not found")
+
+          replacement = r'''    edges: list[dict[str, Any]] = []
+    edge_counter = 0
+    for left_index, left in enumerate(deduplicated):
+        for right in deduplicated[left_index + 1 :]:
+            analytic = _analytic_shared_edge(
+                left,
+                right,
+                building_union,
+                origin_x,
+                origin_y,
+                pixel_hint,
+            )
+            if analytic is not None:
+                lines = [analytic]
+            else:
+                shared = left["_geometry"].boundary.intersection(right["_geometry"].boundary)
+                lines = _line_parts(shared)
+            for line in lines:
+                if line.length < 0.25:
+                    continue
+                coordinates = list(line.coords)
+                start_point, end_point = coordinates[0], coordinates[-1]
+                z_start = (
+                    _plane_z(left, start_point[0], start_point[1], origin_x, origin_y)
+                    + _plane_z(right, start_point[0], start_point[1], origin_x, origin_y)
+                ) / 2
+                z_end = (
+                    _plane_z(left, end_point[0], end_point[1], origin_x, origin_y)
+                    + _plane_z(right, end_point[0], end_point[1], origin_x, origin_y)
+                ) / 2
+                edge_id = f"edge-{edge_counter:03d}"
+                edge_counter += 1
+                edges.append({
+                    "id": edge_id,
+                    "a": {"x": float(start_point[0] - origin_x), "y": float(start_point[1] - origin_y), "z": float(z_start)},
+                    "b": {"x": float(end_point[0] - origin_x), "y": float(end_point[1] - origin_y), "z": float(z_end)},
+                    "kind": _classify_shared_edge(left, right, start_point, end_point, origin_x, origin_y),
+                    "adjacentFaceIds": [left["id"], right["id"]],
+                })
+                left["edgeIds"].append(edge_id)
+                right["edgeIds"].append(edge_id)
+'''
+
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding="utf-8")
+
+      - name: Verify focused geometry regression locally in CI
+        shell: bash
+        run: |
+          python -m py_compile geometry-engine/app.py geometry-engine/synthetic_regression.py
+          python geometry-engine/synthetic_regression.py
+
+      - name: Commit analytic ridge correction
         shell: bash
         run: |
           git config user.name "PilotPaper CI"
           git config user.email "pilotpaper-ci@users.noreply.github.com"
-          git add lib/pilotpaper-vision-engine.ts lib/pilotpaper-dp3-generator.ts lib/pilotpaper-dp4-generator.ts lib/pilotpaper-dp1-generator.ts
+          git add geometry-engine/app.py
           git diff --cached --check
-          git commit -m "Wire roof truth into DP2-DP6 and refine DP1"
+          git commit -m "Reconstruct roof ridges from analytic plane intersections"
           git push origin HEAD:release/v2
