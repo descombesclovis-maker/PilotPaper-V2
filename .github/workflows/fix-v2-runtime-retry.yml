@@ -1,0 +1,101 @@
+name: Retry V2 runtime wiring fix
+
+on:
+  push:
+    branches: [release/v2]
+    paths: [".github/workflows/fix-v2-runtime-retry.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v2
+          fetch-depth: 0
+      - name: Apply runtime fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"needle not found: {path}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "components/production/complete-dp-experience.tsx",
+              '    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp"].includes(candidate.mimeType)) return [];\n    return [{ dp: referenceDp, mimeType: candidate.mimeType as VisualReference["mimeType"], base64: candidate.base64 }];',
+              '    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp", "image/svg+xml"].includes(candidate.mimeType)) return [];\n    return [{\n      dp: referenceDp,\n      mimeType: candidate.mimeType as VisualReference["mimeType"],\n      base64: candidate.base64,\n      geometryReceipt: candidate.geometryReceipt,\n    }];',
+          )
+          replace_once(
+              "desktop/PilotPaperLauncher/PilotPaperV2Program.cs",
+              'startInfo.Environment["DP_TEST_EXPORT"] = "true";',
+              'startInfo.Environment["DP_TEST_EXPORT"] = "false";',
+          )
+
+          p = Path("geometry-engine/main.py")
+          text = p.read_text(encoding="utf-8")
+          if "from shapely.geometry import Point" not in text:
+              text = text.replace("from pyproj import CRS, Transformer\n", "from pyproj import CRS, Transformer\nfrom shapely.geometry import Point\nfrom shapely.ops import unary_union\n", 1)
+          old = '    buildings = _projected_buildings(property_lock, crs)\n    return np.asarray(rows, dtype=np.float64), buildings, crs\n'
+          new = '''    buildings = _projected_buildings(property_lock, crs)
+          points = np.asarray(rows, dtype=np.float64)
+          target = unary_union([polygon for _, polygon in buildings]).buffer(0.65)
+          minx, miny, maxx, maxy = target.bounds
+          keep = (
+              (points[:, 0] >= minx) & (points[:, 0] <= maxx)
+              & (points[:, 1] >= miny) & (points[:, 1] <= maxy)
+              & np.isfinite(points[:, 2])
+          )
+          points = points[keep]
+          if len(points):
+              inside = np.fromiter(
+                  (target.covers(Point(x, y)) for x, y in points[:, :2]),
+                  dtype=bool,
+                  count=len(points),
+              )
+              points = points[inside]
+          if len(points) < 120:
+              raise ValueError(f"IGN MNX : couverture insuffisante sur le bâtiment verrouillé ({len(points)} points).")
+          return points, buildings, crs
+          '''
+          if old not in text:
+              raise SystemExit("sampled IGN block not found")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          p = Path("tests/v2-production-runtime-wiring.test.mjs")
+          text = p.read_text(encoding="utf-8").rstrip()
+          if "preserves geometry receipts and vector references through the one-click chain" not in text:
+              text += '''\n\n
+test("installed V2 preserves geometry receipts and vector references through the one-click chain", async () => {
+  const complete = await source("components/production/complete-dp-experience.tsx");
+  const launcher = await source("desktop/PilotPaperLauncher/PilotPaperV2Program.cs");
+  const geometryMain = await source("geometry-engine/main.py");
+
+  assert.match(complete, /image\\/svg\\+xml/);
+  assert.match(complete, /geometryReceipt:\\s*candidate\\.geometryReceipt/);
+  assert.match(launcher, /DP_TEST_EXPORT"\\]\\s*=\\s*"false"/);
+  assert.doesNotMatch(launcher, /DP_TEST_EXPORT"\\]\\s*=\\s*"true"/);
+  assert.match(geometryMain, /unary_union/);
+  assert.match(geometryMain, /target\\.covers\\(Point\\(x, y\\)\\)/);
+});'''
+          p.write_text(text + "\n", encoding="utf-8")
+      - name: Validate and push
+        shell: bash
+        run: |
+          python -m py_compile geometry-engine/main.py
+          node --test tests/v2-production-runtime-wiring.test.mjs
+          grep -F '"image/svg+xml"' components/production/complete-dp-experience.tsx
+          grep -F 'geometryReceipt: candidate.geometryReceipt' components/production/complete-dp-experience.tsx
+          grep -F 'DP_TEST_EXPORT"] = "false"' desktop/PilotPaperLauncher/PilotPaperV2Program.cs
+          git config user.name "PilotPaper CI"
+          git config user.email "pilotpaper-ci@users.noreply.github.com"
+          git add components/production/complete-dp-experience.tsx desktop/PilotPaperLauncher/PilotPaperV2Program.cs geometry-engine/main.py tests/v2-production-runtime-wiring.test.mjs
+          git commit -m "Fix installed V2 geometry continuity"
+          git push origin HEAD:release/v2
