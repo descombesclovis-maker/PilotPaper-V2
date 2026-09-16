@@ -44,15 +44,28 @@ test("DP endpoint fails closed instead of returning diagnostic, malformed or emp
   assert.match(route, /status: 422/);
 });
 
-test("photo insertion uses a supported image edit size and rejects weak camera registrations", async () => {
+test("photo insertion uses a valid high-resolution GPT Image edit canvas and strict camera thresholds", async () => {
   const edit = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
-  assert.match(edit, /return "auto"/);
-  assert.doesNotMatch(edit, /LOCAL_RENDER_LONG_EDGE_PX/);
+  assert.match(edit, /LOCAL_RENDER_LONG_EDGE_PX = 2048/);
+  assert.match(edit, /Math\.round\(targetWidth \/ 16\) \* 16/);
+  assert.match(edit, /Math\.round\(targetHeight \/ 16\) \* 16/);
+  assert.match(edit, /resolvedRatio < 1 \/ 3 \|\| resolvedRatio > 3/);
   assert.match(edit, /form\.set\("output_format", "png"\)/);
+  assert.match(edit, /form\.set\("input_fidelity", "high"\)/);
   assert.match(edit, /SITE_TWIN_POLICY\.maximumAutomaticReprojectionErrorPx/);
   assert.match(edit, /SITE_TWIN_POLICY\.minimumAutomaticCameraInliers/);
   assert.match(edit, /SITE_TWIN_POLICY\.minimumAutomaticCameraInlierRatio/);
   assert.match(edit, /assertProjectionUsable/);
+});
+
+test("GPT Image edit multipart uses the canonical single image field and enforces payload limits", async () => {
+  const edit = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
+  assert.match(edit, /form\.set\("image", base64ToBlob\(geometryGuide/);
+  assert.doesNotMatch(edit, /image\[\]/);
+  assert.match(edit, /MAX_EDIT_IMAGE_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(edit, /MAX_EDIT_MASK_BYTES = 4 \* 1024 \* 1024/);
+  assert.match(edit, /maskBytes\.length > MAX_EDIT_MASK_BYTES/);
+  assert.match(edit, /geometryGuideBytes\.length > MAX_EDIT_IMAGE_BYTES/);
 });
 
 test("photo insertion requires a usable mask, a decodable image result and visible change in every panel island", async () => {
@@ -69,6 +82,38 @@ test("photo insertion requires a usable mask, a decodable image result and visib
   assert.match(photographic, /photovoltaicModulesClearlyRendered/);
   assert.match(photographic, /visualPass\(judge/);
   assert.match(photographic, /throw new Error\(`DP\$\{input\.dp\} rejetée après/);
+});
+
+test("photographic projection tries Google then an explicitly georeferenced IGN PNG and never invents raster georeferencing", async () => {
+  const edit = await source("lib/site-twin-v2/constrainedPhotoEdit.ts");
+  const ign = await source("lib/site-twin-v2/ignOrthophoto.ts");
+  const client = await source("lib/site-twin-v2/geometryEngineClient.ts");
+  const projectionApi = await source("geometry-engine/site_twin_projection_api.py");
+
+  assert.match(edit, /loadRegistrationReferences/);
+  assert.match(edit, /projectWithReferenceFallback/);
+  assert.match(edit, /source: "google-rgb"/);
+  assert.match(edit, /fetchIgnOrthophotoReference/);
+  assert.match(edit, /source: ign\.source/);
+  assert.match(ign, /FORMAT: "image\/png"/);
+  assert.doesNotMatch(ign, /image\/geotiff/);
+  assert.match(ign, /crs: "EPSG:3857"/);
+  assert.match(ign, /bbox: result\.bbox/);
+  assert.match(client, /data\.set\("reference_crs", args\.reference\.crs\)/);
+  assert.match(client, /data\.set\("reference_bbox", JSON\.stringify\(args\.reference\.bbox\)\)/);
+  assert.match(projectionApi, /reference_crs: str \| None = Form/);
+  assert.match(projectionApi, /reference_bbox: str \| None = Form/);
+  assert.match(projectionApi, /pixel_x = \(\(float\(ref_x\) - min_x\)/);
+  assert.match(projectionApi, /pixel_y = \(\(max_y - float\(ref_y\)\)/);
+});
+
+test("geometry engine photo registration has deterministic SIFT and ORB fallbacks", async () => {
+  const registration = await source("geometry-engine/registration.py");
+  assert.match(registration, /def _register_sift/);
+  assert.match(registration, /cv2\.SIFT_create/);
+  assert.match(registration, /USAC_MAGSAC/);
+  assert.match(registration, /\("SIFT", _register_sift\)/);
+  assert.match(registration, /\("ORB", _register_orb\)/);
 });
 
 test("DP2 rejects blank map backgrounds and panel overlays that are too small to be visible", async () => {
