@@ -52,6 +52,11 @@ function assertSvgArtifact(result: DpPieceOutput) {
   if (/\b(?:NaN|Infinity|undefined)\b/.test(svg)) {
     throw new Error(`DP${result.dp} refusée : le rendu contient des coordonnées ou valeurs invalides.`);
   }
+  if (result.dp === 1) {
+    if (!/<image\s/.test(svg) || !/<polygon\s/.test(svg) || !svg.includes("DP1")) {
+      throw new Error("DP1 refusée : fond officiel ou contour cadastral absent de la composition.");
+    }
+  }
   if (result.dp === 3) {
     if (!/class="pv-section"/.test(svg) || !/Champ PV coupé/.test(svg)) {
       throw new Error("DP3 refusée : la coupe ne contient aucune représentation photovoltaïque démontrée.");
@@ -65,33 +70,78 @@ function assertSvgArtifact(result: DpPieceOutput) {
   }
 }
 
+function jpegDimensions(bytes: Buffer) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) { offset += 1; continue; }
+    const marker = bytes[offset + 1]!;
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (offset + 4 > bytes.length) break;
+    const length = bytes.readUInt16BE(offset + 2);
+    if (length < 2 || offset + 2 + length > bytes.length) break;
+    if (sofMarkers.has(marker) && length >= 7) {
+      return {
+        height: bytes.readUInt16BE(offset + 5),
+        width: bytes.readUInt16BE(offset + 7),
+      };
+    }
+    offset += 2 + length;
+  }
+  return null;
+}
+
+function assertOriginalPhotoArtifact(result: DpPieceOutput) {
+  const bytes = Buffer.from(result.base64 ?? "", "base64");
+  if (bytes.length < 10_000) throw new Error(`DP${result.dp} refusée : photographie source vide ou trop légère.`);
+  if (result.mimeType === "image/jpeg") {
+    const dimensions = jpegDimensions(bytes);
+    if (!dimensions) throw new Error(`DP${result.dp} refusée : JPEG source corrompu.`);
+    if (dimensions.width < 320 || dimensions.height < 240) {
+      throw new Error(`DP${result.dp} refusée : photographie source trop petite (${dimensions.width}×${dimensions.height}).`);
+    }
+    return;
+  }
+  if (result.mimeType === "image/webp") {
+    const signature = bytes.length >= 12
+      && bytes.subarray(0, 4).toString("ascii") === "RIFF"
+      && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+    if (!signature) throw new Error(`DP${result.dp} refusée : WebP source corrompu.`);
+    return;
+  }
+  throw new Error(`DP${result.dp} refusée : format photographique inattendu (${result.mimeType}).`);
+}
+
 function assertGeneratedVisualPiece(result: DpPieceOutput) {
-  if (result.dp < 2 || result.dp > 6) return result;
-  if (!result.geometryReceipt) {
-    throw new Error(`DP${result.dp} refusée : aucune empreinte géométrique vérifiable n'a été produite.`);
+  if (!result.base64 || result.base64.length < 500) {
+    throw new Error(`DP${result.dp} refusée : rendu vide ou incomplet.`);
   }
   if (result.inspector?.passed !== true) {
     throw new Error(`DP${result.dp} refusée par PilotPaper Inspector : ${result.inspector?.issues?.join(" ") || "contrôle qualité non validé."}`);
   }
-  if (!result.base64 || result.base64.length < 500) {
-    throw new Error(`DP${result.dp} refusée : rendu vide ou incomplet.`);
-  }
   if (result.sourceSummary.some((line) => /MODE DIAGNOSTIC|diagnostic fallback|photo source brute/i.test(line))) {
     throw new Error(`DP${result.dp} refusée : un diagnostic ne peut jamais être présenté comme une pièce générée.`);
   }
+
   if (result.mimeType === "image/png") assertPngArtifact(result);
   else if (result.mimeType === "image/svg+xml") assertSvgArtifact(result);
+  else if (result.dp === 7 || result.dp === 8) assertOriginalPhotoArtifact(result);
   else throw new Error(`DP${result.dp} refusée : format visuel inattendu (${result.mimeType}).`);
+
+  if (result.dp >= 2 && result.dp <= 6 && !result.geometryReceipt) {
+    throw new Error(`DP${result.dp} refusée : aucune empreinte géométrique vérifiable n'a été produite.`);
+  }
   return result;
 }
 
 async function generatePiece(input: DpPieceInput): Promise<DpPieceOutput> {
-  if (input.dp === 1) return generateOfficialDp1(input as DpPieceInput & { dp: 1 });
+  if (input.dp === 1) return assertGeneratedVisualPiece(await generateOfficialDp1(input as DpPieceInput & { dp: 1 }));
   if (input.dp >= 2 && input.dp <= 6) {
     const result = await pilotPaperRunVisualJob(`DP${input.dp}`, () => generateVisualPiece(input));
     return assertGeneratedVisualPiece(result);
   }
-  if (input.dp === 7 || input.dp === 8) return generateDpPiece(input);
+  if (input.dp === 7 || input.dp === 8) return assertGeneratedVisualPiece(await generateDpPiece(input));
   throw new Error(`Numéro de pièce DP non pris en charge : ${String(input.dp)}.`);
 }
 
