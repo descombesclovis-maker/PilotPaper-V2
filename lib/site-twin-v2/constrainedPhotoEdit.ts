@@ -10,6 +10,7 @@ import {
   geometryLockedCompositePng,
 } from "@/lib/dp-ai-engine/utils/pngPixels";
 import { fetchGoogleSolarDataLayers, downloadGoogleGeoTiff } from "./googleSolarDataLayers";
+import { fetchIgnOrthophotoGeoTiff } from "./ignOrthophoto";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
 import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
 import { inspectProjectedModuleGeometry, requireInspectorPass } from "./inspector";
@@ -202,7 +203,7 @@ function resizeRgba(source: { width: number; height: number; rgba: Uint8Array },
       for (let channel = 0; channel < 4; channel += 1) {
         const top = source.rgba[topLeft + channel]! * (1 - wx) + source.rgba[topRight + channel]! * wx;
         const bottom = source.rgba[bottomLeft + channel]! * (1 - wx) + source.rgba[bottomRight + channel]! * wx;
-        output[destination + channel] = Math.round(top * (1 - wy) + bottom * wy);
+        output[destination + channel] = Math.round(top * (1 - wy) + bottom * wy));
       }
     }
   }
@@ -292,6 +293,30 @@ function assertMaskUsable(maskBase64: string, crop: CropRegion) {
   }
 }
 
+async function loadRegistrationReference(longitude: number, latitude: number) {
+  const failures: string[] = [];
+  try {
+    const layers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 70, pixelSizeMeters: 0.1 });
+    if (layers.rgbUrl) {
+      return {
+        bytes: new Uint8Array(await downloadGoogleGeoTiff(layers.rgbUrl, "RGB")),
+        source: "google-rgb" as const,
+      };
+    }
+    failures.push("référence RGB Google absente");
+  } catch (error) {
+    failures.push(`référence RGB Google : ${error instanceof Error ? error.message : "échec inconnu"}`);
+  }
+
+  try {
+    const ign = await fetchIgnOrthophotoGeoTiff({ longitude, latitude });
+    return { bytes: ign.bytes, source: ign.source };
+  } catch (error) {
+    failures.push(`orthophoto IGN : ${error instanceof Error ? error.message : "échec inconnu"}`);
+  }
+  throw new Error(`Aucune orthophoto géoréférencée exploitable pour le recalage photo : ${failures.join(" | ")}`);
+}
+
 function insertionPrompt(
   input: DpPieceInput,
   context: SiteTwinDocumentContext,
@@ -322,6 +347,7 @@ export type ConstrainedPhotoInsertion = {
   base64: string;
   sourcePngBase64: string;
   panelPolygonsNormalized: Point[][];
+  registrationReferenceSource: "google-rgb" | "ign-orthophoto";
   registration: {
     reprojectionErrorPx: number;
     matches: number;
@@ -347,16 +373,14 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   if (!apiKey) throw new Error("Clé du moteur visuel absente du poste local.");
   const context = await buildSiteTwinDocumentContext(args.input);
   const [longitude, latitude] = context.siteTwin.addressPoint;
-  const layers = await fetchGoogleSolarDataLayers({ latitude, longitude, radiusMeters: 70, pixelSizeMeters: 0.1 });
-  if (!layers.rgbUrl) throw new Error("La référence orthophotographique métrique requise pour le recalage photo n'est pas disponible.");
-  const referenceGeoTiff = await downloadGoogleGeoTiff(layers.rgbUrl, "RGB");
+  const reference = await loadRegistrationReference(longitude, latitude);
   const modulePolygonsLonLat = modulePolygonsToLonLat({
     faces: context.siteTwin.roof.faces,
     modules: context.layout.modules,
   });
   const projection = await projectSiteTwinModulesToPhoto({
     modulePolygonsLonLat,
-    referenceGeoTiff,
+    referenceGeoTiff: reference.bytes,
     photo: Buffer.from(args.photo.base64, "base64"),
     photoMimeType: args.photo.mimeType,
   });
@@ -431,6 +455,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
     base64,
     sourcePngBase64: projection.photoBase64,
     panelPolygonsNormalized: polygons,
+    registrationReferenceSource: reference.source,
     registration: {
       reprojectionErrorPx: projection.registration.reprojectionErrorPx,
       matches: projection.registration.matches,
