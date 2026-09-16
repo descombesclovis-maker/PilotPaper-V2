@@ -1,5 +1,6 @@
 import { getDpPieceContract } from "@/lib/dp-piece-contract";
 import type { DpPieceInput, DpPieceOutput } from "@/lib/pilotpaper-image2-types";
+import { decodePng } from "@/lib/dp-ai-engine/utils/pngPixels";
 
 const IGN_WMS_ENDPOINT = "https://data.geopf.fr/wms-r/wms";
 const CADASTRE_ENDPOINT = "https://apicarto.ign.fr/api/cadastre/parcelle";
@@ -22,6 +23,8 @@ type ParcelCollection = {
   type?: "FeatureCollection";
   features?: ParcelFeature[];
 };
+
+type PixelPoint = { x: number; y: number };
 
 function escapeXml(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({
@@ -81,8 +84,11 @@ async function geocode(address: string) {
   };
   const feature = json.features?.[0];
   const coordinates = feature?.geometry?.coordinates;
-  if (!coordinates) throw new Error("DP1 : l'adresse n'a pas pu être géolocalisée avec certitude.");
+  if (!coordinates || !Number.isFinite(coordinates[0]) || !Number.isFinite(coordinates[1])) {
+    throw new Error("DP1 : l'adresse n'a pas pu être géolocalisée avec certitude.");
+  }
   const label = String(feature?.properties?.label ?? feature?.properties?.name ?? address).trim();
+  if (!label) throw new Error("DP1 : le service de géocodage a renvoyé une adresse vide.");
   return { longitude: coordinates[0], latitude: coordinates[1], label };
 }
 
@@ -110,6 +116,36 @@ function parcelReference(feature: ParcelFeature) {
   return short || id || "référence cadastrale officielle";
 }
 
+function assertOfficialMapUsable(base64: string) {
+  const image = decodePng(base64);
+  if (image.width !== IMAGE_WIDTH || image.height !== IMAGE_HEIGHT) {
+    throw new Error(`DP1 : fond officiel de dimensions inattendues (${image.width}×${image.height}).`);
+  }
+  let samples = 0;
+  let sum = 0;
+  let sumSquares = 0;
+  let darkest = 255;
+  let lightest = 0;
+  for (let y = 0; y < image.height; y += 14) {
+    for (let x = 0; x < image.width; x += 14) {
+      const offset = (y * image.width + x) * 4;
+      const luminance = 0.2126 * image.rgba[offset]!
+        + 0.7152 * image.rgba[offset + 1]!
+        + 0.0722 * image.rgba[offset + 2]!;
+      samples += 1;
+      sum += luminance;
+      sumSquares += luminance * luminance;
+      darkest = Math.min(darkest, luminance);
+      lightest = Math.max(lightest, luminance);
+    }
+  }
+  const mean = sum / Math.max(1, samples);
+  const standardDeviation = Math.sqrt(Math.max(0, sumSquares / Math.max(1, samples) - mean * mean));
+  if (standardDeviation < 3 || lightest - darkest < 18) {
+    throw new Error("DP1 : fond IGN/cadastre visuellement vide ou uniforme ; génération refusée.");
+  }
+}
+
 async function fetchOfficialMap(longitude: number, latitude: number) {
   const response = await fetch(ignImageUrl(longitude, latitude), {
     headers: { Accept: "image/png" },
@@ -118,12 +154,24 @@ async function fetchOfficialMap(longitude: number, latitude: number) {
   if (!response.ok) throw new Error(`DP1 : fond IGN/cadastre officiel indisponible (${response.status}).`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length < 10_000 || bytes[0] !== 0x89 || bytes[1] !== 0x50) throw new Error("DP1 : fond officiel reçu invalide.");
-  return bytes.toString("base64");
+  const base64 = bytes.toString("base64");
+  assertOfficialMapUsable(base64);
+  return base64;
 }
 
 function geometryRings(geometry: PolygonGeometry | MultiPolygonGeometry) {
   if (geometry.type === "Polygon") return geometry.coordinates;
   return geometry.coordinates.flatMap((polygon) => polygon);
+}
+
+function pixelPolygonArea(points: PixelPoint[]) {
+  let twiceArea = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const a = points[index]!;
+    const b = points[(index + 1) % points.length]!;
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(twiceArea) / 2;
 }
 
 function renderOfficialDp1Svg(args: {
@@ -141,24 +189,37 @@ function renderOfficialDp1Svg(args: {
   const maxY = center.y + VIEW_HEIGHT_METERS / 2;
   const geometry = args.feature.geometry!;
 
-  const rings = geometryRings(geometry).map((ring) => {
-    const points = ring.map((coordinate) => {
-      const mercator = toWebMercator(coordinate[0], coordinate[1]);
-      const x = ((mercator.x - minX) / (maxX - minX)) * IMAGE_WIDTH;
-      const y = ((maxY - mercator.y) / (maxY - minY)) * IMAGE_HEIGHT;
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    });
-    return points.join(" ");
+  const projectedRings = geometryRings(geometry).map((ring) => ring.map((coordinate) => {
+    const mercator = toWebMercator(coordinate[0], coordinate[1]);
+    return {
+      x: ((mercator.x - minX) / (maxX - minX)) * IMAGE_WIDTH,
+      y: ((maxY - mercator.y) / (maxY - minY)) * IMAGE_HEIGHT,
+    };
+  }));
+
+  if (!projectedRings.length || projectedRings.some((ring) => ring.length < 4)) {
+    throw new Error("DP1 : la géométrie officielle de la parcelle est vide ou incomplète.");
+  }
+  const visibleRings = projectedRings.filter((ring) => {
+    const minRingX = Math.min(...ring.map((point) => point.x));
+    const maxRingX = Math.max(...ring.map((point) => point.x));
+    const minRingY = Math.min(...ring.map((point) => point.y));
+    const maxRingY = Math.max(...ring.map((point) => point.y));
+    return maxRingX >= 0 && minRingX <= IMAGE_WIDTH && maxRingY >= 0 && minRingY <= IMAGE_HEIGHT && pixelPolygonArea(ring) >= 25;
   });
+  if (!visibleRings.length) {
+    throw new Error("DP1 : le contour cadastral officiel est hors cadrage ou trop petit pour être lisible sur le plan de situation.");
+  }
 
-  if (!rings.length) throw new Error("DP1 : la géométrie officielle de la parcelle est vide.");
-
-  const polygons = rings.map((points) => `<polygon points="${points}" fill="#102f5f" fill-opacity="0.18" stroke="#0b2e61" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join("");
+  const polygons = visibleRings.map((ring) => {
+    const points = ring.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
+    return `<polygon points="${points}" fill="#102f5f" fill-opacity="0.18" stroke="#0b2e61" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
   const title = escapeXml("DP1 — Plan de situation");
   const address = escapeXml(args.address);
   const reference = escapeXml(args.reference);
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" viewBox="0 0 ${IMAGE_WIDTH} ${IMAGE_HEIGHT}">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" viewBox="0 0 ${IMAGE_WIDTH} ${IMAGE_HEIGHT}">
   <image href="data:image/png;base64,${args.mapBase64}" x="0" y="0" width="${IMAGE_WIDTH}" height="${IMAGE_HEIGHT}" preserveAspectRatio="none"/>
   ${polygons}
   <g font-family="Arial, Helvetica, sans-serif">
@@ -172,6 +233,10 @@ function renderOfficialDp1Svg(args: {
     </g>
   </g>
 </svg>`;
+  if (/\b(?:NaN|Infinity|undefined)\b/.test(svg) || !svg.includes("<polygon")) {
+    throw new Error("DP1 : composition SVG cadastrale invalide.");
+  }
+  return svg;
 }
 
 export async function generateOfficialDp1(input: DpPieceInput & { dp: 1 }): Promise<DpPieceOutput> {
@@ -210,9 +275,10 @@ export async function generateOfficialDp1(input: DpPieceInput & { dp: 1 }): Prom
       passed: true,
       score: 1,
       checks: [
-        "Fond officiel IGN : oui",
+        "Fond officiel IGN lisible : oui",
         "Géométrie de parcelle API Carto : oui",
         `Parcelle officielle : ${reference}`,
+        "Contour visible dans le cadrage : oui",
         "Contour génératif : aucun",
       ],
       issues: [],
