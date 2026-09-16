@@ -10,7 +10,7 @@ import { SiteTwinError } from "./errors";
 import { buildPvLayout } from "./pvLayoutEngine";
 import { renderDp2FromSiteTwin } from "./renderers/dp2";
 import { renderDp3FromSiteTwin } from "./renderers/dp3";
-import { getOrBuildSiteTwin } from "./siteTwinCache";
+import { cacheSiteTwinForContext, getOrBuildSiteTwin, getSiteTwinForContext } from "./siteTwinCache";
 
 function positiveInteger(value: unknown, label: string) {
   const parsed = Number(value);
@@ -28,7 +28,7 @@ export function requiresFreshSiteTwin(input: Pick<DpPieceInput, "dp">) {
 }
 
 function requireMasterDp2Reference(input: DpPieceInput) {
-  if (input.dp < 3 || input.dp > 6) return;
+  if (input.dp < 3 || input.dp > 6) return undefined;
   const dp2Reference = (input.references ?? []).find((reference) => reference.dp === 2);
   if (!dp2Reference?.geometryReceipt) {
     throw new SiteTwinError(
@@ -37,6 +37,7 @@ function requireMasterDp2Reference(input: DpPieceInput) {
       { recoverable: true },
     );
   }
+  return dp2Reference.geometryReceipt;
 }
 
 function point(point: { x: number; y: number }) {
@@ -80,10 +81,25 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
   }
 
   // DP2 is the geometry gate for one dossier generation. It rebuilds the Site Twin
-  // and executes all mandatory geometry sources once. DP3-DP6 must reuse exactly
-  // that locked context and are never allowed to silently start another geometry.
-  requireMasterDp2Reference(input);
-  const twin = await getOrBuildSiteTwin(address, { force: requiresFreshSiteTwin(input) });
+  // and executes all mandatory geometry sources once. DP3-DP6 are resolved by the
+  // exact DP2 contextId, never by "latest Site Twin for this address".
+  const masterReceipt = requireMasterDp2Reference(input);
+  let twin;
+  if (input.dp === 2) {
+    twin = await getOrBuildSiteTwin(address, { force: true });
+  } else if (masterReceipt) {
+    twin = getSiteTwinForContext(masterReceipt.contextId);
+    if (!twin) {
+      throw new SiteTwinError(
+        "CROSS_PIECE_INCONSISTENCY",
+        "Le Site Twin exact verrouillé par DP2 n'est plus disponible dans cette session. PilotPaper refuse d'en reconstruire un autre silencieusement : régénérez DP2.",
+        { recoverable: true, details: { contextId: masterReceipt.contextId } },
+      );
+    }
+  } else {
+    twin = await getOrBuildSiteTwin(address, { force: requiresFreshSiteTwin(input) });
+  }
+
   const layout = buildPvLayout({
     twin,
     configuration: {
@@ -102,6 +118,7 @@ export async function buildSiteTwinDocumentContext(input: DpPieceInput): Promise
   const context = createDocumentContext(twin, layout);
   assertMandatoryEnginesWereExecuted(context);
   assertReferenceGeometry(input, context);
+  if (input.dp === 2) cacheSiteTwinForContext(context.contextId, twin);
   return context;
 }
 
