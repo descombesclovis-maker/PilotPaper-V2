@@ -6,18 +6,19 @@ async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("V2 geometry engine is optional and preserves the PilotPaper fallback", async () => {
+test("V2 records unavailable independent geometry honestly instead of pretending it executed", async () => {
   const resolver = await source("lib/geometry/advanced-roof-truth.ts");
   assert.match(resolver, /if \(!config\.enabled \|\| !config\.configured\)/);
-  assert.match(resolver, /fallback PilotPaper/);
+  assert.match(resolver, /attempted: false/);
   assert.match(resolver, /usable: false/);
-  assert.match(resolver, /catch\(\(error\) => \(\{/);
+  assert.match(resolver, /aucun contrôle distant n'a été exécuté/);
+  assert.match(resolver, /attempted: Boolean\(runtime\.enabled && runtime\.configured\)/);
 });
 
-test("V2 never lets external geometry silently change requested photovoltaic quantity", async () => {
+test("V2 never lets external geometry silently change requested photovoltaic quantity or metric authority", async () => {
   const resolver = await source("lib/geometry/advanced-roof-truth.ts");
   assert.match(resolver, /Never change the requested PilotPaper panel count or matrix/);
-  assert.match(resolver, /cadastral parcel and real photographs remain authoritative/);
+  assert.match(resolver, /PilotPaper metric Site Twin remains the coordinate authority/);
 });
 
 test("V2 reuses one deterministic remote project per normalized address", async () => {
@@ -28,7 +29,7 @@ test("V2 reuses one deterministic remote project per normalized address", async 
   assert.match(resolver, /createOpenSolarProject/);
 });
 
-test("V2 advanced roof evidence is consumed by the canonical Site Twin pan-by-pan", async () => {
+test("V2 advanced roof evidence is consumed by the canonical Site Twin pan-by-pan but never becomes primary geometry", async () => {
   const resolver = await source("lib/geometry/advanced-roof-truth.ts");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
   const crossCheck = await source("lib/site-twin-v2/advancedRoofCrossCheck.ts");
@@ -42,10 +43,15 @@ test("V2 advanced roof evidence is consumed by the canonical Site Twin pan-by-pa
   assert.match(builder, /resolveAdvancedRoofTruth/);
   assert.match(builder, /compareAdvancedFacets\(geometry\.faces, advancedRoof\.facets\)/);
   assert.match(builder, /advancedRoofCrossCheck: advancedComparison\.crossCheck/);
+  assert.doesNotMatch(builder, /buildAdvancedRoofMetricFallback/);
+  assert.match(builder, /refuse d'utiliser le contrôle géométrique indépendant comme autorité de coordonnées/);
+  assert.match(builder, /advancedRoofAttempted: advancedRoof\.attempted/);
 
   assert.match(crossCheck, /azimuthDeltaDeg/);
   assert.match(crossCheck, /slopeDeltaDeg/);
   assert.match(crossCheck, /areaRelativeError/);
+  assert.match(crossCheck, /centroidDistanceM/);
+  assert.match(crossCheck, /boundaryMeanDistanceM/);
   assert.match(crossCheck, /azimuthDelta <= 15/);
   assert.match(crossCheck, /slopeDelta <= 7/);
   assert.match(crossCheck, /areaRelativeError <= 0\.30/);
@@ -124,7 +130,7 @@ test("V2 route consumes one canonical Site Twin path instead of dormant legacy g
   assert.doesNotMatch(route, /generatePreventiveDp|generateSpecializedDp3|generateSpecializedDp4/);
 });
 
-test("every fresh DP generation executes mandatory geometry and can never masquerade a fallback as success", async () => {
+test("every fresh dossier executes mandatory DP2 geometry and downstream pieces cannot masquerade another geometry as success", async () => {
   const route = await source("app/api/dp-piece/route.ts");
   const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
@@ -138,15 +144,17 @@ test("every fresh DP generation executes mandatory geometry and can never masque
   assert.match(route, /X-PilotPaper-Diagnostic": "0"/);
 
   assert.match(bridge, /export function requiresFreshSiteTwin/);
-  assert.match(bridge, /input\.dp === 2/);
-  assert.match(bridge, /reference\.dp === 2 && Boolean\(reference\.geometryReceipt\)/);
+  assert.match(bridge, /return input\.dp === 2/);
+  assert.match(bridge, /requireMasterDp2Reference\(input\)/);
+  assert.match(bridge, /DP2 n'a pas produit d'empreinte géométrique V2 valide/);
   assert.match(bridge, /getOrBuildSiteTwin\(address, \{ force: requiresFreshSiteTwin\(input\) \}\)/);
   assert.match(bridge, /geometryEngineChecked !== true/);
   assert.match(bridge, /advancedRoofAttempted !== true/);
 
   assert.match(builder, /geometryEngineChecked: true/);
-  assert.match(builder, /advancedRoofAttempted: true/);
+  assert.match(builder, /advancedRoofAttempted: advancedRoof\.attempted/);
   assert.match(builder, /builtAt/);
+  assert.doesNotMatch(builder, /buildAdvancedRoofMetricFallback/);
 
   assert.match(photoEdit, /projectSiteTwinModulesToPhoto/);
   assert.match(photoEdit, /https:\/\/api\.openai\.com\/v1\/images\/edits/);
