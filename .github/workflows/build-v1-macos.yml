@@ -36,19 +36,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf desktop/macos/payload desktop-output-macos
-          mkdir -p desktop/macos/payload/app-template
-          rsync -a ./ desktop/macos/payload/app-template/ \
+          rm -rf desktop/macos/payload desktop-output-macos /tmp/pilotpaper-v1-template
+          mkdir -p /tmp/pilotpaper-v1-template
+          rsync -a ./ /tmp/pilotpaper-v1-template/ \
             --exclude '.git' \
             --exclude '.github' \
             --exclude '.dev.vars' \
             --exclude 'desktop/PilotPaperLauncher' \
             --exclude 'desktop/macos/payload' \
             --exclude 'desktop-output-macos'
-          mkdir -p desktop/macos/payload/app-template/runtime
-          cp "$(command -v node)" desktop/macos/payload/app-template/runtime/node
-          chmod +x desktop/macos/payload/app-template/runtime/node
-          printf '%s\n' 'd12b9be0c135ed66ba1d411df7d2a91a78738e9e' > desktop/macos/payload/app-template/PILOTPAPER-MAC-BUILD.txt
+          mkdir -p /tmp/pilotpaper-v1-template/runtime
+          cp "$(command -v node)" /tmp/pilotpaper-v1-template/runtime/node
+          chmod +x /tmp/pilotpaper-v1-template/runtime/node
+          printf '%s\n' 'd12b9be0c135ed66ba1d411df7d2a91a78738e9e' > /tmp/pilotpaper-v1-template/PILOTPAPER-MAC-BUILD.txt
+          mkdir -p desktop/macos/payload
+          mv /tmp/pilotpaper-v1-template desktop/macos/payload/app-template
 
       - name: Smoke-test bundled V1 local server
         shell: bash
