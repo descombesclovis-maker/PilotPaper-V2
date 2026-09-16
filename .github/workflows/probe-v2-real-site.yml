@@ -1,0 +1,118 @@
+name: Probe PilotPaper V2 real site
+
+on:
+  push:
+    branches:
+      - release/v2
+    paths:
+      - ".github/workflows/probe-v2-real-site.yml"
+      - "app/api/site-twin-v2/**"
+      - "geometry-engine/**"
+      - "lib/site-twin-v2/**"
+      - "lib/dp-ai-engine/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-site-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout V2
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Use Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: geometry-engine/requirements.txt
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Install geometry dependencies
+        run: python -m pip install --disable-pip-version-check -r geometry-engine/requirements.txt
+
+      - name: Start geometry engine
+        shell: bash
+        run: |
+          python geometry-engine/run.py > /tmp/pilotpaper-geometry.log 2>&1 &
+          echo $! > /tmp/pilotpaper-geometry.pid
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8765/health >/tmp/geometry-health.json; then
+              cat /tmp/geometry-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/pilotpaper-geometry.log || true
+          exit 1
+
+      - name: Start V2 application
+        shell: bash
+        env:
+          PILOTPAPER_GEOMETRY_ENGINE_URL: http://127.0.0.1:8765
+          NODE_ENV: development
+        run: |
+          npm run dev > /tmp/pilotpaper-v2.log 2>&1 &
+          echo $! > /tmp/pilotpaper-v2.pid
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/pilotpaper-v2.log || true
+          exit 1
+
+      - name: Reconstruct real Azé Site Twin
+        shell: bash
+        run: |
+          set +e
+          code=$(curl -sS -o /tmp/site-twin.json -w "%{http_code}" \
+            -X POST http://127.0.0.1:5173/api/site-twin-v2/reconstruct \
+            -H 'Content-Type: application/json' \
+            --data '{"address":"110 Rue Basse, 71260 Azé"}')
+          echo "HTTP $code"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('/tmp/site-twin.json')
+          payload = json.loads(p.read_text(encoding='utf-8'))
+          print(json.dumps(payload, ensure_ascii=False, indent=2)[:30000])
+          if 'siteTwin' in payload:
+              twin = payload['siteTwin']
+              faces = twin.get('roof', {}).get('faces', [])
+              print(f"REAL_SITE_FACE_COUNT={len(faces)}")
+              print(f"REAL_SITE_CONFIDENCE={twin.get('confidence')}")
+          PY
+          if [ "$code" != "200" ]; then
+            echo '--- V2 server log ---'
+            tail -200 /tmp/pilotpaper-v2.log || true
+            echo '--- geometry log ---'
+            tail -200 /tmp/pilotpaper-geometry.log || true
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          payload = json.load(open('/tmp/site-twin.json', encoding='utf-8'))
+          faces = payload.get('siteTwin', {}).get('roof', {}).get('faces', [])
+          if len(faces) < 2:
+              raise SystemExit(f'Real-site regression: expected multiple physical roof faces, got {len(faces)}')
+          PY
+
+      - name: Stop local services
+        if: always()
+        shell: bash
+        run: |
+          test -f /tmp/pilotpaper-v2.pid && kill $(cat /tmp/pilotpaper-v2.pid) 2>/dev/null || true
+          test -f /tmp/pilotpaper-geometry.pid && kill $(cat /tmp/pilotpaper-geometry.pid) 2>/dev/null || true
