@@ -28,30 +28,37 @@ test("V2 reuses one deterministic remote project per normalized address", async 
   assert.match(resolver, /createOpenSolarProject/);
 });
 
-test("V2 advanced roof evidence exposes structured facets for pan-by-pan comparison", async () => {
+test("V2 advanced roof evidence is consumed by the canonical Site Twin pan-by-pan", async () => {
   const resolver = await source("lib/geometry/advanced-roof-truth.ts");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  const policy = await source("lib/site-twin-v2/policy.ts");
   assert.match(resolver, /export type AdvancedRoofFacet/);
   assert.match(resolver, /slopeDeg/);
   assert.match(resolver, /azimuthDeg/);
   assert.match(resolver, /areaM2/);
+  assert.match(builder, /resolveAdvancedRoofTruth/);
   assert.match(builder, /compareAdvancedFacets/);
   assert.match(builder, /Δazimut/);
   assert.match(builder, /Δpente/);
   assert.match(builder, /Δsurface/);
+  assert.match(builder, /advanced-roof-model/);
+  assert.match(policy, /assertIndependentRoofCrossCheck/);
+  assert.match(policy, /conflicts\.length > agreements\.length/);
+  assert.match(policy, /refuse de choisir silencieusement entre deux géométries/);
 });
 
 test("embedded geometry engine really consumes sampled IGN points and reports obstacle/topology capabilities", async () => {
   const engine = await source("geometry-engine/app.py");
+  const runtime = await source("geometry-engine/main.py");
   const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
   const workflow = await source(".github/workflows/build-v2-windows.yml");
-  assert.match(engine, /sampled-elevation-points/);
   assert.match(engine, /sampled_points: str \| None/);
   assert.match(engine, /_extract_sampled_points/);
-  assert.match(engine, /metric-obstacles/);
-  assert.match(engine, /roof-edge-topology/);
   assert.match(engine, /_detect_metric_obstacles/);
   assert.match(engine, /_classify_shared_edge/);
+  assert.match(runtime, /sampled-elevation-points/);
+  assert.match(runtime, /metric-obstacles/);
+  assert.match(runtime, /roof-edge-topology/);
   assert.match(builder, /sampleIgnLidarSurface/);
   assert.match(builder, /source: "ign-mns"/);
   assert.match(workflow, /sampled-elevation-points/);
@@ -77,23 +84,31 @@ test("camera registration rejects geometrically weak matches before DP projectio
   assert.match(registration, /Erreur médiane de reprojection/);
 });
 
-test("DP3 vector section uses proven ridge topology when available", async () => {
+test("DP3 vector section uses proven ridge topology and never invents mounting height", async () => {
   const renderer = await source("lib/site-twin-v2/renderers/dp3.ts");
   assert.match(renderer, /edge\.kind === "ridge"/);
   assert.match(renderer, /sectionDirectionFromRidge/);
+  assert.match(renderer, /sectionOriginOnRidge/);
+  assert.match(renderer, /sectionIntersections/);
   assert.match(renderer, /Coupe A-A perpendiculaire au faîtage/);
   assert.match(renderer, /sectionMode: ridge \? "perpendicular-to-ridge" : "single-slope"/);
-  assert.match(renderer, /aucune cote architecturale inventée/);
+  assert.match(renderer, /aucune épaisseur de fixation ni hauteur de surimposition non vérifiée n'est cotée/);
+  assert.doesNotMatch(renderer, /zAt\(face, min\.point\) - ground \+ 0\.08/);
+  assert.match(renderer, /ÉCHELLE GRAPHIQUE/);
+  assert.match(renderer, /marker-start="url\(#dim-arrow\)"/);
 });
 
-test("V2 DP2-DP6 generators consume advanced roof truth instead of leaving it dormant", async () => {
-  const preventive = await source("lib/pilotpaper-vision-engine.ts");
-  const dp3 = await source("lib/pilotpaper-dp3-generator.ts");
-  const dp4 = await source("lib/pilotpaper-dp4-generator.ts");
-  for (const generator of [preventive, dp3, dp4]) {
-    assert.match(generator, /resolveAdvancedRoofTruth/);
-    assert.match(generator, /promptContext/);
-  }
+test("V2 route consumes one canonical Site Twin path instead of dormant legacy geometry prompts", async () => {
+  const route = await source("app/api/dp-piece/route.ts");
+  const bridge = await source("lib/site-twin-v2/dpPieceBridge.ts");
+  const builder = await source("lib/site-twin-v2/siteTwinBuilder.ts");
+  assert.match(route, /generateDeterministicDp2/);
+  assert.match(route, /generateDeterministicSiteTwinPiece/);
+  assert.match(route, /generateGeometryLockedDp4/);
+  assert.match(route, /generateGeometryLockedPhotographicDp/);
+  assert.match(bridge, /getOrBuildSiteTwin/);
+  assert.match(builder, /resolveAdvancedRoofTruth/);
+  assert.doesNotMatch(route, /generatePreventiveDp|generateSpecializedDp3|generateSpecializedDp4/);
 });
 
 test("visible geometry routes use provider-neutral wording", async () => {
