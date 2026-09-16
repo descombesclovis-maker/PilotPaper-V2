@@ -11,7 +11,7 @@ import numpy as np
 import rasterio
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageOps
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 from rasterio.io import MemoryFile
 
 from registration import register_images
@@ -84,6 +84,35 @@ def _reference_png_and_dataset(raw: bytes):
     return memory, dataset, output.getvalue()
 
 
+def _reference_png_with_explicit_geometry(raw: bytes, crs_raw: str, bbox_raw: str):
+    try:
+        crs = CRS.from_user_input(crs_raw)
+    except Exception as error:  # noqa: BLE001
+        raise ValueError(f"CRS de référence invalide : {error}") from error
+    try:
+        parsed = json.loads(bbox_raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"BBOX de référence invalide : {error}") from error
+    if not isinstance(parsed, list) or len(parsed) != 4:
+        raise ValueError("Le BBOX de référence doit contenir quatre coordonnées.")
+    bbox = tuple(float(value) for value in parsed)
+    if not all(math.isfinite(value) for value in bbox):
+        raise ValueError("Le BBOX de référence contient une valeur non finie.")
+    min_x, min_y, max_x, max_y = bbox
+    if max_x <= min_x or max_y <= min_y:
+        raise ValueError("Le BBOX de référence est dégénéré.")
+    try:
+        with Image.open(io.BytesIO(raw)) as opened:
+            image = opened.convert("RGB")
+            if image.width < 64 or image.height < 64:
+                raise ValueError("image de référence trop petite")
+            output = io.BytesIO()
+            image.save(output, format="PNG", optimize=True)
+            return output.getvalue(), image.width, image.height, crs, bbox
+    except Exception as error:  # noqa: BLE001
+        raise ValueError(f"image de référence non décodable : {error}") from error
+
+
 def _module_polygons_lonlat(raw: str) -> list[list[tuple[float, float]]]:
     try:
         parsed = json.loads(raw)
@@ -111,10 +140,20 @@ def _module_polygons_lonlat(raw: str) -> list[list[tuple[float, float]]]:
 
 
 def _project_reference_pixels(
-    dataset: rasterio.io.DatasetReader,
     polygons_lonlat: list[list[tuple[float, float]]],
+    *,
+    dataset: rasterio.io.DatasetReader | None = None,
+    explicit_crs: CRS | None = None,
+    explicit_bbox: tuple[float, float, float, float] | None = None,
+    explicit_width: int | None = None,
+    explicit_height: int | None = None,
 ) -> list[np.ndarray]:
-    to_reference = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
+    if dataset is None and (explicit_crs is None or explicit_bbox is None or explicit_width is None or explicit_height is None):
+        raise ValueError("géoréférencement de la référence incomplet")
+    reference_crs = dataset.crs if dataset is not None else explicit_crs
+    if reference_crs is None:
+        raise ValueError("CRS de référence absent")
+    to_reference = Transformer.from_crs("EPSG:4326", reference_crs, always_xy=True)
     result: list[np.ndarray] = []
     for module in polygons_lonlat:
         points: list[list[float]] = []
@@ -122,14 +161,26 @@ def _project_reference_pixels(
             ref_x, ref_y = to_reference.transform(lon, lat)
             if not (math.isfinite(float(ref_x)) and math.isfinite(float(ref_y))):
                 raise ValueError("transformation CRS non finie pour un coin de module")
-            row, col = dataset.index(ref_x, ref_y)
-            points.append([float(col) + 0.5, float(row) + 0.5])
+            if dataset is not None:
+                row, col = dataset.index(ref_x, ref_y)
+                pixel_x = float(col) + 0.5
+                pixel_y = float(row) + 0.5
+                width = dataset.width
+                height = dataset.height
+            else:
+                assert explicit_bbox is not None and explicit_width is not None and explicit_height is not None
+                min_x, min_y, max_x, max_y = explicit_bbox
+                pixel_x = ((float(ref_x) - min_x) / (max_x - min_x)) * explicit_width
+                pixel_y = ((max_y - float(ref_y)) / (max_y - min_y)) * explicit_height
+                width = explicit_width
+                height = explicit_height
+            points.append([pixel_x, pixel_y])
         array = np.asarray(points, dtype=np.float32)
         if (
             np.any(array[:, 0] < -3)
-            or np.any(array[:, 0] > dataset.width + 3)
+            or np.any(array[:, 0] > width + 3)
             or np.any(array[:, 1] < -3)
-            or np.any(array[:, 1] > dataset.height + 3)
+            or np.any(array[:, 1] > height + 3)
         ):
             raise ValueError("un module projeté sort de l'orthophoto de référence")
         result.append(array)
@@ -143,6 +194,8 @@ def _apply_homography(
     height: int,
 ) -> list[list[dict[str, float]]]:
     matrix = np.asarray(matrix_values, dtype=np.float64).reshape(3, 3)
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("homographie non finie")
     output: list[list[dict[str, float]]] = []
     for polygon in polygons:
         projected = cv2.perspectiveTransform(polygon.reshape(-1, 1, 2), matrix).reshape(-1, 2)
@@ -163,18 +216,35 @@ async def project_modules(
     module_polygons_lonlat: str = Form(...),
     reference: UploadFile = File(...),
     photo: UploadFile = File(...),
+    reference_crs: str | None = Form(default=None),
+    reference_bbox: str | None = Form(default=None),
 ):
     reference_raw = await reference.read()
     photo_raw = await photo.read()
     if not reference_raw or not photo_raw:
         raise HTTPException(status_code=422, detail="Référence géométrique ou photo absente.")
+    if bool(reference_crs) != bool(reference_bbox):
+        raise HTTPException(status_code=422, detail="CRS et BBOX de référence doivent être fournis ensemble.")
 
     memory = None
     dataset = None
     try:
         polygons_lonlat = _module_polygons_lonlat(module_polygons_lonlat)
         photo_png, width, height = _normalise_photo(photo_raw)
-        memory, dataset, reference_png = _reference_png_and_dataset(reference_raw)
+
+        explicit_crs = None
+        explicit_bbox = None
+        explicit_width = None
+        explicit_height = None
+        if reference_crs and reference_bbox:
+            reference_png, explicit_width, explicit_height, explicit_crs, explicit_bbox = _reference_png_with_explicit_geometry(
+                reference_raw,
+                reference_crs,
+                reference_bbox,
+            )
+        else:
+            memory, dataset, reference_png = _reference_png_and_dataset(reference_raw)
+
         registration = register_images(reference_png, photo_png)
         ratio = registration.inliers / max(registration.matches, 1)
         if registration.reprojection_error_px > 8.0 or registration.inliers < 12 or ratio < 0.28:
@@ -182,7 +252,14 @@ async def project_modules(
                 f"recalage insuffisant : {registration.reprojection_error_px:.1f} px, "
                 f"{registration.inliers}/{registration.matches} inliers ({ratio * 100:.0f} %)"
             )
-        reference_polygons = _project_reference_pixels(dataset, polygons_lonlat)
+        reference_polygons = _project_reference_pixels(
+            polygons_lonlat,
+            dataset=dataset,
+            explicit_crs=explicit_crs,
+            explicit_bbox=explicit_bbox,
+            explicit_width=explicit_width,
+            explicit_height=explicit_height,
+        )
         projected = _apply_homography(reference_polygons, registration.homography, width, height)
         return {
             "mimeType": "image/png",
