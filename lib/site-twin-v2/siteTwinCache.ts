@@ -1,6 +1,7 @@
 import { buildSiteTwin } from "./siteTwinBuilder";
 import type { SiteTwin } from "./types";
 
+// V2 document contexts stay pinned independently from the address cache.
 const TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, { twin: SiteTwin; expiresAt: number }>();
 const contextCache = new Map<string, { twin: SiteTwin; expiresAt: number }>();
