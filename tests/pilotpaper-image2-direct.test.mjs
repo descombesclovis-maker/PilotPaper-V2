@@ -33,6 +33,11 @@ test("geometry-locked photographic insertion separates AI working halo from hard
   assert.match(renderer, /AI_EDIT_PADDING/);
   assert.match(renderer, /COMPOSITE_FEATHER_PIXELS/);
   assert.match(renderer, /OUTSIDE_BLEND_MAX/);
+  assert.match(renderer, /cropAroundPanelField/);
+  assert.match(renderer, /LOCAL_RENDER_LONG_EDGE_PX = 2048/);
+  assert.match(renderer, /form\.set\("size", outputSize\)/);
+  assert.match(renderer, /restoreCropIntoFullImage/);
+  assert.match(renderer, /high-resolution local crop/);
   assert.match(renderer, /\/v1\/images\/edits/);
   assert.match(renderer, /Everything beyond the narrow edit halo is immutable/);
   assert.match(renderer, /changedIslandRatio/);
