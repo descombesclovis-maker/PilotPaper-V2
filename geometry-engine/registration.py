@@ -24,6 +24,14 @@ def _decode_image(data: bytes) -> np.ndarray:
     return image
 
 
+def _enhance(image: np.ndarray) -> np.ndarray:
+    # Orthophotos and chantier photos frequently differ in season, exposure and
+    # local contrast. CLAHE improves repeatable structural keypoints without
+    # inventing or moving geometry.
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return clahe.apply(image)
+
+
 def _homography_from_matches(
     points_a: np.ndarray,
     points_b: np.ndarray,
@@ -32,7 +40,16 @@ def _homography_from_matches(
 ) -> RegistrationResult:
     if len(points_a) < 8 or len(points_b) < 8:
         raise ValueError("Pas assez de correspondances pour calculer une homographie robuste.")
-    matrix, mask = cv2.findHomography(points_a, points_b, cv2.RANSAC, 3.0, maxIters=5000, confidence=0.999)
+
+    robust_method = cv2.USAC_MAGSAC if hasattr(cv2, "USAC_MAGSAC") else cv2.RANSAC
+    matrix, mask = cv2.findHomography(
+        points_a,
+        points_b,
+        robust_method,
+        3.0,
+        maxIters=10000,
+        confidence=0.999,
+    )
     if matrix is None or mask is None:
         raise ValueError("Homographie impossible à estimer.")
     inlier_mask = mask.reshape(-1).astype(bool)
@@ -44,7 +61,16 @@ def _homography_from_matches(
     error = float(np.median(residuals[inlier_mask]))
     if not np.isfinite(error):
         raise ValueError("Erreur de reprojection non finie.")
-    matrix = matrix / matrix[2, 2]
+    denominator = float(matrix[2, 2])
+    if not np.isfinite(denominator) or abs(denominator) < 1e-12:
+        raise ValueError("Homographie numériquement instable.")
+    matrix = matrix / denominator
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Homographie contenant des valeurs non finies.")
+    diagnostics = diagnostics + [
+        "Homographie validée par USAC MAGSAC." if robust_method == getattr(cv2, "USAC_MAGSAC", None)
+        else "Homographie validée par RANSAC OpenCV.",
+    ]
     return RegistrationResult(
         homography=[float(value) for value in matrix.reshape(-1)],
         reprojection_error_px=error,
@@ -55,27 +81,62 @@ def _homography_from_matches(
     )
 
 
+def _register_sift(reference_bytes: bytes, photo_bytes: bytes) -> RegistrationResult:
+    reference = _enhance(_decode_image(reference_bytes))
+    photo = _enhance(_decode_image(photo_bytes))
+    if not hasattr(cv2, "SIFT_create"):
+        raise ValueError("SIFT n'est pas disponible dans cette build OpenCV.")
+    detector = cv2.SIFT_create(
+        nfeatures=7000,
+        contrastThreshold=0.018,
+        edgeThreshold=12,
+        sigma=1.4,
+    )
+    key_a, des_a = detector.detectAndCompute(reference, None)
+    key_b, des_b = detector.detectAndCompute(photo, None)
+    if des_a is None or des_b is None or len(key_a) < 16 or len(key_b) < 16:
+        raise ValueError("SIFT n'a pas trouvé assez de points caractéristiques.")
+    matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+    pairs = matcher.knnMatch(des_a, des_b, k=2)
+    good = [first for pair in pairs if len(pair) == 2 for first, second in [pair] if first.distance < 0.76 * second.distance]
+    if len(good) < 8:
+        raise ValueError(f"SIFT n'a conservé que {len(good)} correspondances fiables.")
+    points_a = np.float32([key_a[item.queryIdx].pt for item in good])
+    points_b = np.float32([key_b[item.trainIdx].pt for item in good])
+    return _homography_from_matches(
+        points_a,
+        points_b,
+        "opencv-sift",
+        [f"SIFT : {len(key_a)} points référence, {len(key_b)} points photo, {len(good)} correspondances filtrées."],
+    )
+
+
 def _register_orb(reference_bytes: bytes, photo_bytes: bytes) -> RegistrationResult:
-    reference = _decode_image(reference_bytes)
-    photo = _decode_image(photo_bytes)
-    detector = cv2.ORB_create(nfeatures=8000, scaleFactor=1.2, nlevels=8, fastThreshold=10)
+    reference = _enhance(_decode_image(reference_bytes))
+    photo = _enhance(_decode_image(photo_bytes))
+    detector = cv2.ORB_create(nfeatures=10000, scaleFactor=1.18, nlevels=10, fastThreshold=7)
     key_a, des_a = detector.detectAndCompute(reference, None)
     key_b, des_b = detector.detectAndCompute(photo, None)
     if des_a is None or des_b is None or len(key_a) < 16 or len(key_b) < 16:
         raise ValueError("ORB n'a pas trouvé assez de points caractéristiques.")
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
     pairs = matcher.knnMatch(des_a, des_b, k=2)
-    good = [first for first, second in pairs if first.distance < 0.72 * second.distance]
+    good = [first for pair in pairs if len(pair) == 2 for first, second in [pair] if first.distance < 0.74 * second.distance]
     if len(good) < 8:
         raise ValueError(f"ORB n'a conservé que {len(good)} correspondances fiables.")
     points_a = np.float32([key_a[item.queryIdx].pt for item in good])
     points_b = np.float32([key_b[item.trainIdx].pt for item in good])
-    return _homography_from_matches(points_a, points_b, "opencv-orb", ["Fallback local OpenCV ORB + RANSAC."])
+    return _homography_from_matches(
+        points_a,
+        points_b,
+        "opencv-orb",
+        [f"ORB : {len(key_a)} points référence, {len(key_b)} points photo, {len(good)} correspondances filtrées."],
+    )
 
 
 def _register_lightglue(reference_bytes: bytes, photo_bytes: bytes) -> RegistrationResult:
     # LightGlue is optional because torch wheels and CUDA compatibility vary by host.
-    # Any import/runtime problem falls back to OpenCV instead of blocking PilotPaper.
+    # Any import/runtime problem falls back to deterministic OpenCV methods.
     import torch  # type: ignore
     from lightglue import LightGlue, SuperPoint  # type: ignore
 
@@ -114,16 +175,22 @@ def _register_lightglue(reference_bytes: bytes, photo_bytes: bytes) -> Registrat
         points_a,
         points_b,
         "lightglue-superpoint",
-        [f"LightGlue exécuté sur {device}.", "Homographie validée par RANSAC OpenCV."],
+        [f"LightGlue exécuté sur {device}."],
     )
 
 
 def register_images(reference_bytes: bytes, photo_bytes: bytes) -> RegistrationResult:
-    diagnostics: list[str] = []
-    try:
-        return _register_lightglue(reference_bytes, photo_bytes)
-    except Exception as error:  # noqa: BLE001 - optional accelerator must never make the service unavailable.
-        diagnostics.append(f"LightGlue indisponible ou non concluant : {error}")
-    result = _register_orb(reference_bytes, photo_bytes)
-    result.diagnostics = diagnostics + result.diagnostics
-    return result
+    failures: list[str] = []
+    strategies = [
+        ("LightGlue", _register_lightglue),
+        ("SIFT", _register_sift),
+        ("ORB", _register_orb),
+    ]
+    for label, strategy in strategies:
+        try:
+            result = strategy(reference_bytes, photo_bytes)
+            result.diagnostics = [f"Stratégie retenue : {label}."] + failures + result.diagnostics
+            return result
+        except Exception as error:  # noqa: BLE001 - every deterministic fallback must be tried.
+            failures.append(f"{label} non concluant : {error}")
+    raise ValueError("Aucune stratégie de recalage n'a convergé. " + " | ".join(failures))
