@@ -14,6 +14,7 @@ import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
 import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
 import { inspectProjectedModuleGeometry, requireInspectorPass } from "./inspector";
 import { modulePolygonsToLonLat } from "./localGeoTransform";
+import { SITE_TWIN_POLICY } from "./policy";
 import type { SiteTwinDocumentContext } from "./documentContext";
 
 const IMAGE_MODEL = "gpt-image-2";
@@ -22,7 +23,8 @@ const COMPOSITE_FEATHER_PIXELS = 4;
 const OUTSIDE_BLEND_MAX = 0.18;
 const LOCAL_CROP_MARGIN_FACTOR = 0.35;
 const LOCAL_CROP_MIN_MARGIN_PX = 72;
-const LOCAL_RENDER_LONG_EDGE_PX = 2048;
+const MIN_AGGREGATE_PANEL_CHANGE_RATIO = 0.15;
+const MIN_SINGLE_PANEL_CHANGE_RATIO = 0.08;
 
 type Point = { x: number; y: number };
 type CropRegion = {
@@ -50,17 +52,24 @@ function pointInPolygon(x: number, y: number, polygon: Point[]) {
   return inside;
 }
 
-function changedIslandRatio(originalBase64: string, candidateBase64: string, polygons: Point[][]) {
-  const original = decodePng(originalBase64);
-  const candidate = decodePng(candidateBase64);
-  if (original.width !== candidate.width || original.height !== candidate.height) return 0;
+function polygonAreaNormalized(polygon: Point[]) {
+  let twiceArea = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const a = polygon[index]!;
+    const b = polygon[(index + 1) % polygon.length]!;
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
+function changedRatioForPolygon(original: ReturnType<typeof decodePng>, candidate: ReturnType<typeof decodePng>, polygon: Point[]) {
   let inside = 0;
   let changed = 0;
   for (let y = 0; y < original.height; y += 1) {
     for (let x = 0; x < original.width; x += 1) {
       const nx = (x + 0.5) / original.width;
       const ny = (y + 0.5) / original.height;
-      if (!polygons.some((polygon) => pointInPolygon(nx, ny, polygon))) continue;
+      if (!pointInPolygon(nx, ny, polygon)) continue;
       inside += 1;
       const offset = (y * original.width + x) * 4;
       const delta = Math.abs(original.rgba[offset]! - candidate.rgba[offset]!)
@@ -70,6 +79,21 @@ function changedIslandRatio(originalBase64: string, candidateBase64: string, pol
     }
   }
   return inside > 0 ? changed / inside : 0;
+}
+
+function changedIslandRatios(originalBase64: string, candidateBase64: string, polygons: Point[][]) {
+  const original = decodePng(originalBase64);
+  const candidate = decodePng(candidateBase64);
+  if (original.width !== candidate.width || original.height !== candidate.height) {
+    throw new Error("Le composite final n'a pas les mêmes dimensions que la photographie source.");
+  }
+  return polygons.map((polygon) => changedRatioForPolygon(original, candidate, polygon));
+}
+
+function changedIslandRatio(originalBase64: string, candidateBase64: string, polygons: Point[][]) {
+  const ratios = changedIslandRatios(originalBase64, candidateBase64, polygons);
+  if (!ratios.length) return 0;
+  return ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -148,20 +172,13 @@ function cropAroundPanelField(base64: string, polygons: Point[][]): CropRegion {
   };
 }
 
-function imageEditSize(width: number, height: number) {
-  const ratio = width / height;
-  let targetWidth: number;
-  let targetHeight: number;
-  if (ratio >= 1) {
-    targetWidth = LOCAL_RENDER_LONG_EDGE_PX;
-    targetHeight = LOCAL_RENDER_LONG_EDGE_PX / ratio;
-  } else {
-    targetHeight = LOCAL_RENDER_LONG_EDGE_PX;
-    targetWidth = LOCAL_RENDER_LONG_EDGE_PX * ratio;
-  }
-  targetWidth = Math.max(16, Math.round(targetWidth / 16) * 16);
-  targetHeight = Math.max(16, Math.round(targetHeight / 16) * 16);
-  return `${targetWidth}x${targetHeight}`;
+/**
+ * GPT Image currently accepts only fixed image sizes or `auto` for edits.
+ * `auto` is deliberately used here so the service chooses the closest supported
+ * canvas without PilotPaper sending an invalid arbitrary 2048×N value.
+ */
+function imageEditSize(_width: number, _height: number) {
+  return "auto";
 }
 
 function resizeRgba(source: { width: number; height: number; rgba: Uint8Array }, width: number, height: number) {
@@ -195,6 +212,9 @@ function resizeRgba(source: { width: number; height: number; rgba: Uint8Array },
 function restoreCropIntoFullImage(fullSourceBase64: string, cropCandidateBase64: string, crop: CropRegion) {
   const full = decodePng(fullSourceBase64);
   const candidate = decodePng(cropCandidateBase64);
+  if (candidate.width < 256 || candidate.height < 256) {
+    throw new Error(`Le moteur visuel a renvoyé une image trop petite (${candidate.width}×${candidate.height}).`);
+  }
   const candidatePixels = resizeRgba(candidate, crop.width, crop.height);
   const output = new Uint8Array(full.rgba);
   for (let y = 0; y < crop.height; y += 1) {
@@ -208,6 +228,68 @@ function restoreCropIntoFullImage(fullSourceBase64: string, cropCandidateBase64:
     }
   }
   return encodePng(full.width, full.height, output);
+}
+
+function assertProjectionUsable(args: {
+  photoWidth: number;
+  photoHeight: number;
+  polygons: Point[][];
+  expectedCount: number;
+  registration: {
+    reprojectionErrorPx: number;
+    matches: number;
+    inliers: number;
+    inlierRatio: number;
+    method: string;
+  };
+  role: PiecePhotoInput["role"];
+}) {
+  if (args.photoWidth < 320 || args.photoHeight < 240) {
+    throw new Error(`Photographie normalisée trop petite pour une insertion fiable (${args.photoWidth}×${args.photoHeight}).`);
+  }
+  requireInspectorPass(inspectProjectedModuleGeometry(args.polygons, args.expectedCount));
+  if (args.registration.reprojectionErrorPx > SITE_TWIN_POLICY.maximumAutomaticReprojectionErrorPx) {
+    throw new Error(`Recalage photo trop imprécis : ${args.registration.reprojectionErrorPx.toFixed(1)} px (maximum ${SITE_TWIN_POLICY.maximumAutomaticReprojectionErrorPx} px).`);
+  }
+  if (args.registration.inliers < SITE_TWIN_POLICY.minimumAutomaticCameraInliers) {
+    throw new Error(`Recalage photo insuffisamment démontré : ${args.registration.inliers} correspondances robustes (minimum ${SITE_TWIN_POLICY.minimumAutomaticCameraInliers}).`);
+  }
+  if (args.registration.inlierRatio < SITE_TWIN_POLICY.minimumAutomaticCameraInlierRatio) {
+    throw new Error(`Recalage photo instable : ${Math.round(args.registration.inlierRatio * 100)} % de correspondances cohérentes (minimum ${Math.round(SITE_TWIN_POLICY.minimumAutomaticCameraInlierRatio * 100)} %).`);
+  }
+  if (!args.registration.method?.trim()) throw new Error("Recalage photo sans méthode géométrique déclarée.");
+
+  const areasPx = args.polygons.map((polygon) => polygonAreaNormalized(polygon) * args.photoWidth * args.photoHeight);
+  const minimumPanelAreaPx = args.role === "far" ? 8 : 24;
+  const tooSmall = areasPx.findIndex((area) => area < minimumPanelAreaPx);
+  if (tooSmall >= 0) {
+    throw new Error(`Projection inexploitable : le panneau ${tooSmall + 1} n'occupe que ${areasPx[tooSmall]!.toFixed(1)} px² dans la photographie.`);
+  }
+  const points = args.polygons.flat();
+  const fieldWidthPx = (Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x))) * args.photoWidth;
+  const fieldHeightPx = (Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y))) * args.photoHeight;
+  const minimumFieldExtentPx = args.role === "far" ? 8 : 20;
+  if (fieldWidthPx < minimumFieldExtentPx || fieldHeightPx < minimumFieldExtentPx) {
+    throw new Error(`Champ photovoltaïque projeté trop petit pour produire une pièce lisible (${fieldWidthPx.toFixed(1)}×${fieldHeightPx.toFixed(1)} px).`);
+  }
+}
+
+function assertMaskUsable(maskBase64: string, crop: CropRegion) {
+  const mask = decodePng(maskBase64);
+  if (mask.width !== crop.width || mask.height !== crop.height) {
+    throw new Error("Le masque d'édition ne correspond pas exactement au crop photovoltaïque.");
+  }
+  let editable = 0;
+  let protectedPixels = 0;
+  for (let offset = 3; offset < mask.rgba.length; offset += 4) {
+    if (mask.rgba[offset]! < 128) editable += 1;
+    else protectedPixels += 1;
+  }
+  const total = mask.width * mask.height;
+  if (editable < 64) throw new Error("Le masque photovoltaïque ne contient pas assez de pixels éditables.");
+  if (protectedPixels < 64 || editable / total > 0.65) {
+    throw new Error("Le masque photovoltaïque autorise une zone d'édition anormalement large ; rendu refusé.");
+  }
 }
 
 function insertionPrompt(
@@ -248,6 +330,7 @@ export type ConstrainedPhotoInsertion = {
     method: string;
   };
   changedIslandRatio: number;
+  perPanelChangedRatios: number[];
   renderCrop: {
     width: number;
     height: number;
@@ -277,8 +360,19 @@ export async function renderGeometryLockedPhotoInsertion(args: {
     photo: Buffer.from(args.photo.base64, "base64"),
     photoMimeType: args.photo.mimeType,
   });
+  const normalizedSource = decodePng(projection.photoBase64);
+  if (normalizedSource.width !== projection.widthPx || normalizedSource.height !== projection.heightPx) {
+    throw new Error(`Projection photo incohérente : PNG ${normalizedSource.width}×${normalizedSource.height}, métadonnées ${projection.widthPx}×${projection.heightPx}.`);
+  }
   const polygons = projection.panelPolygonsNormalized;
-  requireInspectorPass(inspectProjectedModuleGeometry(polygons, context.layout.configuration.panelCount));
+  assertProjectionUsable({
+    photoWidth: projection.widthPx,
+    photoHeight: projection.heightPx,
+    polygons,
+    expectedCount: context.layout.configuration.panelCount,
+    registration: projection.registration,
+    role: args.photo.role,
+  });
   if (polygons.length !== context.layout.configuration.panelCount) {
     throw new Error(`Projection photo incomplète : ${polygons.length}/${context.layout.configuration.panelCount} modules.`);
   }
@@ -287,6 +381,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   const geometryGuide = annotatePngWithPanelPolygons(crop.pngBase64, crop.polygonsNormalized);
   const mask = buildPanelIslandsMaskForPng(crop.pngBase64, crop.polygonsNormalized, AI_EDIT_PADDING);
   if (!mask) throw new Error("Le masque géométrique des panneaux n'a pas pu être construit.");
+  assertMaskUsable(mask, crop);
   const outputSize = imageEditSize(crop.width, crop.height);
 
   const form = new FormData();
@@ -294,6 +389,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
   form.set("prompt", insertionPrompt(args.input, context, args.photo.role, args.correction));
   form.set("quality", "high");
   form.set("size", outputSize);
+  form.set("output_format", "png");
   form.append("image[]", base64ToBlob(geometryGuide, "image/png"), "geometry-locked-pv-crop.png");
   form.set("mask", base64ToBlob(mask, "image/png"), "panel-islands-mask.png");
 
@@ -303,19 +399,31 @@ export async function renderGeometryLockedPhotoInsertion(args: {
     body: form,
     signal: AbortSignal.timeout(240_000),
   });
-  if (!response.ok) throw new Error(`Moteur visuel indisponible (${response.status}).`);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Moteur visuel indisponible (${response.status})${body ? ` : ${body.slice(0, 500)}` : ""}.`);
+  }
   const json = await response.json() as { data?: Array<{ b64_json?: string }> };
   const rawCropCandidate = json.data?.[0]?.b64_json;
-  if (!rawCropCandidate) throw new Error("Le moteur visuel n'a produit aucune insertion.");
+  if (!rawCropCandidate || rawCropCandidate.length < 1000) throw new Error("Le moteur visuel n'a produit aucune insertion exploitable.");
+  decodePng(rawCropCandidate);
 
   const fullCandidate = restoreCropIntoFullImage(projection.photoBase64, rawCropCandidate, crop);
   const base64 = geometryLockedCompositePng(projection.photoBase64, fullCandidate, polygons, {
     featherPixels: COMPOSITE_FEATHER_PIXELS,
     outsideBlendMax: OUTSIDE_BLEND_MAX,
   });
+  const finalImage = decodePng(base64);
+  if (finalImage.width !== normalizedSource.width || finalImage.height !== normalizedSource.height) {
+    throw new Error("Le rendu final a changé les dimensions de la photographie source.");
+  }
+  const perPanelChangedRatios = changedIslandRatios(projection.photoBase64, base64, polygons);
   const changeRatio = changedIslandRatio(projection.photoBase64, base64, polygons);
-  if (changeRatio < 0.12) {
-    throw new Error(`Insertion visuelle insuffisante : seulement ${Math.round(changeRatio * 100)} % des pixels des zones PV ont été réellement modifiés.`);
+  const weakestPanel = Math.min(...perPanelChangedRatios);
+  if (changeRatio < MIN_AGGREGATE_PANEL_CHANGE_RATIO || weakestPanel < MIN_SINGLE_PANEL_CHANGE_RATIO) {
+    throw new Error(
+      `Insertion visuelle insuffisante : moyenne ${Math.round(changeRatio * 100)} %, panneau le moins modifié ${Math.round(weakestPanel * 100)} %.`,
+    );
   }
 
   return {
@@ -331,6 +439,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
       method: projection.registration.method,
     },
     changedIslandRatio: changeRatio,
+    perPanelChangedRatios,
     renderCrop: {
       width: crop.width,
       height: crop.height,
