@@ -176,9 +176,16 @@ export type SiteTwinPhotoProjection = {
   registration: PhotoRegistrationResult & { inlierRatio: number };
 };
 
+export type SiteTwinProjectionReference = {
+  bytes: Uint8Array;
+  mimeType: "image/tiff" | "image/png";
+  crs?: string;
+  bbox?: [number, number, number, number];
+};
+
 export async function projectSiteTwinModulesToPhoto(args: {
   modulePolygonsLonLat: TwinLonLat[][];
-  referenceGeoTiff: Uint8Array;
+  reference: SiteTwinProjectionReference;
   photo: Uint8Array;
   photoMimeType: string;
 }): Promise<SiteTwinPhotoProjection> {
@@ -191,9 +198,29 @@ export async function projectSiteTwinModulesToPhoto(args: {
   ) {
     throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photo exige quatre coins géographiques valides par module.");
   }
+  if (!args.reference.bytes.length) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La référence de recalage photographique est vide.");
+  }
+  if ((args.reference.crs && !args.reference.bbox) || (!args.reference.crs && args.reference.bbox)) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La référence raster explicite exige à la fois un CRS et un BBOX.");
+  }
+  if (args.reference.bbox && (
+    args.reference.bbox.length !== 4
+    || args.reference.bbox.some((value) => !Number.isFinite(value))
+    || args.reference.bbox[2] <= args.reference.bbox[0]
+    || args.reference.bbox[3] <= args.reference.bbox[1]
+  )) {
+    throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "Le BBOX de la référence photographique est invalide.");
+  }
+
   const data = new FormData();
   data.set("module_polygons_lonlat", JSON.stringify(args.modulePolygonsLonLat));
-  data.set("reference", new Blob([args.referenceGeoTiff], { type: "image/tiff" }), "site-reference.tif");
+  const extension = args.reference.mimeType === "image/png" ? "png" : "tif";
+  data.set("reference", new Blob([args.reference.bytes], { type: args.reference.mimeType }), `site-reference.${extension}`);
+  if (args.reference.crs && args.reference.bbox) {
+    data.set("reference_crs", args.reference.crs);
+    data.set("reference_bbox", JSON.stringify(args.reference.bbox));
+  }
   data.set("photo", new Blob([args.photo], { type: args.photoMimeType }), "project-photo");
 
   let response: Response;
@@ -222,9 +249,18 @@ export async function projectSiteTwinModulesToPhoto(args: {
   if (
     result.mimeType !== "image/png"
     || !result.photoBase64
+    || !Number.isFinite(result.widthPx)
+    || !Number.isFinite(result.heightPx)
+    || result.widthPx <= 0
+    || result.heightPx <= 0
     || !Array.isArray(result.panelPolygonsNormalized)
     || result.panelPolygonsNormalized.length !== args.modulePolygonsLonLat.length
+    || result.panelPolygonsNormalized.some((polygon) => polygon.length !== 4)
     || !Number.isFinite(result.registration?.reprojectionErrorPx)
+    || !Number.isFinite(result.registration?.inliers)
+    || !Number.isFinite(result.registration?.matches)
+    || !Number.isFinite(result.registration?.inlierRatio)
+    || !result.registration?.method
   ) {
     throw new SiteTwinError("CAMERA_REGISTRATION_FAILED", "La projection photographique a renvoyé un résultat incomplet.");
   }
