@@ -12,6 +12,7 @@ import {
 import { fetchGoogleSolarDataLayers, downloadGoogleGeoTiff } from "./googleSolarDataLayers";
 import { buildSiteTwinDocumentContext } from "./dpPieceBridge";
 import { projectSiteTwinModulesToPhoto } from "./geometryEngineClient";
+import { inspectProjectedModuleGeometry, requireInspectorPass } from "./inspector";
 import { modulePolygonsToLonLat } from "./localGeoTransform";
 import type { SiteTwinDocumentContext } from "./documentContext";
 
@@ -277,6 +278,7 @@ export async function renderGeometryLockedPhotoInsertion(args: {
     photoMimeType: args.photo.mimeType,
   });
   const polygons = projection.panelPolygonsNormalized;
+  requireInspectorPass(inspectProjectedModuleGeometry(polygons, context.layout.configuration.panelCount));
   if (polygons.length !== context.layout.configuration.panelCount) {
     throw new Error(`Projection photo incomplète : ${polygons.length}/${context.layout.configuration.panelCount} modules.`);
   }
