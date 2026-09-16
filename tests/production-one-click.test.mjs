@@ -46,7 +46,7 @@ test("test mode preserves a visible diagnostic result only when explicitly reque
   const types = await source("lib/pilotpaper-image2-types.ts");
 
   assert.match(types, /testMode\?: boolean/);
-  assert.match(manager, /testMode: true/);
+  assert.doesNotMatch(manager, /testMode: true/);
   assert.match(route, /generateDiagnosticFallback/);
   assert.match(route, /input\.testMode === true/);
   assert.doesNotMatch(route, /input\.testMode !== false/);
