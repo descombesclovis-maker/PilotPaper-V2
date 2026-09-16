@@ -17,6 +17,7 @@ export type InspectorReport = {
 };
 
 type NormalizedPoint = { x: number; y: number };
+type FaceMetricPoint = { u: number; v: number };
 
 function push(checks: InspectorCheck[], id: string, passed: boolean, critical: boolean, message: string) {
   checks.push({ id, passed, critical, message });
@@ -52,6 +53,73 @@ function zAt(face: SiteTwinRoofFace, point: TwinXY) {
 
 function distance3d(face: SiteTwinRoofFace, a: TwinXY, b: TwinXY) {
   return Math.hypot(b.x - a.x, b.y - a.y, zAt(face, b) - zAt(face, a));
+}
+
+function faceMetricBasis(face: SiteTwinRoofFace) {
+  const azimuthRad = face.azimuthDeg * Math.PI / 180;
+  const downslope = { x: Math.sin(azimuthRad), y: Math.cos(azimuthRad) };
+  const upslope = { x: -downslope.x, y: -downslope.y };
+  const cross = { x: upslope.y, y: -upslope.x };
+  const cosSlope = Math.max(0.15, Math.cos(face.slopeDeg * Math.PI / 180));
+  return { origin: face.centerLocalM, cross, upslope, cosSlope };
+}
+
+function toFaceMetricPoint(face: SiteTwinRoofFace, point: TwinXY): FaceMetricPoint {
+  const basis = faceMetricBasis(face);
+  const dx = point.x - basis.origin.x;
+  const dy = point.y - basis.origin.y;
+  return {
+    u: dx * basis.cross.x + dy * basis.cross.y,
+    v: (dx * basis.upslope.x + dy * basis.upslope.y) / basis.cosSlope,
+  };
+}
+
+function segmentDistance2d(a: FaceMetricPoint, b: FaceMetricPoint, c: FaceMetricPoint, d: FaceMetricPoint) {
+  function orientation(p: FaceMetricPoint, q: FaceMetricPoint, r: FaceMetricPoint) {
+    return (q.u - p.u) * (r.v - p.v) - (q.v - p.v) * (r.u - p.u);
+  }
+  function onSegment(p: FaceMetricPoint, q: FaceMetricPoint, r: FaceMetricPoint) {
+    return q.u >= Math.min(p.u, r.u) - 1e-9 && q.u <= Math.max(p.u, r.u) + 1e-9
+      && q.v >= Math.min(p.v, r.v) - 1e-9 && q.v <= Math.max(p.v, r.v) + 1e-9;
+  }
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  if ((o1 * o2 < 0 && o3 * o4 < 0)
+    || (Math.abs(o1) <= 1e-9 && onSegment(a, c, b))
+    || (Math.abs(o2) <= 1e-9 && onSegment(a, d, b))
+    || (Math.abs(o3) <= 1e-9 && onSegment(c, a, d))
+    || (Math.abs(o4) <= 1e-9 && onSegment(c, b, d))) return 0;
+
+  function pointSegment(point: FaceMetricPoint, start: FaceMetricPoint, end: FaceMetricPoint) {
+    const dx = end.u - start.u;
+    const dy = end.v - start.v;
+    const length2 = dx * dx + dy * dy;
+    if (length2 <= 1e-12) return Math.hypot(point.u - start.u, point.v - start.v);
+    const t = Math.max(0, Math.min(1, ((point.u - start.u) * dx + (point.v - start.v) * dy) / length2));
+    return Math.hypot(point.u - (start.u + t * dx), point.v - (start.v + t * dy));
+  }
+  return Math.min(
+    pointSegment(a, c, d),
+    pointSegment(b, c, d),
+    pointSegment(c, a, b),
+    pointSegment(d, a, b),
+  );
+}
+
+function polygonDistanceOnRoof(a: FaceMetricPoint[], b: FaceMetricPoint[]) {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (let first = 0; first < a.length; first += 1) {
+    for (let second = 0; second < b.length; second += 1) {
+      minimum = Math.min(minimum, segmentDistance2d(
+        a[first]!, a[(first + 1) % a.length]!,
+        b[second]!, b[(second + 1) % b.length]!,
+      ));
+      if (minimum <= 1e-9) return 0;
+    }
+  }
+  return minimum;
 }
 
 function projectionInterval(polygon: NormalizedPoint[], axis: NormalizedPoint) {
@@ -118,6 +186,9 @@ function metricGeometryChecks(context: SiteTwinDocumentContext) {
   let dimensionsCorrect = true;
   let insideFaces = true;
   let physicalObstacleOverlap = false;
+  let obstacleKeepoutViolation = false;
+  let smallestObstacleClearanceM = Number.POSITIVE_INFINITY;
+  let requiredObstacleClearanceM = 0;
   const polygonsByFace = new Map<string, NormalizedPoint[][]>();
 
   for (const module of context.layout.modules) {
@@ -138,9 +209,16 @@ function metricGeometryChecks(context: SiteTwinDocumentContext) {
       dimensionsCorrect = false;
     }
     if (!module.polygonLocalM.every((point) => pointInsideOrOnPolygon(point, face.polygonLocalM))) insideFaces = false;
+    const moduleRoofMetric = module.polygonLocalM.map((point) => toFaceMetricPoint(face, point));
     for (const obstacle of face.obstacles) {
-      if (obstacle.polygonLocalM.length >= 3
-        && convexPolygonsStrictlyOverlap(module.polygonLocalM, obstacle.polygonLocalM)) physicalObstacleOverlap = true;
+      if (obstacle.polygonLocalM.length < 3) continue;
+      if (convexPolygonsStrictlyOverlap(module.polygonLocalM, obstacle.polygonLocalM)) physicalObstacleOverlap = true;
+      const obstacleRoofMetric = obstacle.polygonLocalM.map((point) => toFaceMetricPoint(face, point));
+      const distanceM = polygonDistanceOnRoof(moduleRoofMetric, obstacleRoofMetric);
+      const keepoutM = Math.max(0, obstacle.keepoutMm ?? 0) / 1000;
+      smallestObstacleClearanceM = Math.min(smallestObstacleClearanceM, distanceM);
+      requiredObstacleClearanceM = Math.max(requiredObstacleClearanceM, keepoutM);
+      if (distanceM + 0.002 < keepoutM) obstacleKeepoutViolation = true;
     }
     const facePolygons = polygonsByFace.get(face.id) ?? [];
     facePolygons.push(module.polygonLocalM);
@@ -166,6 +244,12 @@ function metricGeometryChecks(context: SiteTwinDocumentContext) {
     modulesOverlap ? "Deux modules photovoltaïques se chevauchent dans la géométrie métrique." : "Aucun chevauchement entre modules métriques.");
   push(checks, "metric-obstacle-overlap", !physicalObstacleOverlap, true,
     physicalObstacleOverlap ? "Un module chevauche physiquement un obstacle de toiture." : "Aucun module ne chevauche physiquement un obstacle de toiture.");
+  push(checks, "metric-obstacle-keepout", !obstacleKeepoutViolation, true,
+    obstacleKeepoutViolation
+      ? `Un module entre dans une zone de sécurité d'obstacle (recul minimal observé ${Number.isFinite(smallestObstacleClearanceM) ? Math.round(smallestObstacleClearanceM * 1000) : 0} mm ; exigence jusqu'à ${Math.round(requiredObstacleClearanceM * 1000)} mm).`
+      : Number.isFinite(smallestObstacleClearanceM)
+        ? `Zones de sécurité des obstacles respectées ; recul minimal observé ${Math.round(smallestObstacleClearanceM * 1000)} mm.`
+        : "Aucun obstacle métrique imposant une zone de sécurité sur les pans utilisés.");
   return checks;
 }
 
