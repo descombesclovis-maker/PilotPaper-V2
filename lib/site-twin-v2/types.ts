@@ -99,6 +99,31 @@ export type SiteTwinCameraRegistration = {
   evidence: SiteTwinEvidence[];
 };
 
+export type SiteTwinRoofFacetComparison = {
+  localFaceId: string;
+  localDisplayLabel: string;
+  remoteFacetId: string;
+  azimuthDeltaDeg: number | null;
+  slopeDeltaDeg: number | null;
+  areaRelativeError: number | null;
+  metricCount: number;
+  status: "agreement" | "conflict";
+};
+
+export type SiteTwinRoofCrossCheck = {
+  source: "advanced-roof-model";
+  localFaceCount: number;
+  remoteFacetCount: number;
+  matchedFacetCount: number;
+  comparableFacetCount: number;
+  agreementCount: number;
+  conflictCount: number;
+  closeRatio: number;
+  blockingConflict: boolean;
+  status: "not-comparable" | "consistent" | "conflict";
+  comparisons: SiteTwinRoofFacetComparison[];
+};
+
 export type SiteTwinSources = {
   lidar: "available" | "unavailable" | "not-checked";
   lidarReference?: string;
@@ -113,6 +138,7 @@ export type SiteTwinSources = {
   advancedRoofProjectId?: number;
   advancedRoofFacetCount?: number;
   advancedRoofAutoDesignAvailable?: boolean;
+  advancedRoofCrossCheck?: SiteTwinRoofCrossCheck;
 };
 
 export type SiteTwin = {

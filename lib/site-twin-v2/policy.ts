@@ -24,32 +24,59 @@ export const SITE_TWIN_POLICY = Object.freeze({
   requireResolutionOfMajorityIndependentFacetConflict: true,
 });
 
+function throwIndependentRoofConflict(args: {
+  comparableFacets: number;
+  conflicts: number;
+  agreements: number;
+  comparisons?: unknown;
+}) {
+  throw new SiteTwinError(
+    "ROOF_GEOMETRY_LOW_CONFIDENCE",
+    `Contrôle géométrique indépendant divergent : ${args.conflicts}/${args.comparableFacets} facettes comparables sont en conflit. PilotPaper refuse de choisir silencieusement entre deux géométries.`,
+    {
+      recoverable: true,
+      details: {
+        comparableFacets: args.comparableFacets,
+        conflicts: args.conflicts,
+        agreements: args.agreements,
+        ...(args.comparisons ? { comparisons: args.comparisons } : {}),
+      },
+    },
+  );
+}
+
 function assertIndependentRoofCrossCheck(twin: SiteTwin) {
   if (!SITE_TWIN_POLICY.requireResolutionOfMajorityIndependentFacetConflict) return;
+
+  // New Site Twins carry the comparison as structured data. Policy decisions
+  // must never depend on wording intended for logs or human diagnostics.
+  const structured = twin.sources.advancedRoofCrossCheck;
+  if (structured) {
+    if (structured.blockingConflict) {
+      throwIndependentRoofConflict({
+        comparableFacets: structured.comparableFacetCount,
+        conflicts: structured.conflictCount,
+        agreements: structured.agreementCount,
+        comparisons: structured.comparisons,
+      });
+    }
+    return;
+  }
+
+  // Compatibility path for older cached/snapshotted Site Twins created before
+  // structured cross-checks existed. New builds should not enter this branch.
   const advanced = twin.evidence.find((entry) => entry.source === "advanced-roof-model");
   if (!advanced) return;
-
-  // Do not block merely because an external provider splits the roof into a
-  // different number of facets. We only fail closed when the provider exposes
-  // comparable facet metrics and a majority of those pan-by-pan comparisons
-  // explicitly disagree on azimuth/slope/area tolerances.
-  const facetComparisons = advanced.notes.filter((note) => note.includes("↔ facette distante"));
+  const facetComparisons = advanced.notes?.filter((note) => note.includes("↔ facette distante")) ?? [];
   if (!facetComparisons.length) return;
   const conflicts = facetComparisons.filter((note) => /écart à contrôler/i.test(note));
   const agreements = facetComparisons.filter((note) => /accord géométrique/i.test(note));
   if (conflicts.length > agreements.length) {
-    throw new SiteTwinError(
-      "ROOF_GEOMETRY_LOW_CONFIDENCE",
-      `Contrôle géométrique indépendant divergent : ${conflicts.length}/${facetComparisons.length} facettes comparables sont en conflit. PilotPaper refuse de choisir silencieusement entre deux géométries.`,
-      {
-        recoverable: true,
-        details: {
-          comparableFacets: facetComparisons.length,
-          conflicts: conflicts.length,
-          agreements: agreements.length,
-        },
-      },
-    );
+    throwIndependentRoofConflict({
+      comparableFacets: facetComparisons.length,
+      conflicts: conflicts.length,
+      agreements: agreements.length,
+    });
   }
 }
 
