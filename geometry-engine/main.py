@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pyproj import CRS, Transformer
+from shapely.geometry import Point
+from shapely.ops import unary_union
 
 from app import (
     ENGINE_VERSION,
@@ -98,7 +100,25 @@ def _sampled_points_to_metric(raw: str, property_lock: dict[str, Any]):
     if len(rows) < 120:
         raise ValueError("Échantillons IGN valides insuffisants après projection Lambert-93.")
     buildings = _projected_buildings(property_lock, crs)
-    return np.asarray(rows, dtype=np.float64), buildings, crs
+    points = np.asarray(rows, dtype=np.float64)
+    target = unary_union([polygon for _, polygon in buildings]).buffer(0.65)
+    minx, miny, maxx, maxy = target.bounds
+    keep = (
+        (points[:, 0] >= minx) & (points[:, 0] <= maxx)
+        & (points[:, 1] >= miny) & (points[:, 1] <= maxy)
+        & np.isfinite(points[:, 2])
+    )
+    points = points[keep]
+    if len(points):
+        inside = np.fromiter(
+            (target.covers(Point(x, y)) for x, y in points[:, :2]),
+            dtype=bool,
+            count=len(points),
+        )
+        points = points[inside]
+    if len(points) < 120:
+        raise ValueError(f"IGN MNX : couverture insuffisante sur le bâtiment verrouillé ({len(points)} points).")
+    return points, buildings, crs
 
 
 def _copc_points(raw: str, property_lock: dict[str, Any]):

@@ -156,8 +156,13 @@ function referencesFor(dp: DPNumber, results: Partial<Record<DPNumber, DpPieceOu
   };
   return (order[dp] ?? []).flatMap((referenceDp) => {
     const candidate = results[referenceDp];
-    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp"].includes(candidate.mimeType)) return [];
-    return [{ dp: referenceDp, mimeType: candidate.mimeType as VisualReference["mimeType"], base64: candidate.base64 }];
+    if (!candidate?.base64 || !["image/png", "image/jpeg", "image/webp", "image/svg+xml"].includes(candidate.mimeType)) return [];
+    return [{
+      dp: referenceDp,
+      mimeType: candidate.mimeType as VisualReference["mimeType"],
+      base64: candidate.base64,
+      geometryReceipt: candidate.geometryReceipt,
+    }];
   });
 }
 

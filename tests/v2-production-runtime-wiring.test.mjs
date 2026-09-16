@@ -32,3 +32,16 @@ test("normal complete dossiers fail closed instead of returning blank diagnostic
   assert.doesNotMatch(route, /input\.testMode !== false/);
   assert.match(route, /status: 422/);
 });
+
+test("installed V2 preserves geometry receipts and vector references through the one-click chain", async () => {
+  const complete = await source("components/production/complete-dp-experience.tsx");
+  const launcher = await source("desktop/PilotPaperLauncher/PilotPaperV2Program.cs");
+  const geometryMain = await source("geometry-engine/main.py");
+
+  assert.match(complete, /image\/svg\+xml/);
+  assert.match(complete, /geometryReceipt:\s*candidate\.geometryReceipt/);
+  assert.match(launcher, /DP_TEST_EXPORT"\]\s*=\s*"false"/);
+  assert.doesNotMatch(launcher, /DP_TEST_EXPORT"\]\s*=\s*"true"/);
+  assert.match(geometryMain, /unary_union/);
+  assert.match(geometryMain, /target\.covers\(Point\(x, y\)\)/);
+});

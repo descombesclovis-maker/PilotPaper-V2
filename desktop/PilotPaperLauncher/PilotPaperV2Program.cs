@@ -327,7 +327,7 @@ internal sealed partial class PilotPaperV2Window : Form
         startInfo.ArgumentList.Add("5174");
         startInfo.ArgumentList.Add("--strictPort");
 
-        startInfo.Environment["DP_TEST_EXPORT"] = "true";
+        startInfo.Environment["DP_TEST_EXPORT"] = "false";
         startInfo.Environment["DP_IMAGE_MODEL"] = "gpt-image-2";
         startInfo.Environment["NODE_ENV"] = "development";
         startInfo.Environment["PILOTPAPER_GEOMETRY_ENGINE_URL"] = GeometryEngineUrl;
