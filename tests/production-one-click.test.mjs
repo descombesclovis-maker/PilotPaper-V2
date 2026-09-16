@@ -39,22 +39,20 @@ test("complete generation follows the exact K-par-k sequence instead of a diverg
   assert.match(kpark, /if \(dp === 6\) return \[5, 4, 2\]/);
 });
 
-test("test mode preserves a visible diagnostic result only when explicitly requested", async () => {
+test("production DP2-DP6 are fail-closed and never return a diagnostic fallback as a generated piece", async () => {
   const route = await source("app/api/dp-piece/route.ts");
-  const fallback = await source("lib/pilotpaper-diagnostic-fallback.ts");
   const manager = await source("lib/pilotpaper-complete-dossiers.ts");
-  const types = await source("lib/pilotpaper-image2-types.ts");
 
-  assert.match(types, /testMode\?: boolean/);
   assert.doesNotMatch(manager, /testMode: true/);
-  assert.match(route, /generateDiagnosticFallback/);
-  assert.match(route, /input\.testMode === true/);
-  assert.doesNotMatch(route, /input\.testMode !== false/);
-  assert.match(route, /pilotpaper-diagnostic-fallback/);
-  assert.match(fallback, /MODE DIAGNOSTIC NON VALIDÉ/);
-  assert.match(fallback, /Return the image even if some uncertainty remains/);
-  assert.match(fallback, /base64: generated \?\? source\.base64/);
-  assert.match(fallback, /passed: false/);
+  assert.doesNotMatch(route, /generateDiagnosticFallback/);
+  assert.doesNotMatch(route, /pilotpaper-diagnostic-fallback/);
+  assert.match(route, /assertGeneratedVisualPiece/);
+  assert.match(route, /!result\.geometryReceipt/);
+  assert.match(route, /result\.inspector\?\.passed !== true/);
+  assert.match(route, /!result\.base64 \|\| result\.base64\.length < 500/);
+  assert.match(route, /MODE DIAGNOSTIC\|diagnostic fallback\|photo source brute/i);
+  assert.match(route, /X-PilotPaper-Diagnostic": "0"/);
+  assert.match(route, /status: 422/);
 });
 
 test("background dossiers persist and resume after navigation or application reopen", async () => {
