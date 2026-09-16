@@ -116,6 +116,16 @@ test("geometry engine photo registration has deterministic SIFT and ORB fallback
   assert.match(registration, /\("ORB", _register_orb\)/);
 });
 
+test("local persistence purges legacy DP artifacts and refuses invalid pieces", async () => {
+  const persistence = await source("lib/pilotpaper-image2-persistence.ts");
+  assert.match(persistence, /const DB_VERSION = 2/);
+  assert.match(persistence, /database\.deleteObjectStore\(STORE_NAME\)/);
+  assert.match(persistence, /function isPersistablePiece/);
+  assert.match(persistence, /piece\.inspector\?\.passed !== true/);
+  assert.match(persistence, /Number\(piece\.dp\) >= 2 && Number\(piece\.dp\) <= 6 && !piece\.geometryReceipt/);
+  assert.match(persistence, /une pièce non validée ne peut pas être sauvegardée localement/);
+});
+
 test("DP2 rejects blank map backgrounds and panel overlays that are too small to be visible", async () => {
   const dp2 = await source("lib/site-twin-v2/constrainedDp2.ts");
   const overlay = await source("lib/site-twin-v2/planningOverlay.ts");
