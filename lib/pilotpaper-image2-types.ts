@@ -13,7 +13,8 @@ export type PiecePhotoInput = {
 
 export type VisualReference = {
   dp: 2 | 3 | 4 | 5;
-  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  /** SVG references are continuity evidence for deterministic pieces; raster references may also be used visually. */
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml";
   base64: string;
   geometryReceipt?: SiteTwinPieceReceipt;
 };
