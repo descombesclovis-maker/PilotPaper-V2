@@ -109,7 +109,7 @@ export type SiteTwinSources = {
   google3dTilesReference?: string;
   photogrammetryReference?: string;
   geometryEngineVersion?: string;
-  geometryPrimarySource?: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry";
+  geometryPrimarySource?: "google-dsm" | "ign-mns" | "ign-lidar" | "photogrammetry" | "advanced-roof-model";
   advancedRoofProjectId?: number;
   advancedRoofFacetCount?: number;
   advancedRoofAutoDesignAvailable?: boolean;
