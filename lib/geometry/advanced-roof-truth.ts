@@ -232,10 +232,12 @@ async function resolveUncached(address: string): Promise<AdvancedRoofTruth> {
   };
 }
 
-export function resolveAdvancedRoofTruth(address: string) {
+export function resolveAdvancedRoofTruth(address: string, options: { force?: boolean } = {}) {
   const key = normalizeAddress(address);
-  const existing = cache.get(key);
-  if (existing) return existing;
+  if (!options.force) {
+    const existing = cache.get(key);
+    if (existing) return existing;
+  }
   const promise = resolveUncached(address).catch((error) => ({
     available: false,
     usable: false,
