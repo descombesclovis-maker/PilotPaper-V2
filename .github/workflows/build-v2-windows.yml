@@ -70,8 +70,14 @@ jobs:
       - name: Validate geometry engine modules
         shell: pwsh
         run: |
-          python -m py_compile geometry-engine/app.py geometry-engine/main.py geometry-engine/registration.py geometry-engine/photo_api.py geometry-engine/photogrammetry_api.py geometry-engine/site_twin_projection_api.py geometry-engine/run.py
+          python -m py_compile geometry-engine/app.py geometry-engine/main.py geometry-engine/registration.py geometry-engine/photo_api.py geometry-engine/photogrammetry_api.py geometry-engine/site_twin_projection_api.py geometry-engine/synthetic_regression.py geometry-engine/run.py
           if ($LASTEXITCODE -ne 0) { throw "Geometry Python syntax validation failed" }
+
+      - name: Run synthetic roof geometry regression
+        shell: pwsh
+        run: |
+          python geometry-engine/synthetic_regression.py
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic roof geometry regression failed" }
 
       - name: Build embedded geometry engine
         shell: pwsh
