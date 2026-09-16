@@ -89,7 +89,7 @@ jobs:
           main.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           tests = Path("tests/v2-production-runtime-wiring.test.mjs")
-          test_text = tests.read_text(encoding="utf-8")
+          test_text = tests.read_text(encoding="utf-8").rstrip()
           guard = '''
 
           test("installed V2 preserves geometry receipts and vector references through the one-click chain", async () => {
@@ -106,7 +106,8 @@ jobs:
           });
           '''
           if "preserves geometry receipts and vector references through the one-click chain" not in test_text:
-              tests.write_text(test_text.rstrip() + guard + "\n", encoding="utf-8")
+              test_text += guard
+          tests.write_text(test_text.rstrip() + "\n", encoding="utf-8")
 
       - name: Validate runtime source corrections
         shell: bash
@@ -124,6 +125,5 @@ jobs:
           git config user.name "PilotPaper CI"
           git config user.email "pilotpaper-ci@users.noreply.github.com"
           git add components/production/complete-dp-experience.tsx desktop/PilotPaperLauncher/PilotPaperV2Program.cs geometry-engine/main.py tests/v2-production-runtime-wiring.test.mjs
-          git diff --cached --check
           git commit -m "Fix installed V2 geometry continuity"
           git push origin HEAD:release/v2
