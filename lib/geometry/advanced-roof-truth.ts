@@ -144,12 +144,24 @@ function addressParts(address: string) {
   return { zip, locality: afterZip };
 }
 
+function allowAutomaticProjectCreation() {
+  return /^(1|true|yes)$/i.test(process.env.OPENSOLAR_ALLOW_PROJECT_CREATE?.trim() ?? "");
+}
+
 async function ensureProject(address: string) {
   const identifier = projectIdentifier(address);
   const existing = await listOpenSolarProjects(100);
   const match = existing.find((candidate) => String(candidate.identifier ?? "") === identifier);
   const matchedId = integer(match?.id);
   if (matchedId) return matchedId;
+
+  // A remote project created from an address is not proof that roof facets or an
+  // automatic design will exist. Project creation can also be billable. PilotPaper
+  // therefore reuses existing designed projects by default and only creates one
+  // when an administrator has explicitly opted into that behaviour.
+  if (!allowAutomaticProjectCreation()) {
+    throw new Error("Aucun modèle de toiture distant existant pour cette adresse ; création automatique désactivée.");
+  }
 
   const parts = addressParts(address);
   const created = await createOpenSolarProject({
