@@ -67,7 +67,7 @@ test("DP2 projects the exact Site Twin modules on the official aerial cadastral 
 test("DP1 is deterministic from official IGN and API Carto geometry and does not spend an image-generation call", async () => {
   const route = await source("app/api/dp-piece/route.ts");
   const generator = await source("lib/pilotpaper-dp1-generator.ts");
-  assert.match(route, /if \(input\.dp === 1\) return generateOfficialDp1/);
+  assert.match(route, /if \(input\.dp === 1\) return assertGeneratedVisualPiece\(await generateOfficialDp1/);
   assert.match(generator, /apicarto\.ign\.fr\/api\/cadastre\/parcelle/);
   assert.match(generator, /PilotPaper refuse de deviner la parcelle/);
   assert.match(generator, /DP1 déterministe : aucune IA générative utilisée/);
