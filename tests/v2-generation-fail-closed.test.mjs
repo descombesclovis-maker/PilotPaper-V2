@@ -156,7 +156,7 @@ test("DP4 before and after composition is forced to use the exact same source ph
   assert.match(dp4, /projected\.mimeType !== "image\/png"/);
   assert.match(dp4, /projected\.inspector\?\.passed !== true \|\| !projected\.geometryReceipt/);
   assert.match(dp4, /même photographie source et même cadrage/);
-  assert.match(dp4, /imageCount/);
+  assert.match(dp4, /\(svg\.match\(\/<image \/g\)\?\.length \?\? 0\) !== 2/);
 });
 
 test("DP1 refuses blank official maps and off-canvas cadastral geometry", async () => {
