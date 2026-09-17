@@ -81,7 +81,7 @@ test("every V2 downstream DP carries and verifies an exact Site Twin layout fing
   assert.match(bridge, /receiptForPiece\(args\.context, args\.dp\)/);
   assert.match(dp2, /geometryReceipt: receiptForPiece\(context, 2\)/);
   assert.match(photographic, /geometryReceipt: receiptForPiece\(rendered\.context, input\.dp\)/);
-  assert.match(dp4, /geometryReceipt: projected\.geometryReceipt/);
+  assert.match(dp4, /geometryReceipt: \{ \.\.\.projected\.geometryReceipt, dp: 4 \}/);
 
   assert.match(referenceOrder, /geometryReceipt: candidate\.geometryReceipt/);
   assert.match(manualWorkbench, /geometryReceipt: candidate\.geometryReceipt/);
