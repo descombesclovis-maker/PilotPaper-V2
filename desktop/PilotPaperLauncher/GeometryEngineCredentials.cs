@@ -32,7 +32,7 @@ internal static class GeometryEngineCredentials
             var token = PromptForToken(owner);
             if (string.IsNullOrWhiteSpace(token))
             {
-                log("Geometry engine setup skipped; fallback remains active.");
+                log("Geometry engine setup cancelled; V2 generation cannot start without the mandatory geometry connection.");
                 return null;
             }
 
@@ -131,7 +131,7 @@ internal static class GeometryEngineCredentials
         };
         var cancel = new Button
         {
-            Text = "Plus tard",
+            Text = "Annuler",
             Left = 300,
             Top = 142,
             Width = 108,
