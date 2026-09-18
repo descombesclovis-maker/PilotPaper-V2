@@ -115,6 +115,8 @@ internal sealed partial class PilotPaperV2Window : Form
 
             _startupDetail.Text = "Connexion du moteur géométrique…";
             _geometrySession = await GeometryEngineCredentials.EnsureAsync(this, AppendLog);
+            if (_geometrySession is null)
+                throw new InvalidOperationException("Le moteur géométrique distant n'est pas connecté. PilotPaper V2 refuse désormais de démarrer une génération avec une chaîne géométrique incomplète.");
             RemoveLegacyGeometrySecretsFromVars();
             SyncDevVarsToWorkerProject();
 
